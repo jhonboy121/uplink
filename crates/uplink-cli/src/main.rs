@@ -169,7 +169,7 @@ fn describe(event: &Event, contacts: &Contacts) -> String {
         Event::Dialing { peer } => format!("dialing {}", name(contacts, peer)),
         Event::Ringing { peer } => format!("ringing {}", name(contacts, peer)),
         Event::Incoming { peer } => format!("incoming call from {} (a accept, r reject)", name(contacts, peer)),
-        Event::Connected { peer, key_exchange } => format!("connected to {} [{key_exchange:?}]", name(contacts, peer)),
+        Event::Connected { peer, key_exchange, .. } => format!("connected to {} [{key_exchange:?}]", name(contacts, peer)),
         Event::Ended { peer, reason } => {
             let who = peer.as_ref().map_or_else(|| "unknown peer".to_owned(), |p| name(contacts, p));
             format!("call with {who} ended: {reason:?}")

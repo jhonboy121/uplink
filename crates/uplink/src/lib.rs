@@ -390,7 +390,7 @@ fn describe(event: &Event) -> String {
         Event::Dialing { peer } => format!("dialing {}", peer.fmt_short()),
         Event::Ringing { peer } => format!("ringing {}", peer.fmt_short()),
         Event::Incoming { peer } => format!("incoming call from {}", peer.fmt_short()),
-        Event::Connected { peer, key_exchange } => format!("connected to {} [{key_exchange:?}]", peer.fmt_short()),
+        Event::Connected { peer, key_exchange, .. } => format!("connected to {} [{key_exchange:?}]", peer.fmt_short()),
         Event::Ended { peer, reason } => match peer {
             Some(peer) => format!("call with {} ended: {reason:?}", peer.fmt_short()),
             None => format!("call ended: {reason:?}"),

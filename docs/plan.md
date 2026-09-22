@@ -110,3 +110,17 @@ default); keep disk usage lean. Avoid build scripts.
   the S24. `NodeHandle` holds a `WeakSender` (non-owning; only `Node` controls the node's lifetime, `shutdown` = drop the
   strong sender + await the engine). UI is state-driven (`CallState` from node events, optimistic "Calling…", spinner);
   richer call screens stay in step 7. Diagnostics live behind a Log overlay, not on the main screen.
+- **2026-09-22**: **media transport locked** (modelled on RTP/WebRTC practice, mapped onto QUIC as in IETF MoQ / RoQ):
+  - **Video:** one unidirectional QUIC stream per encoded frame (length-prefixed postcard header: sequence, capture timestamp,
+    keyframe/config flags; then the payload). Frames are reliable individually but never block each other. Frames past
+    their deadline are reset by the sender and dropped by the receiver. The receiver delivers in sequence order; on a gap it
+    drops until the next keyframe and sends `KeyframeRequest` (rate-limited) over the signalling stream.
+  - **Audio:** QUIC datagrams, one Opus packet each; loss handled by Opus PLC/FEC, never retransmitted; highest priority.
+  - **Rate control:** encoder bitrate follows QUIC's RTT/loss/cwnd (`connection.stats()`), below the congestion estimate.
+    Start with Cubic (iroh default); compare **BBRv3** (`noq::congestion::Bbr3Config`) under load before switching.
+  - **Jitter buffer + A/V sync** from capture timestamps, audio as the clock.
+  - **Telemetry is part of the design:** remote testing (another country, no adb) means every call records periodic stats
+    (path direct/relay, RTT, loss, bitrate, frames sent/received/dropped, keyframe requests), exchanged with the peer so
+    each device keeps **both sides**, persisted as per-call reports in the data dir and viewable in-app.
+  - Step 4 order: 4a core media transport (host-tested with synthetic frames) → 4b Android MediaCodec encode (camera input
+    surface) / decode (into the zero-copy preview) → 4c call telemetry + reports.

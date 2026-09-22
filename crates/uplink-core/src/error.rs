@@ -36,6 +36,12 @@ pub enum Error {
     Protocol(&'static str),
     #[error("peer connection is not post-quantum (key exchange {0:?})")]
     NotPostQuantum(Option<rustls::NamedGroup>),
+    #[error("frame missed its delivery deadline")]
+    FrameLate,
+    #[error(transparent)]
+    ReadToEnd(#[from] iroh::endpoint::ReadToEndError),
+    #[error(transparent)]
+    ClosedStream(#[from] iroh::endpoint::ClosedStream),
     #[error("node command queue is full")]
     CommandQueueFull,
     #[error("node stopped")]

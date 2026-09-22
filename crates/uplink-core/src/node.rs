@@ -5,6 +5,7 @@
 //! never cancels a half-read frame.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, Incoming, SendStream, presets};
@@ -17,6 +18,7 @@ use tokio::task::JoinHandle;
 use crate::protocol::{
     self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL, CLOSE_REJECTED, Signal,
 };
+use crate::media::{self, MediaSession};
 use crate::{EndpointId, Error, crypto};
 
 const COMMAND_QUEUE: usize = 16;
@@ -35,7 +37,7 @@ pub enum Command {
     Hangup,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Event {
     Ready { id: EndpointId },
     /// Connected to the home relay; reachable by other peers.
@@ -45,7 +47,7 @@ pub enum Event {
     Ringing { peer: EndpointId },
     Incoming { peer: EndpointId },
     /// Always post-quantum: other key exchanges are refused.
-    Connected { peer: EndpointId, key_exchange: NamedGroup },
+    Connected { peer: EndpointId, key_exchange: NamedGroup, media: MediaSession },
     Ended { peer: Option<EndpointId>, reason: EndReason },
 }
 
@@ -325,7 +327,9 @@ async fn dial(
                 Some(Ok(Signal::Reject)) => Ok(EndReason::Rejected),
                 Some(Ok(Signal::Busy)) => Ok(EndReason::Busy),
                 Some(Ok(Signal::Hangup)) | None => Ok(EndReason::RemoteHangup),
-                Some(Ok(Signal::Offer)) => protocol_error(&connection, "offer from callee"),
+                Some(Ok(Signal::Offer | Signal::KeyframeRequest)) => {
+                    protocol_error(&connection, "unexpected signal while ringing")
+                }
                 Some(Err(e)) => Err(e),
             },
             command = control.recv() => match command {
@@ -401,17 +405,25 @@ async fn active(
     events: &mpsc::Sender<Event>,
 ) -> Result<EndReason, Error> {
     tracing::info!(%peer, ?key_exchange, "call connected");
-    emit(events, Event::Connected { peer, key_exchange }).await;
+    let (media, mut links) = media::start(connection);
+    emit(events, Event::Connected { peer, key_exchange, media }).await;
     loop {
         tokio::select! {
-            signal = signals.recv() => return match signal {
+            signal = signals.recv() => match signal {
+                Some(Ok(Signal::KeyframeRequest)) => {
+                    links.stats.keyframe_requests_received.fetch_add(1, Ordering::Relaxed);
+                    if links.keyframe_requested.try_send(()).is_err() {
+                        tracing::debug!("keyframe request already pending");
+                    }
+                }
                 Some(Ok(Signal::Hangup)) | None => {
                     connection.close(CLOSE_HANGUP, b"");
-                    Ok(EndReason::RemoteHangup)
+                    return Ok(EndReason::RemoteHangup);
                 }
-                Some(Ok(_)) => protocol_error(connection, "unexpected signal in call"),
-                Some(Err(e)) => Err(e),
+                Some(Ok(_)) => return protocol_error(connection, "unexpected signal in call"),
+                Some(Err(e)) => return Err(e),
             },
+            Some(()) = links.request_keyframe.recv() => protocol::send(&mut send, Signal::KeyframeRequest).await?,
             command = control.recv() => match command {
                 Some(Control::Hangup) | None => {
                     finish(connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;

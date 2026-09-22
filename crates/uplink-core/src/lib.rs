@@ -4,6 +4,7 @@ pub mod contacts;
 pub mod crypto;
 mod error;
 pub mod identity;
+pub mod media;
 pub mod node;
 mod protocol;
 pub mod runtime;
