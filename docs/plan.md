@@ -86,7 +86,8 @@ default); keep disk usage lean. Avoid build scripts.
 4. **Video**: camera → MediaCodec encoder (input surface) → iroh → MediaCodec decoder → ImageReader → preview.
 5. **Audio**: AAudio voice-communication + Opus on its own stream.
 6. **Call service**: foreground service so calls survive backgrounding.
-7. **Product UI**: QR identity/scan, contacts, incoming/outgoing/in-call screens, verification.
+7. **Product UI** (design locked, see Revisions): 7a contacts + QR + call screens, 7b PiP, lock-screen calls,
+   settings, diagnostics, 7c verification, identity rotation, history.
 8. Security to-dos above; then iOS (CI) and web.
 
 ## Revisions
@@ -178,3 +179,29 @@ default); keep disk usage lean. Avoid build scripts.
 - **2026-09-22**: **telemetry revised**. Stats are **not** exchanged with the peer (no extra network overhead). Each
   device logs its own periodic call stats. A later diagnostic-report button packages the logs into a shareable form.
   Step 4c = periodic call stats in the log.
+- **2026-09-22**: **step 7 UI design locked**.
+  - **Color:** one accent, `beacon #58B6FF`; green `#32C97A` and red `#FF5252` are reserved for answer/end and
+    nothing else. Dark call ground `ink #070A0F`, `surface #101720`, `raised #18212C`, text `#E9F0F7`, muted
+    `#93A3B5`; neutrals biased blue. Each token maps to a Material 3 role (primary, surface-container,
+    on-surface-variant, …), so M3 naming applies without M3's default palette. Chrome over video sits on a
+    top-to-transparent scrim, never a panel.
+  - **Type:** Outfit (names, headings), Public Sans (prose), IBM Plex Mono with tabular figures for the call timer
+    and key fingerprints (grouped in fours). Sizes follow the M3 roles.
+  - **Motion,** and nothing else moves: answer = self-view shrinks full-frame → top corner, 620 ms
+    `cubic-bezier(.2,.8,.3,1)`, peer fades up behind; preview swap 420 ms on the same path; one ring pulse while
+    ringing; controls fade after 4 s idle. Reduced motion makes the answer a cut.
+  - **Layout is written start/end, never left/right, from the first line**: Skia shapes Arabic for free, but Slint
+    1.18 does not mirror layouts, so one direction flag drives rows, icons and alignment. Keys, fingerprints and
+    the timer stay LTR inside Arabic text; numerals follow the language.
+  - **Accessibility:** 48dp touch targets with TalkBack labels, 4.5:1 text contrast, state never by color alone
+    (the mute key changes fill, not just hue), system text size respected.
+  - **Phases:** 7a = contacts (add/rename/remove, initials avatars), own QR + scanning, incoming/outgoing/in-call,
+    mic/speaker/flip/end, answer transition, preview swap. 7b = PiP (Android `enterPictureInPictureMode` over JNI;
+    Slint just draws into the smaller surface), lock-screen incoming call (full-screen-intent notification, service
+    started on answer — the step 6 follow-up), settings (theme, language, quality), diagnostics report, key from a
+    saved image. 7c = safety-code verification and key-change warning, identity rotation, photo avatars, history.
+  - **Spikes before their phase:** PiP, and QR scanning (camera frames decoded in Rust) + reading a key from a
+    saved image (needs a file picker through the activity).
+  - **Deep links (later):** a scanned code should open uplink directly rather than a raw key — an `uplink://` URI
+    plus an https link carrying the key, with the activity registered for both (Android App Links), so a key sent
+    over chat is one tap. Decided 2026-09-22; not scheduled yet.
