@@ -205,3 +205,17 @@ default); keep disk usage lean. Avoid build scripts.
   - **Deep links (later):** a scanned code should open uplink directly rather than a raw key — an `uplink://` URI
     plus an https link carrying the key, with the activity registered for both (Android App Links), so a key sent
     over chat is one tap. Decided 2026-09-22; not scheduled yet.
+- **2026-09-22**: step 7a done: contacts, QR and the call screens, tested on the S24. The UI follows the locked
+  design (tabs: Call / People / Key / Settings), with the self-view animating into its corner on answer, tap to
+  swap, mute / speaker / flip and an mm:ss timer. **Display faces deferred:** Outfit/Public Sans/IBM Plex Mono need
+  font embedding, which needs a build script, so the system face carries the spec's sizes and weights and
+  `monospace` carries keys and the timer.
+  **QR:** `qrcode` encodes *and draws* (its `image` feature, `image` with default features off = buffer types, no
+  codecs), `rqrr` decodes; the only pixel code of ours is widening greyscale to RGB for Slint. A hand-rolled blit
+  cost a session: `Matrix::dark` indexed `y * size + x` without bounds-checking `x`, so the right quiet column
+  wrapped into the next row and sheared every row — the fix is the test that decodes our own rendered code.
+  **Scanning** reads only the luma plane of a second CPU-readable camera stream (YUV_420_888, back camera): luma is
+  already greyscale, so no YUV→RGB anywhere — the preview stays GPU-only through `samplerExternalOES`. The reader's
+  callback copies the frame and hands it to `spawn_blocking`, one decode at a time; decoding *in* the callback
+  deadlocked teardown. Keys can also be read from a saved image: Android's `BitmapFactory` decodes any format
+  (subsampled to 1600px) and returns ARGB, which we reduce to luma.

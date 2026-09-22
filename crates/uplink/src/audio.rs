@@ -5,7 +5,7 @@
 //! makes new rings, which are handed to the running pump, so the call and codecs carry on.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use tokio::runtime::Handle;
@@ -34,6 +34,7 @@ pub struct CallAudio {
     /// `None` while the streams are down, waiting for [`Self::reopen`].
     streams: Option<Streams>,
     swap: mpsc::Sender<Rings>,
+    muted: Arc<AtomicBool>,
     pub health: Arc<AudioHealth>,
 }
 
@@ -42,10 +43,11 @@ impl CallAudio {
     pub fn start(sender: AudioSender, receiver: AudioReceiver, runtime: Handle) -> Self {
         let health = Arc::<AudioHealth>::default();
         let (swap, rings) = mpsc::channel(SWAP_QUEUE);
+        let muted = Arc::<AtomicBool>::default();
         let mut tasks = Tasks::new(runtime);
         let cancel = tasks.cancel_token();
-        tasks.spawn(pump(rings, sender, receiver, cancel));
-        let mut audio = Self { tasks, streams: None, swap, health };
+        tasks.spawn(pump(rings, sender, receiver, Arc::clone(&muted), cancel));
+        let mut audio = Self { tasks, streams: None, swap, muted, health };
         if let Err(e) = audio.reopen() {
             tracing::error!("voice streams: {e:#}");
         }
@@ -72,6 +74,13 @@ impl CallAudio {
         self.tasks.all_running()
     }
 
+    /// Mutes the microphone: captured audio is dropped rather than sent. Returns the new state.
+    pub fn toggle_mute(&self) -> bool {
+        let muted = !self.muted.load(Ordering::Relaxed);
+        self.muted.store(muted, Ordering::Relaxed);
+        muted
+    }
+
     /// Samples the callbacks moved, and samples lost at the rings, since the last call.
     pub fn taken_counts(&self) -> VoiceCounts {
         let take = |counter: &std::sync::atomic::AtomicU64| counter.swap(0, Ordering::Relaxed);
@@ -89,6 +98,7 @@ async fn pump(
     mut swap: mpsc::Receiver<Rings>,
     mut sender: AudioSender,
     mut receiver: AudioReceiver,
+    muted: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) {
     let start = Instant::now();
@@ -114,6 +124,10 @@ async fn pump(
                 *sample = microphone.pop().unwrap_or_default();
             }
             let capture_micros = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+            // Muted: the ring is still drained, so unmuting doesn't play back stale audio.
+            if muted.load(Ordering::Relaxed) {
+                continue;
+            }
             if let Err(e) = sender.send(&frame, capture_micros) {
                 tracing::error!("voice send: {e}");
                 return;

@@ -81,6 +81,26 @@ impl Contacts {
         }
     }
 
+    /// Renames a contact, keeping its key.
+    pub fn rename(&mut self, id: EndpointId, name: &str) -> Result<(), Error> {
+        if let Some(taken) = self.list.iter().find(|c| c.name == name && c.id != id) {
+            return Err(Error::DuplicateContact(taken.name.clone()));
+        }
+        let contact = self.list.iter_mut().find(|c| c.id == id).ok_or_else(|| Error::UnknownContact(name.to_owned()))?;
+        contact.name = name.to_owned();
+        Ok(())
+    }
+
+    /// Removes by key, for callers that hold the contact rather than its current name.
+    pub fn remove_id(&mut self, id: EndpointId) -> Result<Contact, Error> {
+        let index = self
+            .list
+            .iter()
+            .position(|c| c.id == id)
+            .ok_or_else(|| Error::UnknownContact(id.fmt_short().to_string()))?;
+        Ok(self.list.remove(index))
+    }
+
     pub fn name_of(&self, id: &EndpointId) -> Option<&str> {
         self.list.iter().find(|c| c.id == *id).map(|c| c.name.as_str())
     }
@@ -110,6 +130,20 @@ mod tests {
     async fn missing_file_loads_empty() -> anyhow::Result<()> {
         let (_dir, contacts) = empty().await?;
         assert_eq!(contacts.iter().count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renames_and_removes_by_key() -> anyhow::Result<()> {
+        let (_dir, mut contacts) = empty().await?;
+        let (alice, bob) = (key(), key());
+        contacts.add("alice", alice)?;
+        contacts.add("bob", bob)?;
+        contacts.rename(alice, "alice B")?;
+        assert_eq!(contacts.name_of(&alice), Some("alice B"));
+        assert!(contacts.rename(alice, "bob").is_err());
+        assert_eq!(contacts.remove_id(bob)?.name, "bob");
+        assert!(contacts.remove_id(bob).is_err());
         Ok(())
     }
 

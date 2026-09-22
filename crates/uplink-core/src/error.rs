@@ -44,6 +44,8 @@ pub enum Error {
     ClosedStream(#[from] iroh::endpoint::ClosedStream),
     #[error("opus: {0}")]
     Opus(String),
+    #[error("qr: {0}")]
+    Qr(String),
     #[error("node command queue is full")]
     CommandQueueFull,
     #[error("node stopped")]

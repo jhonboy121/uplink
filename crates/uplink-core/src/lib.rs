@@ -7,6 +7,7 @@ mod error;
 pub mod identity;
 pub mod media;
 pub mod node;
+pub mod qr;
 mod protocol;
 pub mod runtime;
 mod telemetry;

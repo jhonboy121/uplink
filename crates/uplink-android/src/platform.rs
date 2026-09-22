@@ -51,11 +51,19 @@ impl Permission {
     }
 }
 
+/// A picked image as greyscale pixels, which is all a QR decoder needs.
+pub struct Greyscale {
+    pub pixels: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+}
+
 /// State shared with Java through the activity's handle.
 struct Inner {
     permission_granted: jint,
     next_request_code: AtomicI32,
     pending: Mutex<HashMap<jint, oneshot::Sender<bool>>>,
+    pending_images: Mutex<HashMap<jint, oneshot::Sender<Option<Greyscale>>>>,
 }
 
 impl Inner {
@@ -65,6 +73,14 @@ impl Inner {
             // The receiver may have been dropped by a caller that stopped waiting.
             Some(tx) => drop(tx.send(granted)),
             None => tracing::warn!(request_code, "permission result for unknown request"),
+        }
+    }
+
+    fn complete_image(&self, request_code: jint, image: Option<Greyscale>) {
+        let sender = self.pending_images.lock().unwrap_or_else(PoisonError::into_inner).remove(&request_code);
+        match sender {
+            Some(tx) => drop(tx.send(image)),
+            None => tracing::warn!(request_code, "image result for unknown request"),
         }
     }
 }
@@ -95,6 +111,7 @@ impl Platform {
                     .i()?,
                 next_request_code: AtomicI32::new(0),
                 pending: Mutex::default(),
+                pending_images: Mutex::default(),
             });
             let handle = Arc::into_raw(Arc::clone(&inner)).expose_provenance();
             let attached = handle_from_address(handle).and_then(|handle| {
@@ -164,17 +181,7 @@ impl Platform {
     pub fn set_in_call(&self, in_call: bool) -> Result<(), Error> {
         self.with_activity(|env, activity| {
             let mode = audio_mode(env, if in_call { jni_str!("MODE_IN_COMMUNICATION") } else { jni_str!("MODE_NORMAL") })?;
-            let service = env
-                .get_static_field(jni_str!("android/content/Context"), jni_str!("AUDIO_SERVICE"), jni_sig!("Ljava/lang/String;"))?
-                .l()?;
-            let manager = env
-                .call_method(
-                    activity,
-                    jni_str!("getSystemService"),
-                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
-                    &[JValue::Object(&service)],
-                )?
-                .l()?;
+            let manager = audio_manager(env, activity)?;
             env.call_method(&manager, jni_str!("setMode"), jni_sig!("(I)V"), &[JValue::Int(mode)])?;
             env.call_method(
                 &manager,
@@ -183,6 +190,33 @@ impl Platform {
                 &[JValue::Bool(in_call)],
             )?;
             tracing::debug!(in_call, "audio mode set");
+            Ok(())
+        })
+    }
+
+    /// Opens the system image picker; resolves to the chosen image, or `None` if the user backed
+    /// out or it could not be read.
+    pub async fn pick_image(&self) -> Result<Option<Greyscale>, Error> {
+        let code = self.inner.next_request_code.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.inner.pending_images.lock().unwrap_or_else(PoisonError::into_inner).insert(code, tx);
+        let opened = self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("pickImageAsync"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
+            Ok(())
+        });
+        if let Err(e) = opened {
+            self.inner.pending_images.lock().unwrap_or_else(PoisonError::into_inner).remove(&code);
+            return Err(e);
+        }
+        rx.await.map_err(|_| Error::RequestAbandoned)
+    }
+
+    /// Speaker or earpiece for the call audio.
+    pub fn set_speaker(&self, on: bool) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            let manager = audio_manager(env, activity)?;
+            env.call_method(&manager, jni_str!("setSpeakerphoneOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
+            tracing::debug!(on, "speakerphone");
             Ok(())
         })
     }
@@ -271,7 +305,7 @@ impl Platform {
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 3] {
+fn natives() -> [NativeMethod<'static>; 4] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkActivity's natives.
     unsafe {
         [
@@ -284,6 +318,11 @@ fn natives() -> [NativeMethod<'static>; 3] {
                 jni_str!("nativeLog"),
                 jni_str!("(JILjava/lang/String;)V"),
                 native_log as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeImagePicked"),
+                jni_str!("(JI[III)V"),
+                native_image_picked as *mut c_void,
             ),
             NativeMethod::from_raw_parts(jni_str!("nativeDetach"), jni_str!("(J)V"), native_detach as *mut c_void),
         ]
@@ -339,6 +378,58 @@ extern "system" fn native_permissions_result<'local>(
     }
 }
 
+/// The picked image, as packed ARGB from `Bitmap.getPixels`, reduced to the luma a QR decoder
+/// reads.
+extern "system" fn native_image_picked<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    request_code: jint,
+    pixels: JIntArray<'local>,
+    width: jint,
+    height: jint,
+) {
+    // SAFETY: Java only calls this with the live handle it received from `attach`.
+    let Some(inner) = (unsafe { inner_from(handle) }) else { return };
+    let outcome = env.with_env(|env| -> Result<Option<Greyscale>, Error> {
+        let (Ok(width), Ok(height)) = (usize::try_from(width), usize::try_from(height)) else {
+            return Ok(None);
+        };
+        if pixels.is_null() || width == 0 || height == 0 {
+            return Ok(None);
+        }
+        let mut argb = vec![0; pixels.len(env)?];
+        pixels.get_region(env, 0, &mut argb)?;
+        Ok((argb.len() >= width * height).then(|| Greyscale { pixels: luma(&argb), width, height }))
+    });
+    match outcome.into_outcome() {
+        Outcome::Ok(image) => inner.complete_image(request_code, image),
+        Outcome::Err(e) => {
+            tracing::error!(request_code, "reading picked image: {e}");
+            inner.complete_image(request_code, None);
+        }
+        Outcome::Panic(_) => {
+            tracing::error!(request_code, "panic reading picked image");
+            inner.complete_image(request_code, None);
+        }
+    }
+}
+
+/// ITU-R BT.601 luma, the weighting Android's own greyscale conversions use.
+fn luma(argb: &[jint]) -> Vec<u8> {
+    const RED: i32 = 299;
+    const GREEN: i32 = 587;
+    const BLUE: i32 = 114;
+    const TOTAL: i32 = RED + GREEN + BLUE;
+    const BYTE: i32 = 0xff;
+    argb.iter()
+        .map(|pixel| {
+            let (r, g, b) = ((pixel >> 16) & BYTE, (pixel >> 8) & BYTE, pixel & BYTE);
+            u8::try_from((r * RED + g * GREEN + b * BLUE) / TOTAL).unwrap_or(u8::MAX)
+        })
+        .collect()
+}
+
 /// Java's logs, so they land in this run's log file too (there is no adb in the field).
 extern "system" fn native_log<'local>(
     mut env: EnvUnowned<'local>,
@@ -378,6 +469,20 @@ fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> R
             jni_str!("android/Manifest$permission"),
             permission.manifest_field(),
             jni_sig!("Ljava/lang/String;"),
+        )?
+        .l()?)
+}
+
+fn audio_manager<'local>(env: &mut Env<'local>, activity: &JObject) -> Result<JObject<'local>, Error> {
+    let service = env
+        .get_static_field(jni_str!("android/content/Context"), jni_str!("AUDIO_SERVICE"), jni_sig!("Ljava/lang/String;"))?
+        .l()?;
+    Ok(env
+        .call_method(
+            activity,
+            jni_str!("getSystemService"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+            &[JValue::Object(&service)],
         )?
         .l()?)
 }
