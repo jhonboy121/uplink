@@ -27,11 +27,17 @@ const EXIT_RECORDS: i32 = 3;
 const TRACE_MIN_RUN: usize = 6;
 const TRACE_MAX_LINES: usize = 30;
 const SINGLE_PERMISSION: i32 = 1;
+// android.util.Log levels, as passed to `UplinkActivity.log`.
+const ANDROID_LOG_INFO: jint = 4;
+const ANDROID_LOG_WARN: jint = 5;
+const ANDROID_LOG_ERROR: jint = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
     Camera,
     RecordAudio,
+    /// Only for showing the call notification; the service runs either way.
+    PostNotifications,
 }
 
 impl Permission {
@@ -40,6 +46,7 @@ impl Permission {
         match self {
             Self::Camera => jni_str!("CAMERA"),
             Self::RecordAudio => jni_str!("RECORD_AUDIO"),
+            Self::PostNotifications => jni_str!("POST_NOTIFICATIONS"),
         }
     }
 }
@@ -180,6 +187,16 @@ impl Platform {
         })
     }
 
+    /// Runs the foreground service that lets a call keep the camera and microphone while the app
+    /// is in the background.
+    pub fn set_call_service(&self, running: bool) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("setCallService"), jni_sig!("(Z)V"), &[JValue::Bool(running)])?;
+            tracing::debug!(running, "call service");
+            Ok(())
+        })
+    }
+
     /// H.264 codec constants from the SDK (the NDK headers don't carry them).
     pub fn avc(&self) -> Result<Avc, Error> {
         self.with_activity(|env, _| {
@@ -254,7 +271,7 @@ impl Platform {
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 2] {
+fn natives() -> [NativeMethod<'static>; 3] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkActivity's natives.
     unsafe {
         [
@@ -262,6 +279,11 @@ fn natives() -> [NativeMethod<'static>; 2] {
                 jni_str!("nativePermissionsResult"),
                 jni_str!("(JI[Ljava/lang/String;[I)V"),
                 native_permissions_result as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeLog"),
+                jni_str!("(JILjava/lang/String;)V"),
+                native_log as *mut c_void,
             ),
             NativeMethod::from_raw_parts(jni_str!("nativeDetach"), jni_str!("(J)V"), native_detach as *mut c_void),
         ]
@@ -314,6 +336,30 @@ extern "system" fn native_permissions_result<'local>(
             tracing::error!(request_code, "panic reading permission result");
             inner.complete(request_code, false);
         }
+    }
+}
+
+/// Java's logs, so they land in this run's log file too (there is no adb in the field).
+extern "system" fn native_log<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    priority: jint,
+    message: JString<'local>,
+) {
+    // SAFETY: Java only calls this with the live handle it received from `attach`.
+    if unsafe { inner_from(handle) }.is_none() {
+        return;
+    }
+    let outcome = env.with_env(|env| -> Result<String, Error> { Ok(message.try_to_string(env)?) });
+    let Outcome::Ok(message) = outcome.into_outcome() else {
+        return;
+    };
+    match priority {
+        p if p >= ANDROID_LOG_ERROR => tracing::error!(target: "java", "{message}"),
+        p if p >= ANDROID_LOG_WARN => tracing::warn!(target: "java", "{message}"),
+        p if p >= ANDROID_LOG_INFO => tracing::info!(target: "java", "{message}"),
+        _ => tracing::debug!(target: "java", "{message}"),
     }
 }
 

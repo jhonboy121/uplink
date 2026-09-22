@@ -1,5 +1,6 @@
 package dev.uplink;
 
+import android.content.Intent;
 import android.app.NativeActivity;
 import android.util.Log;
 
@@ -10,17 +11,32 @@ import android.util.Log;
 public class UplinkActivity extends NativeActivity {
     private static final String TAG = "uplink";
 
-    private volatile long nativeHandle;
+    /**
+     * Static so {@link #log} works from anywhere in the app (the call service has no activity).
+     * There is one activity per process; it is cleared before the handle is released.
+     */
+    private static volatile long nativeHandle;
 
     private static native void nativePermissionsResult(
             long handle, int requestCode, String[] permissions, int[] grantResults);
 
+    private static native void nativeLog(long handle, int priority, String message);
+
     private static native void nativeDetach(long handle);
+
+    /** Logs to logcat and, when the bridge is up, into the app's own log file. */
+    static void log(int priority, String message) {
+        Log.println(priority, TAG, message);
+        long handle = nativeHandle;
+        if (handle != 0) {
+            nativeLog(handle, priority, message);
+        }
+    }
 
     /** Called from Rust once natives are registered. */
     void attachNative(long handle) {
         nativeHandle = handle;
-        Log.d(TAG, "native bridge attached");
+        log(Log.DEBUG, "native bridge attached");
     }
 
     /** Callable from any thread; the request runs on the UI thread. */
@@ -31,6 +47,16 @@ public class UplinkActivity extends NativeActivity {
                 requestPermissions(permissions, requestCode);
             }
         });
+    }
+
+    /** Starts or stops the foreground service that keeps a call alive in the background. */
+    void setCallService(boolean running) {
+        Intent intent = new Intent(this, UplinkCallService.class);
+        if (running) {
+            startForegroundService(intent);
+        } else {
+            stopService(intent);
+        }
     }
 
     @Override

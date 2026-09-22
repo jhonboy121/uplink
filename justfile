@@ -16,8 +16,9 @@ keystore_validity_days := "10000"
 build_tools_version := "37.0.0"
 android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
+call_service := "dev.uplink.UplinkCallService"
 adb_user := "0"
-permissions := "android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.MODIFY_AUDIO_SETTINGS android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE"
+permissions := "android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.MODIFY_AUDIO_SETTINGS android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE android.permission.FOREGROUND_SERVICE android.permission.FOREGROUND_SERVICE_CAMERA android.permission.FOREGROUND_SERVICE_MICROPHONE android.permission.POST_NOTIFICATIONS"
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
@@ -113,7 +114,8 @@ apk: build dex
     strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
     cp "{{dex_dir}}/classes.dex" "$stage/"
     cargo run -q -p axml -- out="$stage/AndroidManifest.xml" package={{app_id}} label={{app_label}} \
-        lib={{lib}} activity={{activity}} dex=1 min={{min_sdk}} target={{target_sdk}} version={{version_code}} \
+        lib={{lib}} activity={{activity}} service={{call_service}} dex=1 min={{min_sdk}} \
+        target={{target_sdk}} version={{version_code}} \
         debuggable={{debuggable}} $(for p in {{permissions}}; do printf "perm=%s " "$p"; done)
     (cd "$stage" && jar --create --no-manifest --file unsigned.apk AndroidManifest.xml classes.dex lib)
     if [ ! -f "{{keystore}}" ]; then

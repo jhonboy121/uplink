@@ -2,7 +2,8 @@
 //! ships for x86_64 hosts.
 //!
 //! usage: axml out=<path> package=<id> label=<name> lib=<libname> min=<sdk> target=<sdk>
-//!             version=<code> [activity=<class>] [debuggable=<0|1>] [dex=<0|1>] [perm=<permission>]...
+//!             version=<code> [activity=<class>] [service=<class>] [debuggable=<0|1>] [dex=<0|1>]
+//!             [perm=<permission>]...
 
 use std::collections::HashMap;
 use anyhow::{Context, Result};
@@ -26,6 +27,12 @@ const ATTR_VERSION_NAME: u32 = 0x0101_021c;
 const ATTR_WINDOW_SOFT_INPUT_MODE: u32 = 0x0101_022b;
 const ATTR_TARGET_SDK: u32 = 0x0101_0270;
 const ATTR_HARDWARE_ACCELERATED: u32 = 0x0101_02d3;
+const ATTR_FOREGROUND_SERVICE_TYPE: u32 = 0x0101_0599;
+
+// ServiceInfo.FOREGROUND_SERVICE_TYPE_*: a video call uses the camera and the microphone.
+const SERVICE_TYPE_CAMERA: u32 = 64;
+const SERVICE_TYPE_MICROPHONE: u32 = 128;
+const CALL_SERVICE_TYPES: u32 = SERVICE_TYPE_CAMERA | SERVICE_TYPE_MICROPHONE;
 
 // ActivityInfo.CONFIG_* handled by the native side instead of restarting the activity.
 const CONFIG_KEYBOARD: u32 = 0x0010;
@@ -367,6 +374,19 @@ fn manifest(args: &Args) -> Result<Element> {
             ),
         ],
     );
+    // Keeps the call alive (camera + microphone) while the app is in the background.
+    let mut application = vec![activity];
+    if let Some(service) = args.values.get("service") {
+        application.push(element(
+            "service",
+            vec![
+                android(ATTR_NAME, "name", Value::Str(service.clone())),
+                android(ATTR_EXPORTED, "exported", Value::Bool(false)),
+                android(ATTR_FOREGROUND_SERVICE_TYPE, "foregroundServiceType", Value::Hex(CALL_SERVICE_TYPES)),
+            ],
+            vec![],
+        ));
+    }
     children.push(element(
         "application",
         vec![
@@ -375,7 +395,7 @@ fn manifest(args: &Args) -> Result<Element> {
             android(ATTR_DEBUGGABLE, "debuggable", Value::Bool(args.flag("debuggable"))),
             android(ATTR_HARDWARE_ACCELERATED, "hardwareAccelerated", Value::Bool(true)),
         ],
-        vec![activity],
+        application,
     ));
     Ok(element(
         "manifest",

@@ -229,6 +229,20 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     }
 }
 
+/// Asks once for permission to show the call notification; the service runs without it.
+fn request_notifications(platform: &Rc<Platform>) {
+    let platform = Rc::clone(platform);
+    let task = slint::spawn_local(async move {
+        match platform.request_permission(Permission::PostNotifications).await {
+            Ok(granted) => tracing::info!(granted, "notification permission"),
+            Err(e) => tracing::warn!("notification permission: {e}"),
+        }
+    });
+    if let Err(e) = task {
+        tracing::error!("spawning notification request: {e}");
+    }
+}
+
 /// Asks for the microphone permission (prompting if needed), then puts the device in call audio
 /// mode and starts the voice streams.
 fn start_voice(
@@ -437,7 +451,10 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 
     let lifecycle = Rc::clone(&state);
     slint::android::init_with_event_listener(app, move |event| match event {
-        PollEvent::Main(MainEvent::Pause) => with_state(&lifecycle, |s| s.resume_camera = s.session.take().is_some()),
+        // A call keeps the camera: the foreground service is what allows that in the background.
+        PollEvent::Main(MainEvent::Pause) => with_state(&lifecycle, |s| {
+            s.resume_camera = s.call.is_none() && s.session.take().is_some();
+        }),
         PollEvent::Main(MainEvent::Resume { .. }) => with_state(&lifecycle, |s| {
             if std::mem::take(&mut s.resume_camera) {
                 s.start_camera();
@@ -450,6 +467,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     state.borrow_mut().ui = ui.as_weak();
     ui.set_log(report.into());
     slint::spawn_local(handle_node_events(node_events, ui.as_weak(), Rc::clone(&state), Rc::clone(&platform)))?;
+    request_notifications(&platform);
 
     let (c, weak) = (calls.clone(), ui.as_weak());
     ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
@@ -559,6 +577,9 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     });
 
     let outcome = ui.run();
+    if let Err(e) = platform.set_call_service(false) {
+        tracing::warn!("stopping call service: {e}");
+    }
     {
         let mut state = state.borrow_mut();
         state.session = None;
@@ -641,12 +662,18 @@ async fn handle_node_events(
                 let parts =
                     VideoParts { sender: video, incoming: incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
                 with_state(&state, |s| s.start_video(parts));
+                if let Err(e) = platform.set_call_service(true) {
+                    tracing::warn!("call service: {e}");
+                }
                 // (Re)starts the camera with the encoder as a second output.
                 request_camera(&state, &platform);
                 start_voice(&state, &platform, audio, incoming_audio);
             }
             Event::Ended { .. } => {
                 with_state(&state, State::end_call);
+                if let Err(e) = platform.set_call_service(false) {
+                    tracing::warn!("stopping call service: {e}");
+                }
                 if let Err(e) = platform.set_in_call(false) {
                     tracing::warn!("leaving call audio mode: {e}");
                 }

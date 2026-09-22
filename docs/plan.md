@@ -161,6 +161,17 @@ default); keep disk usage lean. Avoid build scripts.
   streams that are already disconnected. Per-second `voice` log lines carry mic/speaker sample counts, since a silent
   microphone is otherwise invisible without adb. To do: `setCommunicationDevice` (API 31+) instead of the deprecated `setSpeakerphoneOn`, needed
   for BLE headsets.
+- **2026-09-22**: step 6 (call service + Java log shim) done; tested by backgrounding a live call. `UplinkCallService` is a
+  foreground service with the camera and microphone types, which is what lets a call keep using them once the activity
+  is hidden; the app starts it when a call connects and stops it when the call ends or the activity exits, and the
+  camera is no longer torn down on Pause while a call is up. `axml` gained a `service=` element (attribute ids and
+  `ServiceInfo.FOREGROUND_SERVICE_TYPE_*` values read from `android.jar`, not guessed), plus the
+  `FOREGROUND_SERVICE{,_CAMERA,_MICROPHONE}` and `POST_NOTIFICATIONS` permissions. **Java log shim:**
+  `UplinkActivity.log` writes to logcat and, through a new `nativeLog` native, into this run's log file under the
+  `java` target, so Java-side failures are visible without adb. Its handle is a Java `static` (one activity per
+  process, cleared before the native handle is released) so the service can log too. To do: an incoming call while the
+  app is backgrounded cannot start a camera/microphone service (Android's while-in-use rule); that needs a
+  full-screen-intent notification and starting the service once the user answers.
 - **2026-09-22**: recordings play in VLC. A valid-but-rejected file needs: `stco` present (even empty) in every
   `stbl`, real durations in `mvhd`/`tkhd`/`mdhd` (patched in when the recording closes, since fragments alone leave
   them zero), and the `iso5`/`dash`/`msdh` brands.
