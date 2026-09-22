@@ -1,0 +1,6 @@
+[package]
+name = "ndk-gl-sys"
+version = "0.1.0+r30.16248370"
+edition = "2024"
+publish = false
+description = "EGL + GLES3 (+ Android extensions) bindings generated from the NDK sysroot by tools/ndk-bindgen"

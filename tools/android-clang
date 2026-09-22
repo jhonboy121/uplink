@@ -1,0 +1,11 @@
+#!/bin/sh
+# Alpine clang targeting Android with the NDK sysroot: C compiler and rustc linker.
+# -nodefaultlibs: the extracted NDK lacks compiler-rt builtins; rustc names every
+# lib it needs and Rust's compiler_builtins provides the helpers.
+NDK=${ANDROID_NDK_HOME:-$HOME/android/ndk}
+TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+CLANG_VER=$(ls "$TC/lib/clang")
+PAGE_SIZE_16K=16384
+exec clang --target="aarch64-linux-android${ANDROID_API:-30}" --sysroot="$TC/sysroot" \
+  -fuse-ld=lld -nodefaultlibs -L"$TC/lib/clang/$CLANG_VER/lib/linux/aarch64" \
+  -Wl,-z,max-page-size=$PAGE_SIZE_16K "$@"

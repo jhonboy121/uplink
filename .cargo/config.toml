@@ -1,0 +1,16 @@
+[target.aarch64-linux-android]
+linker = "tools/android-clang"
+
+# Host (musl): dynamic so ndk-bindgen can link libclang.so; mold for speed.
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static", "-C", "link-arg=-fuse-ld=mold"]
+
+[env]
+CC_aarch64_linux_android = { value = "tools/android-clang", relative = true }
+AR_aarch64_linux_android = "llvm-ar"
+
+[net]
+retry = 10
+
+[http]
+timeout = 120

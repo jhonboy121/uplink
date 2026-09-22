@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tools/axml", "tools/ndk-bindgen"]
+# Vendored upstream + generated bindings: built as path deps, not linted as ours.
+exclude = ["vendor", "sys"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+uplink-android = { path = "crates/uplink-android" }
+ndk-gl-sys = { path = "sys/ndk-gl-sys" }
+
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+bindgen = { version = "=0.72.1", default-features = false, features = ["logging", "prettyplease"] }
+jni = "0.22"
+libc = "0.2"
+ndk = { version = "0.9", default-features = false, features = ["media", "api-level-26"] }
+ndk-sys = { version = "0.6", features = ["camera", "media"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+missing_const_for_fn = "warn"
+
+# One ndk/ndk-sys for the whole graph (Slint, android-activity, us). See docs/ref/ndk-vendoring.md.
+[patch.crates-io]
+ndk = { path = "external/ndk/ndk" }
+ndk-sys = { path = "external/ndk/ndk-sys" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

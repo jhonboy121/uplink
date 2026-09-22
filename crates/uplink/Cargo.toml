@@ -1,0 +1,19 @@
+[package]
+name = "uplink"
+description = "uplink Android app (NativeActivity cdylib)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+ndk.workspace = true
+slint.workspace = true
+tracing.workspace = true
+uplink-android.workspace = true
+
+[lints]
+workspace = true

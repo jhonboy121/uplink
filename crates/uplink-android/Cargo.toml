@@ -1,0 +1,20 @@
+[package]
+name = "uplink-android"
+description = "Android platform layer: logging, JNI, camera, zero-copy GL preview"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+android-activity.workspace = true
+jni.workspace = true
+libc.workspace = true
+ndk.workspace = true
+ndk-gl-sys.workspace = true
+ndk-sys.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
