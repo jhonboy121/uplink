@@ -54,7 +54,7 @@ This is the source of truth for decisions. Changes go in as dated entries in [Re
   - **Verification UX:** a short fingerprint/safety code to compare; in-person QR scan is the strong path; warn when a
     contact's key changes.
   - **Key at rest:** the iroh secret key is encrypted with an Android Keystore key, never stored in plaintext.
-  - **Post-quantum:** check whether iroh/rustls can use hybrid X25519+ML-KEM (Signal-style "record now, decrypt later" protection).
+  - ~~**Post-quantum**~~ done: aws-lc-rs provider, peer connections must negotiate `X25519MLKEM768` (see Revisions).
   - **Metadata:** relays and discovery see who/when/how much (never content). Self-hosting reduces third-party exposure.
 - Not needed yet: X3DH/Double Ratchet (only for offline stored messages; we store nothing server-side). SFrame
   (only if a server terminating media is added for group calls; P2P mesh stays E2E).
@@ -100,3 +100,9 @@ default); keep disk usage lean. Avoid build scripts.
   hook. Android reuses processes, so `android_main` can run repeatedly and process-wide set-once state breaks relaunch.
   JNI handles use bit-preserving `cast_signed`/`cast_unsigned` (arm64 tagged pointers). adb over localhost is used for
   debugging when available (`just run`, `just logcat`).
+- **2026-09-22**: roadmap step 2 (`uplink-core` + CLI) implemented. iroh 1.2 with **aws-lc-rs** (not ring). Peer connections
+  **must** negotiate hybrid `X25519MLKEM768`; anything else is refused before signalling (`CLOSE_NOT_POST_QUANTUM`). X25519
+  stays in the provider only for relay/HTTPS. aws-lc builds for Android via our clang wrapper without system CMake.
+  `Node::start(secret, Network::{N0, Local(MemoryLookup)})`; Local = loopback + in-memory lookup for tests. Tests: unit +
+  loopback integration (`just test`), coverage with `cargo-llvm-cov` + system LLVM 22 tools (`just coverage`); tests use
+  `anyhow::Result` + `?` (no unwrap/expect, no clippy test exceptions).

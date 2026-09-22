@@ -13,18 +13,26 @@ publish = false
 anyhow = "1"
 thiserror = "2"
 uplink-android = { path = "crates/uplink-android" }
+uplink-core = { path = "crates/uplink-core" }
 ndk-gl-sys = { path = "sys/ndk-gl-sys" }
 
 android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
 bindgen = { version = "=0.72.1", default-features = false, features = ["logging", "prettyplease"] }
+iroh = { version = "1.2", default-features = false, features = ["tls-aws-lc-rs", "portmapper"] }
 jni = "0.22"
 libc = "0.2"
 ndk = { version = "0.9", default-features = false, features = ["media", "api-level-26"] }
 ndk-sys = { version = "0.6", features = ["camera", "media"] }
+noq-proto = { version = "1.3", default-features = false }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+rustls = { version = "0.23.33", default-features = false, features = ["aws_lc_rs", "std"] }
+serde = { version = "1", features = ["derive"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
+tempfile = "3"
+tokio = { version = "1", default-features = false }
+toml = "0.9"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
-tokio = { version = "1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

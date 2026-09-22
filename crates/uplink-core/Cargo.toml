@@ -1,0 +1,24 @@
+[package]
+name = "uplink-core"
+description = "Platform-agnostic core: identity, contacts, iroh endpoint, call signalling"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+iroh.workspace = true
+noq-proto.workspace = true
+postcard.workspace = true
+rustls.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -17,6 +17,12 @@ build_tools_version := "37.0.0"
 android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
 adb_user := "0"
+llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
+llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
+coverage_dir := "target/coverage"
+# proot emulates setsockopt via ptrace and returns EOPNOTSUPP under concurrent UDP binds (iroh/noq
+# IP_PKTINFO); run tests serially here. Raise on real Linux/CI.
+test_threads := env("RUST_TEST_THREADS", "1")
 java_release := "8"
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
@@ -41,8 +47,8 @@ android_jar := ANDROID_HOME / "platforms" / android_platform / "android.jar"
 d8_mode := if profile == "release" { "--release" } else { "--debug" }
 java_src := "crates/uplink-android/java"
 dex_dir := "target" / "dex" / profile
-android_crates := "-p uplink -p uplink-android"
-host_crates := "-p axml -p ndk-bindgen"
+android_crates := "-p uplink -p uplink-android -p uplink-core"
+host_crates := "-p axml -p ndk-bindgen -p uplink-core -p uplink-cli"
 
 [doc("List recipes")]
 default:
@@ -59,10 +65,14 @@ bindgen:
 check:
     nice cargo check {{android_crates}} --target {{android_target}} --profile {{cargo_profile}}
 
+[doc("Type-check uplink-core for Android")]
+check-core:
+    nice cargo check -p uplink-core --target {{android_target}} --profile {{cargo_profile}}
+
 [doc("Clippy (warnings are errors) for Android crates and host tools")]
 clippy:
     nice cargo clippy {{android_crates}} --target {{android_target}} --profile {{cargo_profile}} -- -D warnings
-    nice cargo clippy {{host_crates}} -- -D warnings
+    nice cargo clippy {{host_crates}} --all-targets -- -D warnings
 
 [doc("Format the workspace")]
 fmt:
@@ -125,3 +135,22 @@ run: apk
 [doc("Follow uplink's logcat output over adb (Java + native share the tag)")]
 logcat:
     adb logcat -v time -s uplink:V AndroidRuntime:E DEBUG:F
+
+[doc('''
+Run the host CLI (uplink-core over iroh), e.g. `just cli --dir /tmp/a listen`.
+Two instances with different --dir can call each other.
+''')]
+cli *args:
+    nice cargo run -q -p uplink-cli -- {{args}}
+
+[doc("Unit + integration tests for uplink-core (host, loopback only)")]
+test *args:
+    RUST_TEST_THREADS={{test_threads}} nice cargo test -p uplink-core {{args}}
+
+[doc('''
+Code coverage for uplink-core with cargo-llvm-cov, using the system LLVM tools (same major as rustc's).
+HTML report in coverage_dir; `cargo llvm-cov clean --workspace` frees its instrumented build.
+''')]
+coverage:
+    RUST_TEST_THREADS={{test_threads}} LLVM_COV="{{llvm_cov}}" LLVM_PROFDATA="{{llvm_profdata}}" nice cargo llvm-cov -p uplink-core --html --output-dir "{{coverage_dir}}"
+    LLVM_COV="{{llvm_cov}}" LLVM_PROFDATA="{{llvm_profdata}}" cargo llvm-cov report -p uplink-core --summary-only

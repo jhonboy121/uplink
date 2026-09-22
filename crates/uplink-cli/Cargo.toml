@@ -1,0 +1,20 @@
+[package]
+name = "uplink-cli"
+description = "Host CLI for uplink-core: identity, contacts, calling another peer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "uplink"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uplink-core.workspace = true
+
+[lints]
+workspace = true
