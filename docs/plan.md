@@ -106,3 +106,7 @@ default); keep disk usage lean. Avoid build scripts.
   `Node::start(secret, Network::{N0, Local(MemoryLookup)})`; Local = loopback + in-memory lookup for tests. Tests: unit +
   loopback integration (`just test`), coverage with `cargo-llvm-cov` + system LLVM 22 tools (`just coverage`); tests use
   `anyhow::Result` + `?` (no unwrap/expect, no clippy test exceptions).
+- **2026-09-22**: roadmap step 3 done: the app runs uplink-core over n0 and calls/answers the CLI in both directions on
+  the S24. `NodeHandle` holds a `WeakSender` (non-owning; only `Node` controls the node's lifetime, `shutdown` = drop the
+  strong sender + await the engine). UI is state-driven (`CallState` from node events, optimistic "Calling…", spinner);
+  richer call screens stay in step 7. Diagnostics live behind a Log overlay, not on the main screen.

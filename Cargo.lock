@@ -4989,8 +4989,10 @@ dependencies = [
  "anyhow",
  "ndk 0.9.0",
  "slint",
+ "tokio",
  "tracing",
  "uplink-android",
+ "uplink-core",
 ]
 
 [[package]]

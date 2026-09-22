@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -17,13 +18,16 @@ use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
+use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing};
 use uplink_android::preview::{Frame, Preview, TURNS_PER_REVOLUTION};
 use uplink_android::platform::{Permission, Platform};
 use uplink_android::{cpu, log};
+use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
+use uplink_core::{EndpointId, identity};
 
-use crate::ui::App;
+use crate::ui::{App, CallState};
 
 const LOG_TAG: &CStr = c"uplink";
 /// Baked in at build time (`just log=debug apk`).
@@ -33,6 +37,8 @@ const LOG_FILTER: &str = match option_env!("UPLINK_LOG") {
 };
 const FALLBACK_DATA_DIR: &str = "/data/local/tmp";
 const PREVIOUS_LOG_TAIL_LINES: usize = 20;
+/// Lines kept in the in-app log view.
+const LOG_VIEW_LINES: usize = 300;
 
 const CAPTURE_WIDTH: i32 = 1280;
 const CAPTURE_HEIGHT: i32 = 720;
@@ -40,6 +46,7 @@ const CAPTURE_FPS: i32 = 30;
 const READER_MAX_IMAGES: i32 = 4;
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 const PERCENT: f64 = 100.0;
+const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct FrameStats {
@@ -66,9 +73,9 @@ struct State {
 }
 
 impl State {
-    fn status(&self, message: impl Into<slint::SharedString>) {
+    fn status(&self, message: impl AsRef<str>) {
         if let Some(ui) = self.ui.upgrade() {
-            ui.set_status(message.into());
+            append_log(&ui, message.as_ref());
         }
     }
 
@@ -206,10 +213,15 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
     )
 }
 
-fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
+fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
     let platform = Rc::new(Platform::attach(&app)?);
     let report = previous_run_report(&platform, data_dir);
+
+    let runtime = uplink_core::runtime::build(dispatch)?;
+    let secret = runtime.block_on(identity::load_or_create(data_dir))?;
+    let (node, node_events) = runtime.block_on(Node::start(secret, Network::N0))?;
+    let calls = node.handle();
 
     let state = Rc::new(RefCell::new(State {
         ui: slint::Weak::default(),
@@ -234,7 +246,31 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let ui = App::new()?;
     state.borrow_mut().ui = ui.as_weak();
-    ui.set_status(report.into());
+    ui.set_log(report.into());
+    runtime.spawn(forward_node_events(node_events, ui.as_weak()));
+
+    let (c, weak) = (calls.clone(), ui.as_weak());
+    ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
+        Ok(peer) => {
+            if send_call_command(&c, Command::Call(peer), &weak) && let Some(ui) = weak.upgrade() {
+                // Optimistic: the node confirms with Dialing, or reverts via Ended.
+                ui.set_call_state(CallState::Dialing);
+            }
+        }
+        Err(e) => set_call_status(&weak, format!("invalid peer key: {e}")),
+    });
+    let (c, weak) = (calls.clone(), ui.as_weak());
+    ui.on_accept(move || {
+        send_call_command(&c, Command::Answer(true), &weak);
+    });
+    let (c, weak) = (calls.clone(), ui.as_weak());
+    ui.on_reject(move || {
+        send_call_command(&c, Command::Answer(false), &weak);
+    });
+    let (c, weak) = (calls, ui.as_weak());
+    ui.on_hangup(move || {
+        send_call_command(&c, Command::Hangup, &weak);
+    });
 
     let s = Rc::clone(&state);
     let p = Rc::clone(&platform);
@@ -308,10 +344,83 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         });
     });
 
-    ui.run()?;
+    let outcome = ui.run();
     state.borrow_mut().session = None;
+    runtime.block_on(node.shutdown());
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     tracing::info!("exiting");
-    Ok(())
+    Ok(outcome?)
+}
+
+fn set_call_status(ui: &slint::Weak<App>, status: String) {
+    if let Some(ui) = ui.upgrade() {
+        append_log(&ui, &status);
+        ui.set_call_status(status.into());
+    }
+}
+
+/// Returns whether the node accepted the command.
+fn send_call_command(calls: &NodeHandle, command: Command, ui: &slint::Weak<App>) -> bool {
+    match calls.try_send(command) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!(?command, "node command: {e}");
+            set_call_status(ui, format!("{command:?} failed: {e}"));
+            false
+        }
+    }
+}
+
+/// UI call state implied by an event; `None` leaves it unchanged.
+const fn call_state(event: &Event) -> Option<CallState> {
+    match event {
+        Event::Ready { .. } | Event::Online => None,
+        Event::Dialing { .. } => Some(CallState::Dialing),
+        Event::Ringing { .. } => Some(CallState::Ringing),
+        Event::Incoming { .. } => Some(CallState::Incoming),
+        Event::Connected { .. } => Some(CallState::Connected),
+        Event::Ended { .. } => Some(CallState::Idle),
+    }
+}
+
+fn describe(event: &Event) -> String {
+    match event {
+        Event::Ready { id } => format!("ready as {}", id.fmt_short()),
+        Event::Online => "online".to_owned(),
+        Event::Dialing { peer } => format!("dialing {}", peer.fmt_short()),
+        Event::Ringing { peer } => format!("ringing {}", peer.fmt_short()),
+        Event::Incoming { peer } => format!("incoming call from {}", peer.fmt_short()),
+        Event::Connected { peer, key_exchange } => format!("connected to {} [{key_exchange:?}]", peer.fmt_short()),
+        Event::Ended { peer, reason } => match peer {
+            Some(peer) => format!("call with {} ended: {reason:?}", peer.fmt_short()),
+            None => format!("call ended: {reason:?}"),
+        },
+    }
+}
+
+/// Runs on the tokio runtime; hands each node event to the UI thread.
+async fn forward_node_events(mut events: mpsc::Receiver<Event>, ui: slint::Weak<App>) {
+    while let Some(event) = events.recv().await {
+        tracing::info!(?event, "node event");
+        let my_id = match &event {
+            Event::Ready { id } => Some(id.to_string()),
+            _ => None,
+        };
+        let (status, state) = (describe(&event), call_state(&event));
+        let update = ui.upgrade_in_event_loop(move |ui| {
+            if let Some(id) = my_id {
+                ui.set_my_id(id.into());
+            }
+            append_log(&ui, &status);
+            ui.set_call_status(status.into());
+            if let Some(state) = state {
+                ui.set_call_state(state);
+            }
+        });
+        if update.is_err() {
+            break;
+        }
+    }
 }
 
 /// May run several times per process (Android reuses processes), so nothing here is global:
@@ -325,7 +434,16 @@ fn android_main(app: AndroidApp) {
     };
     let _log = tracing::dispatcher::set_default(&dispatch);
     let _panic_hook = PanicHook::install(dispatch.clone());
-    if let Err(e) = run(app, &data_dir) {
+    if let Err(e) = run(app, &data_dir, dispatch.clone()) {
         tracing::error!("fatal: {e:#}");
     }
+}
+
+/// Appends to the in-app log view, keeping the newest [`LOG_VIEW_LINES`] lines.
+fn append_log(ui: &App, line: &str) {
+    let log = ui.get_log();
+    let mut lines: Vec<&str> = log.lines().collect();
+    lines.push(line);
+    let newest = lines.len().saturating_sub(LOG_VIEW_LINES);
+    ui.set_log(lines[newest..].join("\n").into());
 }

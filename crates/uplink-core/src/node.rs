@@ -90,12 +90,35 @@ impl Node {
         self.commands.send(command).await.map_err(|_| Error::NodeStopped)
     }
 
+    /// A cloneable, non-owning command sender, e.g. for UI callbacks.
+    pub fn handle(&self) -> NodeHandle {
+        NodeHandle { commands: self.commands.downgrade() }
+    }
+
     /// Ends any call and closes the endpoint.
     pub async fn shutdown(self) {
+        // Handles only hold weak senders: dropping ours closes the channel and stops the engine.
         drop(self.commands);
         if let Err(e) = self.engine.await {
             tracing::error!("node engine: {e}");
         }
+    }
+}
+
+/// Sends commands without keeping the node alive: only [`Node`] owns its lifetime.
+#[derive(Clone, Debug)]
+pub struct NodeHandle {
+    commands: mpsc::WeakSender<Command>,
+}
+
+impl NodeHandle {
+    /// Non-blocking, so it works from threads without a runtime (UI callbacks).
+    pub fn try_send(&self, command: Command) -> Result<(), Error> {
+        let commands = self.commands.upgrade().ok_or(Error::NodeStopped)?;
+        commands.try_send(command).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => Error::CommandQueueFull,
+            mpsc::error::TrySendError::Closed(_) => Error::NodeStopped,
+        })
     }
 }
 

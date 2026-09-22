@@ -36,6 +36,8 @@ pub enum Error {
     Protocol(&'static str),
     #[error("peer connection is not post-quantum (key exchange {0:?})")]
     NotPostQuantum(Option<rustls::NamedGroup>),
+    #[error("node command queue is full")]
+    CommandQueueFull,
     #[error("node stopped")]
     NodeStopped,
 }

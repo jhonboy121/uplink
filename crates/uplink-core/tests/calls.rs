@@ -142,3 +142,18 @@ async fn shutdown_mid_call_hangs_up_the_peer() -> Result<()> {
     assert!(matches!(bob.ended().await?, EndReason::RemoteHangup));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handle_commands_reach_the_node_until_it_stops() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    let handle = alice.node.handle();
+    handle.try_send(Command::Call(bob.id))?;
+    bob.expect("incoming call", |e| matches!(e, Event::Incoming { .. })).await?;
+    handle.try_send(Command::Hangup)?;
+    assert!(matches!(alice.ended().await?, EndReason::LocalHangup));
+
+    alice.node.shutdown().await;
+    assert!(matches!(handle.try_send(Command::Hangup), Err(uplink_core::Error::NodeStopped)));
+    Ok(())
+}
