@@ -15,7 +15,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 
-use crate::{Error, protocol};
+use crate::{Error, protocol, telemetry};
 
 /// Longest a frame may take to arrive before it is useless for live playback.
 const FRAME_DEADLINE: Duration = Duration::from_millis(500);
@@ -164,6 +164,7 @@ pub(crate) fn start(connection: &Connection) -> (MediaSession, MediaLinks) {
     let (request_tx, request_keyframe) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     let (keyframe_requested, keyframe_requests) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     tokio::spawn(receive_video(connection.clone(), incoming_tx, request_tx, Arc::clone(&stats)));
+    tokio::spawn(telemetry::run(connection.clone(), Arc::clone(&stats)));
     let video = VideoSender {
         connection: connection.clone(),
         runtime: Handle::current(),

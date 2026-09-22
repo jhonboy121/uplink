@@ -8,6 +8,7 @@ pub mod media;
 pub mod node;
 mod protocol;
 pub mod runtime;
+mod telemetry;
 
 pub use error::Error;
 pub use iroh::EndpointId;

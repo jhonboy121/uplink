@@ -136,3 +136,6 @@ default); keep disk usage lean. Avoid build scripts.
   start decoding. The frame header carries `turns` (quarter turns to upright);
   mirroring stays local to the self-view. 720p30, 2 Mbps, 2 s keyframe interval until rate control lands. The mime and
   `COLOR_FormatSurface` are read over JNI. The `ndk` feature is `api-level-30` (= minSdk).
+- **2026-09-22**: **telemetry revised**. Stats are **not** exchanged with the peer (no extra network overhead). Each
+  device logs its own periodic call stats. A later diagnostic-report button packages the logs into a shareable form.
+  Step 4c = periodic call stats in the log.
