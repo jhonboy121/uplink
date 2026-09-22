@@ -1,5 +1,6 @@
 //! Platform-agnostic core: identity, contacts, iroh endpoint, call signalling.
 
+pub mod audio;
 pub mod contacts;
 pub mod crypto;
 mod error;

@@ -1,6 +1,8 @@
 //! uplink Android entry point: calls with camera video through the zero-copy GL path, with
 //! in-app diagnostics (previous exits + previous log) since there is no adb.
 
+mod audio;
+mod tasks;
 mod ui;
 mod video;
 
@@ -28,12 +30,14 @@ use uplink_android::codec::{Avc, VideoConfig};
 use uplink_android::platform::{Permission, Platform};
 use uplink_android::preview::{Frame, Preview, TURNS_PER_REVOLUTION};
 use uplink_android::{cpu, log};
+use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::media::MediaSession;
 use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
+use crate::audio::CallAudio;
 use crate::ui::{App, CallState};
-use crate::video::CallVideo;
+use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
 /// Baked in at build time (`just log=debug apk`).
@@ -82,6 +86,7 @@ struct Session {
 struct State {
     ui: slint::Weak<App>,
     session: Option<Session>,
+    audio: Option<CallAudio>,
     call: Option<CallVideo>,
     avc: Avc,
     runtime: Handle,
@@ -151,14 +156,14 @@ impl State {
         }
     }
 
-    fn start_call(&mut self, media: MediaSession) {
+    fn start_video(&mut self, parts: VideoParts) {
         let (stats, ui) = (Arc::clone(&self.stats), self.ui.clone());
         let on_remote_frame = move || {
             stats.remote.fetch_add(1, Ordering::Relaxed);
             // Fails only once the event loop has quit; nothing left to redraw then.
             let _ = ui.upgrade_in_event_loop(|ui| ui.window().request_redraw());
         };
-        match CallVideo::start(media, &self.avc, VIDEO, self.runtime.clone(), on_remote_frame) {
+        match CallVideo::start(parts, &self.avc, VIDEO, self.runtime.clone(), on_remote_frame) {
             Ok(call) => self.call = Some(call),
             Err(e) => {
                 tracing::error!("call video: {e:#}");
@@ -167,12 +172,31 @@ impl State {
         }
     }
 
-    /// Stops the call's codecs; a running camera restarts without the encoder.
+    /// Starts the microphone and speaker; the call keeps running without them.
+    fn start_audio(&mut self, sender: AudioSender, receiver: AudioReceiver) {
+        self.audio = Some(CallAudio::start(sender, receiver, self.runtime.clone()));
+    }
+
+    /// Reopens voice streams that AAudio disconnected (re-routing, headphones). Runs on the UI
+    /// thread's timer, which is what AAudio requires: never from a stream callback.
+    fn recover_audio(&mut self) {
+        let Some(audio) = &mut self.audio else { return };
+        if !audio.needs_reopen() {
+            return;
+        }
+        match audio.reopen() {
+            Ok(()) => self.status("voice streams reopened"),
+            Err(e) => tracing::warn!("reopening voice streams: {e:#}"),
+        }
+    }
+
+    /// Stops the call's codecs and streams; a running camera restarts without the encoder.
     fn end_call(&mut self) {
-        if self.call.is_none() {
+        if self.call.is_none() && self.audio.is_none() {
             return;
         }
         let camera_was_running = self.session.take().is_some();
+        self.audio = None;
         self.call = None;
         if camera_was_running {
             self.start_camera();
@@ -202,6 +226,35 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     });
     if let Err(e) = task {
         tracing::error!("spawning camera request: {e}");
+    }
+}
+
+/// Asks for the microphone permission (prompting if needed), then puts the device in call audio
+/// mode and starts the voice streams.
+fn start_voice(
+    state: &Rc<RefCell<State>>,
+    platform: &Rc<Platform>,
+    sender: AudioSender,
+    receiver: AudioReceiver,
+) {
+    let (state, platform) = (Rc::clone(state), Rc::clone(platform));
+    let task = slint::spawn_local(async move {
+        match platform.request_permission(Permission::RecordAudio).await {
+            Ok(true) => {
+                if let Err(e) = platform.set_in_call(true) {
+                    tracing::warn!("call audio mode: {e}");
+                }
+                with_state(&state, |s| s.start_audio(sender, receiver));
+            }
+            Ok(false) => with_state(&state, |s| s.status("microphone permission denied")),
+            Err(e) => {
+                tracing::error!("microphone permission: {e}");
+                with_state(&state, |s| s.status(format!("microphone permission failed: {e}")));
+            }
+        }
+    });
+    if let Err(e) = task {
+        tracing::error!("spawning microphone request: {e}");
     }
 }
 
@@ -325,6 +378,35 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
             count(&stats.keyframe_requests_received),
         ));
     }
+    if let Some(audio) = &state.audio {
+        let counts = audio.taken_counts();
+        let count = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
+        let stats = state.call.as_ref().map(|call| &call.stats);
+        let voice = stats.map_or_else(String::new, |stats| {
+            format!(
+                "sent {} received {} (late {}, fec {}, concealed {})",
+                count(&stats.audio_sent),
+                count(&stats.audio_received),
+                count(&stats.audio_late),
+                count(&stats.audio_fec_recovered),
+                count(&stats.audio_concealed),
+            )
+        });
+        let running = if audio.running() { "ok" } else { "STOPPED" };
+        // Logged too: a silent microphone is invisible on a phone with no adb.
+        tracing::info!(
+            mic_samples = counts.captured,
+            speaker_samples = counts.played,
+            mic_lost = counts.capture_lost,
+            speaker_lost = counts.playback_lost,
+            running,
+            "voice"
+        );
+        text.push_str(&format!(
+            "\nvoice {running} · {voice}\nmic {} samples ({} lost) · speaker {} samples ({} lost)",
+            counts.captured, counts.capture_lost, counts.played, counts.playback_lost
+        ));
+    }
     text
 }
 
@@ -342,6 +424,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let state = Rc::new(RefCell::new(State {
         ui: slint::Weak::default(),
         session: None,
+        audio: None,
         call: None,
         avc,
         runtime: runtime.handle().clone(),
@@ -467,6 +550,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         let cpu_percent = last.1.zip(now.1).map(|(before, after)| (after - before) / secs * PERCENT);
         last = now;
         with_state(&s, |state| {
+            state.recover_audio();
             let text = stats_text(state, secs, cpu_percent);
             if let Some(ui) = state.ui.upgrade() {
                 ui.set_stats(text.into());
@@ -478,6 +562,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     {
         let mut state = state.borrow_mut();
         state.session = None;
+        state.audio = None;
         state.call = None;
     }
     runtime.block_on(node.shutdown());
@@ -552,11 +637,20 @@ async fn handle_node_events(
         match event {
             Event::Ready { id } => ui.set_my_id(id.to_string().into()),
             Event::Connected { media, .. } => {
-                with_state(&state, |s| s.start_call(media));
+                let MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats } = *media;
+                let parts =
+                    VideoParts { sender: video, incoming: incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
+                with_state(&state, |s| s.start_video(parts));
                 // (Re)starts the camera with the encoder as a second output.
                 request_camera(&state, &platform);
+                start_voice(&state, &platform, audio, incoming_audio);
             }
-            Event::Ended { .. } => with_state(&state, State::end_call),
+            Event::Ended { .. } => {
+                with_state(&state, State::end_call);
+                if let Err(e) = platform.set_in_call(false) {
+                    tracing::warn!("leaving call audio mode: {e}");
+                }
+            }
             _ => {}
         }
     }

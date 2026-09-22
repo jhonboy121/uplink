@@ -12,6 +12,7 @@ libc.workspace = true
 ndk.workspace = true
 ndk-gl-sys.workspace = true
 ndk-sys.workspace = true
+rtrb.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

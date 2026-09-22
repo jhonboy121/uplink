@@ -31,6 +31,11 @@ struct Counters {
     frames_dropped: u64,
     keyframe_asks_sent: u64,
     keyframe_asks_received: u64,
+    audio_sent: u64,
+    audio_received: u64,
+    audio_late: u64,
+    audio_fec: u64,
+    audio_concealed: u64,
 }
 
 impl Counters {
@@ -50,6 +55,11 @@ impl Counters {
             frames_dropped: count(&media.frames_dropped_received),
             keyframe_asks_sent: count(&media.keyframe_requests_sent),
             keyframe_asks_received: count(&media.keyframe_requests_received),
+            audio_sent: count(&media.audio_sent),
+            audio_received: count(&media.audio_received),
+            audio_late: count(&media.audio_late),
+            audio_fec: count(&media.audio_fec_recovered),
+            audio_concealed: count(&media.audio_concealed),
         }
     }
 
@@ -67,6 +77,11 @@ impl Counters {
             frames_dropped: self.frames_dropped.saturating_sub(earlier.frames_dropped),
             keyframe_asks_sent: self.keyframe_asks_sent.saturating_sub(earlier.keyframe_asks_sent),
             keyframe_asks_received: self.keyframe_asks_received.saturating_sub(earlier.keyframe_asks_received),
+            audio_sent: self.audio_sent.saturating_sub(earlier.audio_sent),
+            audio_received: self.audio_received.saturating_sub(earlier.audio_received),
+            audio_late: self.audio_late.saturating_sub(earlier.audio_late),
+            audio_fec: self.audio_fec.saturating_sub(earlier.audio_fec),
+            audio_concealed: self.audio_concealed.saturating_sub(earlier.audio_concealed),
         }
     }
 }
@@ -159,6 +174,11 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
             dropped = delta.frames_dropped,
             keyframe_asks_sent = delta.keyframe_asks_sent,
             keyframe_asks_received = delta.keyframe_asks_received,
+            audio_out = delta.audio_sent,
+            audio_in = delta.audio_received,
+            audio_late = delta.audio_late,
+            audio_fec = delta.audio_fec,
+            audio_concealed = delta.audio_concealed,
             "call stats"
         );
         (last, last_at) = (counters, now);
@@ -179,6 +199,11 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
         dropped = total.frames_dropped,
         keyframe_asks_sent = total.keyframe_asks_sent,
         keyframe_asks_received = total.keyframe_asks_received,
+        audio_out = total.audio_sent,
+        audio_in = total.audio_received,
+        audio_late = total.audio_late,
+        audio_fec = total.audio_fec,
+        audio_concealed = total.audio_concealed,
         "call summary"
     );
 }

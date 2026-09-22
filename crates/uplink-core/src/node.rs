@@ -47,7 +47,7 @@ pub enum Event {
     Ringing { peer: EndpointId },
     Incoming { peer: EndpointId },
     /// Always post-quantum: other key exchanges are refused.
-    Connected { peer: EndpointId, key_exchange: NamedGroup, media: MediaSession },
+    Connected { peer: EndpointId, key_exchange: NamedGroup, media: Box<MediaSession> },
     Ended { peer: Option<EndpointId>, reason: EndReason },
 }
 
@@ -405,8 +405,8 @@ async fn active(
     events: &mpsc::Sender<Event>,
 ) -> Result<EndReason, Error> {
     tracing::info!(%peer, ?key_exchange, "call connected");
-    let (media, mut links) = media::start(connection);
-    emit(events, Event::Connected { peer, key_exchange, media }).await;
+    let (media, mut links) = media::start(connection)?;
+    emit(events, Event::Connected { peer, key_exchange, media: Box::new(media) }).await;
     loop {
         tokio::select! {
             signal = signals.recv() => match signal {

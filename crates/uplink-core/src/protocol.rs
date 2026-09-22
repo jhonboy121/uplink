@@ -32,7 +32,7 @@ type Length = u32;
 const HEADER_BYTES: usize = size_of::<Length>();
 
 /// Length header followed by the postcard body.
-fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>, Error> {
+pub(crate) fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>, Error> {
     let body = postcard::to_stdvec(message)?;
     let length = Length::try_from(body.len()).map_err(|_| Error::FrameTooLarge(body.len()))?;
     Ok([length.to_le_bytes().as_slice(), &body].concat())
@@ -48,6 +48,13 @@ fn message_length(header: [u8; HEADER_BYTES]) -> Result<usize, Error> {
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, Error> {
     Ok(postcard::from_bytes(body)?)
+}
+
+/// Splits an [`encode`]d message off the front of `bytes`; returns it and the rest.
+pub(crate) fn split_message<T: DeserializeOwned>(bytes: &[u8]) -> Result<(T, &[u8]), Error> {
+    let (header, rest) = bytes.split_first_chunk().ok_or(Error::Protocol("short message"))?;
+    let (body, rest) = rest.split_at_checked(message_length(*header)?).ok_or(Error::Protocol("short message"))?;
+    Ok((decode(body)?, rest))
 }
 
 pub async fn write_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<(), Error> {

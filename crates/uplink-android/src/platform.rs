@@ -152,6 +152,34 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
+    /// Puts the device in (or out of) a voice call: routes to the call stream and enables the
+    /// platform's echo cancellation, with the speaker on for video calls.
+    pub fn set_in_call(&self, in_call: bool) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            let mode = audio_mode(env, if in_call { jni_str!("MODE_IN_COMMUNICATION") } else { jni_str!("MODE_NORMAL") })?;
+            let service = env
+                .get_static_field(jni_str!("android/content/Context"), jni_str!("AUDIO_SERVICE"), jni_sig!("Ljava/lang/String;"))?
+                .l()?;
+            let manager = env
+                .call_method(
+                    activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[JValue::Object(&service)],
+                )?
+                .l()?;
+            env.call_method(&manager, jni_str!("setMode"), jni_sig!("(I)V"), &[JValue::Int(mode)])?;
+            env.call_method(
+                &manager,
+                jni_str!("setSpeakerphoneOn"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(in_call)],
+            )?;
+            tracing::debug!(in_call, "audio mode set");
+            Ok(())
+        })
+    }
+
     /// H.264 codec constants from the SDK (the NDK headers don't carry them).
     pub fn avc(&self) -> Result<Avc, Error> {
         self.with_activity(|env, _| {
@@ -306,6 +334,10 @@ fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> R
             jni_sig!("Ljava/lang/String;"),
         )?
         .l()?)
+}
+
+fn audio_mode(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {
+    Ok(env.get_static_field(jni_str!("android/media/AudioManager"), name, jni_sig!("I"))?.i()?)
 }
 
 fn exit_reason(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {

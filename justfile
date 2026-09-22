@@ -17,7 +17,7 @@ build_tools_version := "37.0.0"
 android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
 adb_user := "0"
-permissions := "android.permission.CAMERA android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE"
+permissions := "android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.MODIFY_AUDIO_SETTINGS android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE"
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
@@ -26,6 +26,10 @@ cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
 # IP_PKTINFO); run tests serially here. Raise on real Linux/CI.
 test_threads := env("RUST_TEST_THREADS", "1")
 java_release := "8"
+
+# rustc mmaps its incremental cache; under proot that faults (SIGBUS) when linking the app.
+# It also keeps the target dir smaller. Override with CARGO_INCREMENTAL=1 if it ever behaves.
+export CARGO_INCREMENTAL := env("CARGO_INCREMENTAL", "0")
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
 export ANDROID_NDK := ANDROID_NDK_HOME

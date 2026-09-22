@@ -65,7 +65,7 @@ async fn connected_media(peer: &mut Peer, other: EndpointId) -> Result<MediaSess
     let Event::Connected { peer: remote, key_exchange, media } = connected else { bail!("expected Connected") };
     assert_eq!(remote, other);
     assert!(is_post_quantum(key_exchange), "negotiated {key_exchange:?}");
-    Ok(media)
+    Ok(*media)
 }
 
 /// Rings and answers; returns (caller, callee) media sessions.

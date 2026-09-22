@@ -1,6 +1,9 @@
 //! uplink CLI: identity, contacts and calls through the same core the app uses.
 
+mod clip;
+mod h264;
 mod media;
+mod record;
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -15,7 +18,8 @@ use uplink_core::contacts::Contacts;
 use uplink_core::node::{Command, Event, Network, Node};
 use uplink_core::{EndpointId, identity, runtime};
 
-const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info";
+// mp4_atom warns about every vendor box in a phone recording (`smta`, `cami`, …); not our problem.
+const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info,mp4_atom=error";
 const DEFAULT_DIR: &str = ".local/share/uplink";
 
 #[derive(Parser)]
@@ -56,9 +60,12 @@ enum Cli {
 
 #[derive(clap::Args)]
 struct MediaArgs {
-    /// H.264 mp4 sent as our video, looped
+    /// H.264 + AAC mp4 sent as our video and voice, looped
     #[arg(long)]
     video: Option<PathBuf>,
+    /// Record the peer's video and audio to this mp4
+    #[arg(long)]
+    record: Option<PathBuf>,
 }
 
 fn default_dir() -> Result<PathBuf> {
@@ -100,20 +107,21 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
             contacts.remove(&name)?;
             contacts.save().await?;
         }
-        Cli::Listen { media } => session(dir, None, media.video).await?,
+        Cli::Listen { media } => session(dir, None, media).await?,
         Cli::Call { target, media } => {
             let peer = Contacts::load(dir).await?.resolve(&target)?;
-            session(dir, Some(peer), media.video).await?;
+            session(dir, Some(peer), media).await?;
         }
     }
     Ok(())
 }
 
 /// Runs the node until quit; when placing a call, also until that call ends.
-async fn session(dir: &Path, call: Option<EndpointId>, video: Option<PathBuf>) -> Result<()> {
+async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) -> Result<()> {
+    let MediaArgs { video, record } = media_args;
     if let Some(path) = &video {
         // Fail early on a bad clip; each call reopens it to start from the beginning.
-        media::Clip::open(path)?;
+        clip::Clip::open(path)?;
     }
     let contacts = Contacts::load(dir).await?;
     let (node, mut events) = Node::start(identity::load_or_create(dir).await?, Network::N0).await?;
@@ -129,11 +137,12 @@ async fn session(dir: &Path, call: Option<EndpointId>, video: Option<PathBuf>) -
                     println!("{}", describe(&event, &contacts));
                     match event {
                         Event::Connected { media, .. } => {
-                            let clip = video.as_deref().map(media::Clip::open).transpose().unwrap_or_else(|e| {
+                            let clip = video.as_deref().map(clip::Clip::open).transpose().unwrap_or_else(|e| {
                                 println!("clip unavailable, sending no video: {e:#}");
                                 None
                             });
-                            call_media = Some(AbortOnDrop(tokio::spawn(media::run(media, clip))));
+                            let recorder = record.as_deref().map(record::Recorder::create).transpose()?;
+                            call_media = Some(AbortOnDrop(tokio::spawn(media::run(*media, clip, recorder))));
                         }
                         Event::Ended { .. } => {
                             call_media = None;

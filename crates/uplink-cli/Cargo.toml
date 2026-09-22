@@ -12,7 +12,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-mp4.workspace = true
+mp4-atom.workspace = true
+symphonia.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "signal", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

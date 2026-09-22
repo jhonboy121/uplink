@@ -1,5 +1,6 @@
 //! Android platform layer for uplink.
 
+pub mod audio;
 pub mod camera;
 pub mod codec;
 pub mod cpu;

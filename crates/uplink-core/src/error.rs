@@ -42,6 +42,8 @@ pub enum Error {
     ReadToEnd(#[from] iroh::endpoint::ReadToEndError),
     #[error(transparent)]
     ClosedStream(#[from] iroh::endpoint::ClosedStream),
+    #[error("opus: {0}")]
+    Opus(String),
     #[error("node command queue is full")]
     CommandQueueFull,
     #[error("node stopped")]

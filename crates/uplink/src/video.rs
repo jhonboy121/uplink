@@ -11,30 +11,21 @@ use ndk::media::image_reader::{Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uplink_android::codec::{Avc, Decoder, Encoder, Event, Events, VideoConfig};
 use uplink_android::preview::TURNS_PER_REVOLUTION;
-use uplink_core::media::{Frame, MediaSession, MediaStats, VideoSender};
+use uplink_core::media::{Frame, MediaStats, VideoSender};
+
+use crate::tasks::Tasks;
 
 const REMOTE_MAX_IMAGES: i32 = 4;
 
-/// Codec tasks, cancelled and awaited on drop so the codecs stop before their surfaces go.
-struct Tasks {
-    runtime: Handle,
-    cancel: CancellationToken,
-    handles: Vec<JoinHandle<()>>,
-}
-
-impl Drop for Tasks {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-        for handle in self.handles.drain(..) {
-            if let Err(e) = self.runtime.block_on(handle) {
-                tracing::error!("codec task: {e}");
-            }
-        }
-    }
+/// The video half of a call's [`uplink_core::media::MediaSession`].
+pub struct VideoParts {
+    pub sender: VideoSender,
+    pub incoming: mpsc::Receiver<Frame>,
+    pub keyframe_requests: mpsc::Receiver<()>,
+    pub stats: Arc<MediaStats>,
 }
 
 /// Field order is drop order: tasks stop first, then the shown image, then its reader.
@@ -51,13 +42,13 @@ pub struct CallVideo {
 impl CallVideo {
     /// Starts both codecs; `on_remote_frame` runs whenever a decoded frame is ready to show.
     pub fn start(
-        media: MediaSession,
+        parts: VideoParts,
         avc: &Avc,
         video: VideoConfig,
         runtime: Handle,
         on_remote_frame: impl Fn() + Send + 'static,
     ) -> Result<Self> {
-        let MediaSession { video: sender, incoming_video, keyframe_requests, stats } = media;
+        let VideoParts { sender, incoming: incoming_video, keyframe_requests, stats } = parts;
         let (local_turns, remote_turns) = (Arc::<AtomicU8>::default(), Arc::<AtomicU8>::default());
         let mut remote = ImageReader::new_with_usage(
             video.width,
@@ -71,11 +62,10 @@ impl CallVideo {
         let (encoder, encoder_events) = Encoder::new(avc, video)?;
         let encoder_window = encoder.window().clone();
 
-        let cancel = CancellationToken::new();
-        let decode = decode(decoder, decoder_events, incoming_video, Arc::clone(&remote_turns), cancel.clone());
-        let encode = encode(encoder, encoder_events, sender, keyframe_requests, Arc::clone(&local_turns), cancel.clone());
-        let handles = vec![runtime.spawn(decode), runtime.spawn(encode)];
-        let tasks = Tasks { runtime, cancel, handles };
+        let mut tasks = Tasks::new(runtime);
+        let cancel = tasks.cancel_token();
+        tasks.spawn(decode(decoder, decoder_events, incoming_video, Arc::clone(&remote_turns), cancel.clone()));
+        tasks.spawn(encode(encoder, encoder_events, sender, keyframe_requests, Arc::clone(&local_turns), cancel));
         Ok(Self { tasks, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
     }
 
@@ -91,7 +81,7 @@ impl CallVideo {
 
     /// Whether both codec tasks are still going (a codec error ends its task).
     pub fn codecs_running(&self) -> bool {
-        self.tasks.handles.iter().all(|handle| !handle.is_finished())
+        self.tasks.all_running()
     }
 
     /// Orientation of the latest decoded remote frame.

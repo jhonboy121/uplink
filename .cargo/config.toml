@@ -7,6 +7,8 @@ rustflags = ["-C", "target-feature=-crt-static", "-C", "link-arg=-fuse-ld=mold"]
 
 [env]
 CC_aarch64_linux_android = { value = "tools/android-clang", relative = true }
+# Only probed (cmake-rs asks for both compilers); our C deps build no C++.
+CXX_aarch64_linux_android = { value = "tools/android-clang", relative = true }
 AR_aarch64_linux_android = "llvm-ar"
 
 [net]

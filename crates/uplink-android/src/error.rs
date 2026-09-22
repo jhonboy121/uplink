@@ -31,6 +31,10 @@ pub enum Error {
     #[error(transparent)]
     Media(#[from] ndk::media_error::MediaError),
     #[error(transparent)]
+    Audio(#[from] ndk::audio::AudioError),
+    #[error("voice stream disconnected while audio was being re-routed")]
+    AudioRouting,
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("log filter: {0}")]
     LogFilter(#[from] tracing_subscriber::filter::ParseError),

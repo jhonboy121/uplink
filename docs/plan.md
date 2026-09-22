@@ -136,6 +136,34 @@ default); keep disk usage lean. Avoid build scripts.
   start decoding. The frame header carries `turns` (quarter turns to upright);
   mirroring stays local to the self-view. 720p30, 2 Mbps, 2 s keyframe interval until rate control lands. The mime and
   `COLOR_FormatSurface` are read over JNI. The `ndk` feature is `api-level-30` (= minSdk).
+- **2026-09-22**: step 5 (audio) implemented, not yet device-tested. **Opus is libopus**, not the platform codec:
+  in-band FEC, packet-loss concealment and DTX matter on lossy relay links, and the same codec runs host-side so the
+  CLI can drive tests. libopus 1.5.2 is vendored in `vendor/opus` and built by `sys/opus-sys` with CMake (bindings from
+  `just bindgen`); for Android it is presented as a plain Linux cross compile so our clang wrapper is used, with
+  `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY` because that wrapper links with `-nodefaultlibs`.
+  **Wire format:** one 20 ms Opus packet (48 kHz mono) per QUIC datagram, never retransmitted. The receiver's jitter
+  buffer pre-buffers 60 ms, rebuilds a lost packet from the next packet's FEC, else conceals, caps latency at 200 ms
+  and re-buffers after 200 ms of loss. **Android:** AAudio in voice-communication mode (platform AEC/NS/AGC), with the
+  realtime callbacks only moving samples through `rtrb` rings and a 20 ms tokio task doing the codec work;
+  `AudioManager` is switched to `MODE_IN_COMMUNICATION` with the speaker on. **CLI:** `--video clip.mp4` now also
+  sends the clip's AAC audio (decoded once by symphonia to 48 kHz mono, resampled if needed) and `--record out.mp4`
+  writes the peer's H.264 and Opus as received into one fragmented MP4 (`mp4-atom`), so an abrupt hang-up still
+  leaves a playable file. The `mp4` crate is gone; `mp4-atom` both reads and writes.
+- **2026-09-22**: audio first call: voice worked both ways, then a later call had none — AAudio returned `Disconnected`
+  opening the speaker, because entering call mode re-routes audio and kills streams opened as it happens.
+  **Stream lifecycle, per Oboe's disconnect note:** a disconnect is a normal event (route change, headphones,
+  Bluetooth), the error callback may not stop/close/reopen the stream, and both streams are closed and reopened from
+  another thread. Our error callback only records it in `AudioHealth`; the UI's 1 s timer reopens, and the fresh rings
+  are handed to the running pump so the codecs and call are untouched. A failed open at call start is the same path,
+  retried each second. **A stream disconnected before it ever ran gets no error callback** (seen on the S24: the
+  capture stream came back `Disconnected` straight from `open`, while playback was fine, so the phone heard the peer
+  but sent silence), so `needs_reopen` polls both stream states as well as the callback's flag, and `open` refuses
+  streams that are already disconnected. Per-second `voice` log lines carry mic/speaker sample counts, since a silent
+  microphone is otherwise invisible without adb. To do: `setCommunicationDevice` (API 31+) instead of the deprecated `setSpeakerphoneOn`, needed
+  for BLE headsets.
+- **2026-09-22**: recordings play in VLC. A valid-but-rejected file needs: `stco` present (even empty) in every
+  `stbl`, real durations in `mvhd`/`tkhd`/`mdhd` (patched in when the recording closes, since fragments alone leave
+  them zero), and the `iso5`/`dash`/`msdh` brands.
 - **2026-09-22**: **telemetry revised**. Stats are **not** exchanged with the peer (no extra network overhead). Each
   device logs its own periodic call stats. A later diagnostic-report button packages the logs into a shareable form.
   Step 4c = periodic call stats in the log.

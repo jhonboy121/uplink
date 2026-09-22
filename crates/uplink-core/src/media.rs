@@ -15,6 +15,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 
+use crate::audio::{self, AudioReceiver, AudioSender};
 use crate::{Error, protocol, telemetry};
 
 /// Longest a frame may take to arrive before it is useless for live playback.
@@ -66,10 +67,22 @@ pub struct MediaStats {
     pub frames_dropped_received: AtomicU64,
     pub keyframe_requests_sent: AtomicU64,
     pub keyframe_requests_received: AtomicU64,
+    pub audio_sent: AtomicU64,
+    /// Not sent: the datagram send buffer was full.
+    pub audio_send_dropped: AtomicU64,
+    pub audio_received: AtomicU64,
+    /// Arrived after its playout time (or while playback stalled).
+    pub audio_late: AtomicU64,
+    /// Lost packets rebuilt from the next packet's FEC.
+    pub audio_fec_recovered: AtomicU64,
+    /// Lost packets filled by Opus concealment.
+    pub audio_concealed: AtomicU64,
+    /// Buffered packets skipped to keep latency bounded.
+    pub audio_skipped: AtomicU64,
 }
 
 impl MediaStats {
-    fn count(counter: &AtomicU64, amount: u64) {
+    pub(crate) fn count(counter: &AtomicU64, amount: u64) {
         counter.fetch_add(amount, Ordering::Relaxed);
     }
 }
@@ -146,6 +159,8 @@ pub struct MediaSession {
     pub incoming_video: mpsc::Receiver<Frame>,
     /// The peer asked for a keyframe; the encoder should produce one soon.
     pub keyframe_requests: mpsc::Receiver<()>,
+    pub audio: AudioSender,
+    pub incoming_audio: AudioReceiver,
     pub stats: Arc<MediaStats>,
 }
 
@@ -158,8 +173,9 @@ pub(crate) struct MediaLinks {
     pub stats: Arc<MediaStats>,
 }
 
-pub(crate) fn start(connection: &Connection) -> (MediaSession, MediaLinks) {
+pub(crate) fn start(connection: &Connection) -> Result<(MediaSession, MediaLinks), Error> {
     let stats = Arc::<MediaStats>::default();
+    let (audio, incoming_audio) = audio::start(connection, &stats)?;
     let (incoming_tx, incoming_video) = mpsc::channel(INCOMING_FRAME_QUEUE);
     let (request_tx, request_keyframe) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     let (keyframe_requested, keyframe_requests) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
@@ -172,8 +188,9 @@ pub(crate) fn start(connection: &Connection) -> (MediaSession, MediaLinks) {
         next_sequence: 0,
         stats: Arc::clone(&stats),
     };
-    let session = MediaSession { video, incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
-    (session, MediaLinks { request_keyframe, keyframe_requested, stats })
+    let session =
+        MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats: Arc::clone(&stats) };
+    Ok((session, MediaLinks { request_keyframe, keyframe_requested, stats }))
 }
 
 /// Accepts one stream per frame and feeds the sequencer until the connection ends.
