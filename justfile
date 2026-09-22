@@ -14,6 +14,10 @@ keystore := home_directory() / "android/debug.keystore"
 keystore_pass := "android"
 keystore_validity_days := "10000"
 build_tools_version := "37.0.0"
+android_platform := "android-37.0"
+activity := "dev.uplink.UplinkActivity"
+adb_user := "0"
+java_release := "8"
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
 export ANDROID_NDK := ANDROID_NDK_HOME
@@ -30,7 +34,13 @@ debuggable := if profile == "release" { "0" } else { "1" }
 lib := "uplink"
 so := "target" / android_target / profile / ("lib" + lib + ".so")
 apk := out_dir / "uplink.apk"
-apksigner := ANDROID_HOME / "build-tools" / build_tools_version / "lib/apksigner.jar"
+build_tools := ANDROID_HOME / "build-tools" / build_tools_version
+apksigner := build_tools / "lib/apksigner.jar"
+d8 := build_tools / "lib/d8.jar"
+android_jar := ANDROID_HOME / "platforms" / android_platform / "android.jar"
+d8_mode := if profile == "release" { "--release" } else { "--debug" }
+java_src := "crates/uplink-android/java"
+dex_dir := "target" / "dex" / profile
 android_crates := "-p uplink -p uplink-android"
 host_crates := "-p axml -p ndk-bindgen"
 
@@ -62,21 +72,34 @@ fmt:
 build:
     nice cargo build -p {{lib}} --target {{android_target}} --profile {{cargo_profile}}
 
+[doc("Compile the Java shim into dex_dir/classes.dex")]
+dex:
+    #!/bin/sh
+    set -eu
+    classes=$(mktemp -d)
+    mkdir -p "{{dex_dir}}"
+    trap 'rm -rf "$classes"' EXIT
+    javac -source {{java_release}} -target {{java_release}} -bootclasspath "{{android_jar}}" -Xlint:-options \
+        -d "$classes" $(find "{{java_src}}" -name '*.java')
+    java -cp "{{d8}}" com.android.tools.r8.D8 {{d8_mode}} --min-api {{min_sdk}} --lib "{{android_jar}}" \
+        --output "{{dex_dir}}" $(find "$classes" -name '*.class')
+
 [doc('''
-Build, strip, write the manifest, zip and sign the APK into out_dir.
+Build, strip, compile the Java shim, write the manifest, zip and sign the APK into out_dir.
 Install from Termux with the printed termux-open command.
 ''')]
-apk: build
+apk: build dex
     #!/bin/sh
     set -eu
     stage=$(mktemp -d)
     trap 'rm -rf "$stage"' EXIT
     mkdir -p "$stage/lib/arm64-v8a" "{{out_dir}}"
     strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
+    cp "{{dex_dir}}/classes.dex" "$stage/"
     cargo run -q -p axml -- out="$stage/AndroidManifest.xml" package={{app_id}} label={{app_label}} \
-        lib={{lib}} min={{min_sdk}} target={{target_sdk}} version={{version_code}} \
+        lib={{lib}} activity={{activity}} dex=1 min={{min_sdk}} target={{target_sdk}} version={{version_code}} \
         debuggable={{debuggable}} perm=android.permission.CAMERA
-    (cd "$stage" && jar --create --no-manifest --file unsigned.apk AndroidManifest.xml lib)
+    (cd "$stage" && jar --create --no-manifest --file unsigned.apk AndroidManifest.xml classes.dex lib)
     if [ ! -f "{{keystore}}" ]; then
         keytool -genkeypair -keystore "{{keystore}}" -storepass "{{keystore_pass}}" -keypass "{{keystore_pass}}" \
             -alias debug -keyalg RSA -validity {{keystore_validity_days}} -dname "CN=uplink debug" >/dev/null
@@ -93,3 +116,12 @@ size:
 [doc("Delete build outputs")]
 clean:
     cargo clean
+
+[doc("Install the APK and launch it over adb (needs a connected device)")]
+run: apk
+    adb install --user {{adb_user}} -r "{{apk}}"
+    adb shell am start --user {{adb_user}} -n "{{app_id}}/{{activity}}"
+
+[doc("Follow uplink's logcat output over adb (Java + native share the tag)")]
+logcat:
+    adb logcat -v time -s uplink:V AndroidRuntime:E DEBUG:F

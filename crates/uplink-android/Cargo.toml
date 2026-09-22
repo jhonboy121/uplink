@@ -15,6 +15,7 @@ ndk-sys.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [lints]
 workspace = true

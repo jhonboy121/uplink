@@ -17,9 +17,11 @@ use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
+use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing};
 use uplink_android::preview::{Frame, Preview, TURNS_PER_REVOLUTION};
-use uplink_android::{cpu, jvm, log};
+use uplink_android::platform::{Permission, Platform};
+use uplink_android::{cpu, log};
 
 use crate::ui::App;
 
@@ -54,7 +56,6 @@ struct Session {
 }
 
 struct State {
-    app: AndroidApp,
     ui: slint::Weak<App>,
     session: Option<Session>,
     facing: Facing,
@@ -71,22 +72,8 @@ impl State {
         }
     }
 
+    /// Assumes the camera permission is granted (see [`request_camera`]).
     fn start_camera(&mut self) {
-        match jvm::has_camera_permission(&self.app) {
-            Ok(true) => {}
-            Ok(false) => {
-                if let Err(e) = jvm::request_camera_permission(&self.app) {
-                    tracing::error!("requesting camera permission: {e}");
-                }
-                self.status("camera permission requested; press Start after granting");
-                return;
-            }
-            Err(e) => {
-                tracing::error!("checking camera permission: {e}");
-                self.status(format!("permission check failed: {e}"));
-                return;
-            }
-        }
         self.session = None;
         match self.open_session() {
             Ok(session) => {
@@ -134,6 +121,24 @@ fn with_state(state: &Rc<RefCell<State>>, f: impl FnOnce(&mut State)) {
     }
 }
 
+/// Asks for the camera permission (prompting if needed), then starts the camera.
+fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
+    let (state, platform) = (Rc::clone(state), Rc::clone(platform));
+    let task = slint::spawn_local(async move {
+        match platform.request_permission(Permission::Camera).await {
+            Ok(true) => with_state(&state, State::start_camera),
+            Ok(false) => with_state(&state, |s| s.status("camera permission denied")),
+            Err(e) => {
+                tracing::error!("camera permission: {e}");
+                with_state(&state, |s| s.status(format!("camera permission failed: {e}")));
+            }
+        }
+    });
+    if let Err(e) = task {
+        tracing::error!("spawning camera request: {e}");
+    }
+}
+
 /// Converts the latest camera image into a preview texture, if one arrived.
 fn render_frame(state: &mut State, preview: &mut Option<Preview>) -> Result<Option<Frame>> {
     let Some(session) = state.session.as_mut() else { return Ok(None) };
@@ -154,19 +159,35 @@ fn render_frame(state: &mut State, preview: &mut Option<Preview>) -> Result<Opti
     Ok(Some(frame))
 }
 
-fn previous_run_report(app: &AndroidApp, data_dir: &Path) -> String {
-    let exits = jvm::previous_exits(app).unwrap_or_else(|e| format!("exit info unavailable: {e}"));
+fn previous_run_report(platform: &Platform, data_dir: &Path) -> String {
+    let exits = platform.previous_exits().unwrap_or_else(|e| format!("exit info unavailable: {e}"));
     let previous_log = std::fs::read_to_string(data_dir.join(log::PREVIOUS_LOG_FILE)).unwrap_or_default();
     let lines: Vec<&str> = previous_log.lines().collect();
     let tail = lines[lines.len().saturating_sub(PREVIOUS_LOG_TAIL_LINES)..].join("\n");
     format!("previous exits:\n{exits}\nprevious log tail:\n{tail}")
 }
 
-fn install_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        tracing::error!("panic: {info}\n{backtrace}");
-    }));
+/// Logs panics from any thread into this instance's log; restores the default hook on drop so a
+/// later `android_main` in the same process doesn't write into a stale log.
+struct PanicHook;
+
+impl PanicHook {
+    fn install(dispatch: Dispatch) -> Self {
+        std::panic::set_hook(Box::new(move |info| {
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            tracing::dispatcher::with_default(&dispatch, || tracing::error!("panic: {info}\n{backtrace}"));
+        }));
+        Self
+    }
+}
+
+impl Drop for PanicHook {
+    fn drop(&mut self) {
+        // take_hook panics when called while panicking.
+        if !std::thread::panicking() {
+            drop(std::panic::take_hook());
+        }
+    }
 }
 
 fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
@@ -185,15 +206,12 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
     )
 }
 
-fn run(app: AndroidApp) -> Result<()> {
-    let data_dir = app.internal_data_path().unwrap_or_else(|| PathBuf::from(FALLBACK_DATA_DIR));
-    log::init(LOG_TAG, LOG_FILTER, &data_dir)?;
-    install_panic_hook();
+fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
-    let report = previous_run_report(&app, &data_dir);
+    let platform = Rc::new(Platform::attach(&app)?);
+    let report = previous_run_report(&platform, data_dir);
 
     let state = Rc::new(RefCell::new(State {
-        app: app.clone(),
         ui: slint::Weak::default(),
         session: None,
         facing: Facing::Front,
@@ -219,7 +237,8 @@ fn run(app: AndroidApp) -> Result<()> {
     ui.set_status(report.into());
 
     let s = Rc::clone(&state);
-    ui.on_start(move || with_state(&s, State::start_camera));
+    let p = Rc::clone(&platform);
+    ui.on_start(move || request_camera(&s, &p));
     let s = Rc::clone(&state);
     ui.on_stop(move || {
         with_state(&s, |s| {
@@ -295,9 +314,18 @@ fn run(app: AndroidApp) -> Result<()> {
     Ok(())
 }
 
+/// May run several times per process (Android reuses processes), so nothing here is global:
+/// logging and the panic hook are scoped to this call.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    if let Err(e) = run(app) {
+    let data_dir = app.internal_data_path().unwrap_or_else(|| PathBuf::from(FALLBACK_DATA_DIR));
+    let dispatch = match log::init(LOG_TAG, LOG_FILTER, &data_dir) {
+        Ok(dispatch) => dispatch,
+        Err(e) => return log::logcat(LOG_TAG, Level::ERROR, &format!("logging init failed: {e}")),
+    };
+    let _log = tracing::dispatcher::set_default(&dispatch);
+    let _panic_hook = PanicHook::install(dispatch.clone());
+    if let Err(e) = run(app, &data_dir) {
         tracing::error!("fatal: {e:#}");
     }
 }

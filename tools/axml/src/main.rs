@@ -2,7 +2,7 @@
 //! ships for x86_64 hosts.
 //!
 //! usage: axml out=<path> package=<id> label=<name> lib=<libname> min=<sdk> target=<sdk>
-//!             version=<code> [debuggable=<0|1>] [dex=<0|1>] [perm=<permission>]...
+//!             version=<code> [activity=<class>] [debuggable=<0|1>] [dex=<0|1>] [perm=<permission>]...
 
 use std::collections::HashMap;
 use anyhow::{Context, Result};
@@ -311,6 +311,10 @@ impl Args {
         self.get(key)?.parse().with_context(|| format!("{key}= is not a number"))
     }
 
+    fn get_or(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map_or_else(|| default.to_owned(), Clone::clone)
+    }
+
     fn flag(&self, key: &str) -> bool {
         self.values.get(key).is_some_and(|v| v == "1")
     }
@@ -334,7 +338,7 @@ fn manifest(args: &Args) -> Result<Element> {
     let activity = element(
         "activity",
         vec![
-            android(ATTR_NAME, "name", Value::Str(NATIVE_ACTIVITY.into())),
+            android(ATTR_NAME, "name", Value::Str(args.get_or("activity", NATIVE_ACTIVITY))),
             android(ATTR_EXPORTED, "exported", Value::Bool(true)),
             android(ATTR_CONFIG_CHANGES, "configChanges", Value::Hex(CONFIG_CHANGES)),
             android(ATTR_LAUNCH_MODE, "launchMode", Value::Int(LAUNCH_MODE_SINGLE_TOP)),

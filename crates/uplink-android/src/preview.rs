@@ -21,10 +21,9 @@ void main() {
     vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
     vec2 c = p - 0.5;
+    if (u_mirror) c.x = -c.x; // display space, before rotating
     for (int i = 0; i < u_turns; i++) c = vec2(c.y, -c.x);
-    vec2 uv = c + 0.5;
-    if (u_mirror) uv.x = 1.0 - uv.x;
-    v_uv = uv;
+    v_uv = c + 0.5;
 }";
 
 const FRAGMENT_SHADER: &CStr = c"#version 300 es

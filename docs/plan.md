@@ -74,7 +74,8 @@ This is the source of truth for decisions. Changes go in as dated entries in [Re
 No statics (incl. `thread_local!`); `const fn` where possible; no magic numbers (named consts or values read from the
 source of truth: generated bindings, JNI static fields); terse comments; clippy/rustc clean without `allow` (except bindgen
 naming lints in generated `-sys` crates); no `unwrap`/`expect`; `anyhow` in binaries, `thiserror` in libraries;
-`tracing` for logs; keep disk usage lean. Avoid build scripts.
+`tracing` for logs, used explicitly (a `Dispatch` scoped per `android_main`, handed to other threads; never a global
+default); keep disk usage lean. Avoid build scripts.
 
 ## Roadmap
 
@@ -94,3 +95,8 @@ naming lints in generated `-sys` crates); no `unwrap`/`expect`; `anyhow` in bina
   vendored ndk with r30 bindings, zero-copy camera preview (30 fps, 10–20% of one core, debug build). Locked: stack,
   tokio core + UI bridge, own framing over iroh, n0 relays for now, key-only contacts, platform bridge design,
   E2EE position, no Gradle/xbuild.
+- **2026-09-22**: roadmap step 1 done (platform bridge). Logging is explicit `tracing` (not slog, since deps log via tracing):
+  `log::init` returns a `Dispatch`, scoped with `set_default` per `android_main` run and passed to other threads/the panic
+  hook. Android reuses processes, so `android_main` can run repeatedly and process-wide set-once state breaks relaunch.
+  JNI handles use bit-preserving `cast_signed`/`cast_unsigned` (arm64 tagged pointers). adb over localhost is used for
+  debugging when available (`just run`, `just logcat`).

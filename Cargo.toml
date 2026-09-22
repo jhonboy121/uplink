@@ -24,6 +24,7 @@ ndk-sys = { version = "0.6", features = ["camera", "media"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+tokio = { version = "1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

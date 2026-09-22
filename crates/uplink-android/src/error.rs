@@ -12,6 +12,10 @@ pub enum Error {
     Gl { call: &'static str, code: u32 },
     #[error("shader: {0}")]
     Shader(String),
+    #[error("native handle does not fit a jlong on this target")]
+    Handle,
+    #[error("request abandoned before the activity answered")]
+    RequestAbandoned,
     #[error("GL object creation returned 0")]
     GlObject,
     #[error(transparent)]
@@ -22,6 +26,4 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("log filter: {0}")]
     LogFilter(#[from] tracing_subscriber::filter::ParseError),
-    #[error(transparent)]
-    LogInit(#[from] tracing_subscriber::util::TryInitError),
 }

@@ -91,10 +91,10 @@ let arr = env.cast_local::<JByteArray>(obj)?;
 let v: Vec<u8> = env.convert_byte_array(&arr)?;      // catches exceptions internally
 let jarr = env.byte_array_from_slice(&bytes)?;
 let jarr = env.new_byte_array(len)?;
-env.get_byte_array_region(&arr, start, &mut buf)?;
+arr.get_region(env, start, &mut buf)?;                 // ✅ JPrimitiveArray method; Env::get_*_array_region is deprecated
 let ptr = env.get_direct_buffer_address(&byte_buffer)?;  // zero-copy for DirectByteBuffer
 ```
-`get_array_length`, `get_object_array_element` also exist.
+`arr.len(env)? -> usize` ✅ (`Env::get_array_length` is **deprecated** and clippy -D warnings rejects it). `get_object_array_element` also exists.
 
 ## References
 
@@ -156,3 +156,23 @@ loads a dex through `dalvik.system.DexClassLoader` / `InMemoryDexClassLoader`.
 - Android `getHistoricalProcessExitReasons(pkg, pid=0, max)` returns `java.util.List`. Iterate with
   `size()` / `get(I)Ljava/lang/Object;`. Reasons: 4 CRASH, 5 CRASH_NATIVE (trace is a tombstone
   protobuf on API 31+), 6 ANR (text trace). `InputStream.readAllBytes()` is API 33+.
+
+## Registering natives without globals ✅ (uplink platform bridge)
+
+- Don't use `native_method!`: its generated wrapper holds a `static Once` ABI check. Instead write plain
+  `extern "system" fn f<'local>(mut env: EnvUnowned<'local>, _class: JClass<'local>, handle: jlong, …)` and register
+  them via `NativeMethod::from_raw_parts(jni_str!("name"), jni_str!("(J…)V"), f as *mut c_void)` +
+  `unsafe { env.register_native_methods(&class, &methods) }`, where `class = env.get_object_class(&activity)?`
+  (the activity's own class; `FindClass` from a native thread can't see app classes).
+- Context passing: `Arc::into_raw(Arc::clone(&inner)).expose_provenance()` → **`usize::cast_signed()`** → `jlong` stored in a Java `volatile long`
+  (arm64 Android tags heap pointers in the top byte, so `jlong::try_from(usize)` fails on real devices; reverse with
+  `isize::try_from(handle)?.cast_unsigned()`)
+  field. Callbacks do `std::ptr::with_exposed_provenance::<Inner>(handle as usize).as_ref()`. `onDestroy` zeroes the
+  field, then calls `nativeDetach`, which does `Arc::from_raw`.
+- Inside native fns: `env.with_env(|env| …).into_outcome()` → `Outcome::{Ok, Err, Panic}`. Log and fall back
+  rather than `resolve::<ThrowRuntimeExAndDefault>()`, because a Java exception thrown from a framework callback
+  (e.g. `onRequestPermissionsResult`) crashes the app.
+- Owned VM: `unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }` + `env.new_global_ref(&activity)?`
+  (`Global<JObject<'static>>`, `.as_obj()`), no `JavaVM::singleton()`.
+- Java side: `javac -source 8 -target 8 -bootclasspath android.jar` can't compile lambdas ("Unable to find method
+  metafactory"). Use anonymous classes (`new Runnable() { … }`).

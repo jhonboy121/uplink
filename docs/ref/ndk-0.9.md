@@ -95,6 +95,7 @@ teardown: stopRepeating → ACameraCaptureSession_close → ACameraDevice_close 
 - `AImage::hardware_buffer()` → `eglGetNativeClientBufferANDROID` → `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)`
   → `glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES)` works on Skia's GL context. The EGLImage is created and
   destroyed per frame; keep the `Image` alive until the next frame replaces it.
-- Orientation: to display upright, turn by **sensor_orientation / 90** quarter turns (our shader's convention); verified on the S24 front (270°) and back (90°) cameras.
+- Orientation: turn by **sensor_orientation / 90** quarter turns; front cameras are mirrored in **display space
+  before** rotating (mirroring after rotation reverses the turn direction and broke the 270° front camera).
   The front camera needed no extra mirror beyond the default `mirror = front`.
 - Start → stop → start and pause/resume teardown order work: drop the shown `Image`, then the camera session, then the `ImageReader`.
