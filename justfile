@@ -21,6 +21,7 @@ permissions := "android.permission.CAMERA android.permission.INTERNET android.pe
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
+cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
 # proot emulates setsockopt via ptrace and returns EOPNOTSUPP under concurrent UDP binds (iroh/noq
 # IP_PKTINFO); run tests serially here. Raise on real Linux/CI.
 test_threads := env("RUST_TEST_THREADS", "1")
@@ -143,6 +144,13 @@ Two instances with different --dir can call each other.
 ''')]
 cli *args:
     nice cargo run -q -p uplink-cli -- {{args}}
+
+[doc('''
+Run the host CLI with its output (reports + logs) also kept in target/cli.log ($UPLINK_CLI_LOG), e.g.
+`just cli-log call phone --video ~/uplink-media/clip.mp4`.
+''')]
+cli-log *args:
+    set -o pipefail; nice cargo run -q -p uplink-cli -- {{args}} 2>&1 | tee {{cli_log}}
 
 [doc("Unit + integration tests for uplink-core (host, loopback only)")]
 test *args:

@@ -1,9 +1,12 @@
 //! uplink CLI: identity, contacts and calls through the same core the app uses.
 
+mod media;
+
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::Dispatch;
 use tracing_subscriber::filter::Targets;
@@ -12,68 +15,68 @@ use uplink_core::contacts::Contacts;
 use uplink_core::node::{Command, Event, Network, Node};
 use uplink_core::{EndpointId, identity, runtime};
 
-const USAGE: &str = "\
-usage: uplink [--dir <path>] <command>
-  id                  print this device's key
-  contacts            list contacts
-  add <name> <key>    add a contact
-  remove <name>       remove a contact
-  listen              wait for calls   (a accept, r reject, h hang up, q quit)
-  call <name|key>     call someone     (h hang up, q quit)
-data dir: --dir, else $UPLINK_DIR, else ~/.local/share/uplink; log filter: $UPLINK_LOG";
-const DIR_FLAG: &str = "--dir";
-const DIR_ENV: &str = "UPLINK_DIR";
-const LOG_ENV: &str = "UPLINK_LOG";
 const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info";
 const DEFAULT_DIR: &str = ".local/share/uplink";
 
-enum Cli {
-    Id,
-    Contacts,
-    Add { name: String, key: String },
-    Remove { name: String },
-    Listen,
-    Call { target: String },
+#[derive(Parser)]
+#[command(name = "uplink", about = "uplink peer-to-peer calls from the terminal")]
+struct Args {
+    /// Data dir (identity, contacts) [default: ~/.local/share/uplink]
+    #[arg(long, env = "UPLINK_DIR", global = true)]
+    dir: Option<PathBuf>,
+    /// tracing filter for stderr logs
+    #[arg(long, env = "UPLINK_LOG", default_value = DEFAULT_LOG, global = true)]
+    log: String,
+    #[command(subcommand)]
+    command: Cli,
 }
 
-fn parse(args: &[String]) -> Result<(PathBuf, Cli)> {
-    let (dir, rest) = match args {
-        [flag, dir, rest @ ..] if flag == DIR_FLAG => (PathBuf::from(dir), rest),
-        rest => (default_dir()?, rest),
-    };
-    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
-    let cli = match rest.as_slice() {
-        ["id"] => Cli::Id,
-        ["contacts"] => Cli::Contacts,
-        ["add", name, key] => Cli::Add { name: (*name).to_owned(), key: (*key).to_owned() },
-        ["remove", name] => Cli::Remove { name: (*name).to_owned() },
-        ["listen"] => Cli::Listen,
-        ["call", target] => Cli::Call { target: (*target).to_owned() },
-        _ => return Err(anyhow!("{USAGE}")),
-    };
-    Ok((dir, cli))
+#[derive(Subcommand)]
+enum Cli {
+    /// Print this device's key
+    Id,
+    /// List contacts
+    Contacts,
+    /// Add a contact
+    Add { name: String, key: EndpointId },
+    /// Remove a contact
+    Remove { name: String },
+    /// Wait for calls (a accept, r reject, h hang up, q quit)
+    Listen {
+        #[command(flatten)]
+        media: MediaArgs,
+    },
+    /// Call a contact name or key (h hang up, q quit)
+    Call {
+        target: String,
+        #[command(flatten)]
+        media: MediaArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct MediaArgs {
+    /// H.264 mp4 sent as our video, looped
+    #[arg(long)]
+    video: Option<PathBuf>,
 }
 
 fn default_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os(DIR_ENV) {
-        return Ok(PathBuf::from(dir));
-    }
     let home = std::env::var_os("HOME").context("no --dir, $UPLINK_DIR or $HOME")?;
     Ok(PathBuf::from(home).join(DEFAULT_DIR))
 }
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let (dir, cli) = parse(&args)?;
-    let filter = std::env::var(LOG_ENV).unwrap_or_else(|_| DEFAULT_LOG.to_owned());
+    let args = Args::parse();
+    let dir = args.dir.map_or_else(default_dir, Ok)?;
     let dispatch = Dispatch::new(
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-            .with(Targets::from_str(&filter)?),
+            .with(Targets::from_str(&args.log)?),
     );
     let _log = tracing::dispatcher::set_default(&dispatch);
     let runtime = runtime::build(dispatch)?;
-    let outcome = runtime.block_on(run(&dir, cli));
+    let outcome = runtime.block_on(run(&dir, args.command));
     // A pending stdin read sits on a blocking thread until Enter; don't wait for it.
     runtime.shutdown_background();
     outcome
@@ -89,7 +92,7 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
         }
         Cli::Add { name, key } => {
             let mut contacts = Contacts::load(dir).await?;
-            contacts.add(&name, EndpointId::from_str(&key)?)?;
+            contacts.add(&name, key)?;
             contacts.save().await?;
         }
         Cli::Remove { name } => {
@@ -97,30 +100,48 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
             contacts.remove(&name)?;
             contacts.save().await?;
         }
-        Cli::Listen => session(dir, None).await?,
-        Cli::Call { target } => {
+        Cli::Listen { media } => session(dir, None, media.video).await?,
+        Cli::Call { target, media } => {
             let peer = Contacts::load(dir).await?.resolve(&target)?;
-            session(dir, Some(peer)).await?;
+            session(dir, Some(peer), media.video).await?;
         }
     }
     Ok(())
 }
 
 /// Runs the node until quit; when placing a call, also until that call ends.
-async fn session(dir: &Path, call: Option<EndpointId>) -> Result<()> {
+async fn session(dir: &Path, call: Option<EndpointId>, video: Option<PathBuf>) -> Result<()> {
+    if let Some(path) = &video {
+        // Fail early on a bad clip; each call reopens it to start from the beginning.
+        media::Clip::open(path)?;
+    }
     let contacts = Contacts::load(dir).await?;
     let (node, mut events) = Node::start(identity::load_or_create(dir).await?, Network::N0).await?;
     if let Some(peer) = call {
         node.send(Command::Call(peer)).await?;
     }
     let mut input = BufReader::new(tokio::io::stdin()).lines();
+    let mut call_media: Option<AbortOnDrop> = None;
     let outcome = loop {
         tokio::select! {
             event = events.recv() => match event {
                 Some(event) => {
                     println!("{}", describe(&event, &contacts));
-                    if call.is_some() && matches!(event, Event::Ended { .. }) {
-                        break Ok(());
+                    match event {
+                        Event::Connected { media, .. } => {
+                            let clip = video.as_deref().map(media::Clip::open).transpose().unwrap_or_else(|e| {
+                                println!("clip unavailable, sending no video: {e:#}");
+                                None
+                            });
+                            call_media = Some(AbortOnDrop(tokio::spawn(media::run(media, clip))));
+                        }
+                        Event::Ended { .. } => {
+                            call_media = None;
+                            if call.is_some() {
+                                break Ok(());
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 None => break Ok(()),
@@ -137,8 +158,18 @@ async fn session(dir: &Path, call: Option<EndpointId>) -> Result<()> {
             signal = tokio::signal::ctrl_c() => break signal.map_err(Into::into),
         }
     };
+    drop(call_media);
     node.shutdown().await;
     outcome
+}
+
+/// Stops a call's media task with the call.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Returns whether to keep running.

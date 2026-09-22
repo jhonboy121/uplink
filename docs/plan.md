@@ -124,3 +124,15 @@ default); keep disk usage lean. Avoid build scripts.
     each device keeps **both sides**, persisted as per-call reports in the data dir and viewable in-app.
   - Step 4 order: 4a core media transport (host-tested with synthetic frames) → 4b Android MediaCodec encode (camera input
     surface) / decode (into the zero-copy preview) → 4c call telemetry + reports.
+- **2026-09-22**: step 4b done. It was tested against the CLI (`--video clip.mp4`, which sends an H.264 mp4's
+  samples as-is, and prints the video it receives each second): 1080p clip → phone, and phone 720p30 → CLI, with no
+  drops. The CLI uses clap. The camera feeds two surfaces (preview ImageReader + encoder input surface). The codecs run
+  in MediaCodec async mode. The NDK callbacks feed a channel, and one tokio task per codec drives it. Nothing polls and
+  there are no dedicated threads. A `CancellationToken` stops the tasks, and the call waits for them before its
+  surfaces are released. `MediaCodec` gets one reasoned `unsafe impl Send` wrapper: `AMediaCodec` is locked internally,
+  and async mode is already cross-thread by design. The decoder task takes a frame only while it has a free input
+  buffer, so any backlog falls to uplink-core's drop/resync/keyframe-request path. The decoder renders into a second
+  ImageReader that goes through the same zero-copy blit. SPS/PPS are prepended to every keyframe, so any keyframe can
+  start decoding. The frame header carries `turns` (quarter turns to upright);
+  mirroring stays local to the self-view. 720p30, 2 Mbps, 2 s keyframe interval until rate control lands. The mime and
+  `COLOR_FormatSurface` are read over JNI. The `ndk` feature is `api-level-30` (= minSdk).

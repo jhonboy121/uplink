@@ -1,7 +1,8 @@
-//! uplink Android entry point: camera preview through the zero-copy GL path, with
+//! uplink Android entry point: calls with camera video through the zero-copy GL path, with
 //! in-app diagnostics (previous exits + previous log) since there is no adb.
 
 mod ui;
+mod video;
 
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -15,19 +16,24 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
+use ndk::native_window::NativeWindow;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing};
-use uplink_android::preview::{Frame, Preview, TURNS_PER_REVOLUTION};
+use uplink_android::codec::{Avc, VideoConfig};
 use uplink_android::platform::{Permission, Platform};
+use uplink_android::preview::{Frame, Preview, TURNS_PER_REVOLUTION};
 use uplink_android::{cpu, log};
+use uplink_core::media::MediaSession;
 use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::ui::{App, CallState};
+use crate::video::CallVideo;
 
 const LOG_TAG: &CStr = c"uplink";
 /// Baked in at build time (`just log=debug apk`).
@@ -44,6 +50,15 @@ const CAPTURE_WIDTH: i32 = 1280;
 const CAPTURE_HEIGHT: i32 = 720;
 const CAPTURE_FPS: i32 = 30;
 const READER_MAX_IMAGES: i32 = 4;
+const VIDEO_BITRATE: i32 = 2_000_000;
+const KEYFRAME_INTERVAL_SECS: i32 = 2;
+const VIDEO: VideoConfig = VideoConfig {
+    width: CAPTURE_WIDTH,
+    height: CAPTURE_HEIGHT,
+    fps: CAPTURE_FPS,
+    bitrate: VIDEO_BITRATE,
+    keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
+};
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 const PERCENT: f64 = 100.0;
 const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(2);
@@ -51,6 +66,7 @@ const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(2);
 #[derive(Default)]
 struct FrameStats {
     camera: AtomicU32,
+    remote: AtomicU32,
     blits: AtomicU32,
     blit_micros: AtomicU64,
 }
@@ -62,9 +78,13 @@ struct Session {
     reader: ImageReader,
 }
 
+/// Field order is drop order: the camera stops feeding the encoder before the call goes.
 struct State {
     ui: slint::Weak<App>,
     session: Option<Session>,
+    call: Option<CallVideo>,
+    avc: Avc,
+    runtime: Handle,
     facing: Facing,
     extra_turns: i32,
     mirror: bool,
@@ -93,6 +113,7 @@ impl State {
                     camera.sensor_orientation()
                 ));
                 self.session = Some(session);
+                self.sync_call_turns();
             }
             Err(e) => {
                 tracing::error!("camera start: {e:#}");
@@ -116,8 +137,46 @@ impl State {
             // Fails only once the event loop has quit; nothing left to redraw then.
             let _ = ui.upgrade_in_event_loop(|ui| ui.window().request_redraw());
         }))?;
-        let camera = Camera::open(self.facing, &reader.window()?, CAPTURE_FPS)?;
+        let preview = reader.window()?;
+        let windows: Vec<&NativeWindow> =
+            std::iter::once(&preview).chain(self.call.as_ref().map(CallVideo::encoder_window)).collect();
+        let camera = Camera::open(self.facing, &windows, CAPTURE_FPS)?;
         Ok(Session { shown: None, camera, reader })
+    }
+
+    /// Tells the peer how to turn our frames upright; the self-view's mirror stays local.
+    fn sync_call_turns(&self) {
+        if let (Some(call), Some(session)) = (&self.call, &self.session) {
+            call.set_local_turns(session.camera.upright_quarter_turns() + self.extra_turns);
+        }
+    }
+
+    fn start_call(&mut self, media: MediaSession) {
+        let (stats, ui) = (Arc::clone(&self.stats), self.ui.clone());
+        let on_remote_frame = move || {
+            stats.remote.fetch_add(1, Ordering::Relaxed);
+            // Fails only once the event loop has quit; nothing left to redraw then.
+            let _ = ui.upgrade_in_event_loop(|ui| ui.window().request_redraw());
+        };
+        match CallVideo::start(media, &self.avc, VIDEO, self.runtime.clone(), on_remote_frame) {
+            Ok(call) => self.call = Some(call),
+            Err(e) => {
+                tracing::error!("call video: {e:#}");
+                self.status(format!("call video failed: {e:#}"));
+            }
+        }
+    }
+
+    /// Stops the call's codecs; a running camera restarts without the encoder.
+    fn end_call(&mut self) {
+        if self.call.is_none() {
+            return;
+        }
+        let camera_was_running = self.session.take().is_some();
+        self.call = None;
+        if camera_was_running {
+            self.start_camera();
+        }
     }
 }
 
@@ -146,24 +205,63 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     }
 }
 
-/// Converts the latest camera image into a preview texture, if one arrived.
-fn render_frame(state: &mut State, preview: &mut Option<Preview>) -> Result<Option<Frame>> {
-    let Some(session) = state.session.as_mut() else { return Ok(None) };
-    let AcquireResult::Image(image) = session.reader.acquire_latest_image()? else { return Ok(None) };
+/// Converts the newest image of `reader` into a texture, if one arrived. The caller keeps the
+/// returned image until the next frame: the texture samples its buffer.
+fn blit(
+    reader: &ImageReader,
+    preview: &mut Option<Preview>,
+    turns: i32,
+    mirror: bool,
+) -> Result<Option<(Frame, Image)>> {
+    let AcquireResult::Image(image) = reader.acquire_latest_image()? else {
+        return Ok(None);
+    };
     let buffer = image.hardware_buffer()?;
     if preview.is_none() {
         // SAFETY: only called from BeforeRendering, where Slint's GL context is current.
         *preview = Some(unsafe { Preview::new() }?);
     }
-    let Some(preview) = preview.as_mut() else { return Ok(None) };
+    let Some(preview) = preview.as_mut() else {
+        return Ok(None);
+    };
+    let (width, height) = (u32::try_from(image.width()?)?, u32::try_from(image.height()?)?);
+    // SAFETY: GL context is current; the caller keeps `image` (owner of `buffer`) alive.
+    let frame = unsafe { preview.draw(buffer.as_ptr().cast(), width, height, turns, mirror) }?;
+    Ok(Some((frame, image)))
+}
+
+/// Converts the latest camera image into the self-view texture, if one arrived.
+fn render_local(state: &mut State, preview: &mut Option<Preview>) -> Result<Option<Frame>> {
+    let Some(session) = state.session.as_mut() else {
+        return Ok(None);
+    };
     let turns = session.camera.upright_quarter_turns() + state.extra_turns;
     let mirror = (session.camera.facing() == Facing::Front) ^ state.mirror;
-    let (width, height) = (u32::try_from(image.width()?)?, u32::try_from(image.height()?)?);
-    // SAFETY: GL context is current; `image` (owner of `buffer`) is kept in `shown` until the
-    // next frame replaces it.
-    let frame = unsafe { preview.draw(buffer.as_ptr().cast(), width, height, turns, mirror) }?;
+    let Some((frame, image)) = blit(&session.reader, preview, turns, mirror)? else {
+        return Ok(None);
+    };
     session.shown = Some(image);
     Ok(Some(frame))
+}
+
+/// Converts the latest decoded remote image into the main view's texture, if one arrived.
+fn render_remote(state: &mut State, preview: &mut Option<Preview>) -> Result<Option<Frame>> {
+    let Some(call) = state.call.as_mut() else {
+        return Ok(None);
+    };
+    let Some((frame, image)) = blit(&call.remote, preview, call.remote_turns(), false)? else {
+        return Ok(None);
+    };
+    call.shown = Some(image);
+    Ok(Some(frame))
+}
+
+fn texture_image(frame: Frame) -> slint::Image {
+    // SAFETY: the texture was created on this window's GL context by `Preview`.
+    unsafe {
+        slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(frame.texture, (frame.width, frame.height).into())
+    }
+    .build()
 }
 
 fn previous_run_report(platform: &Platform, data_dir: &Path) -> String {
@@ -204,19 +302,37 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
     let blit_fps = f64::from(blits) / secs;
     let avg_micros = micros.checked_div(u64::from(blits)).unwrap_or_default();
     let cpu = cpu_percent.map_or_else(|| "n/a".to_owned(), |c| format!("{c:.0}%"));
+    let remote_fps = f64::from(state.stats.remote.swap(0, Ordering::Relaxed)) / secs;
     let camera_error = state.session.as_ref().and_then(|s| s.camera.error());
-    tracing::debug!(camera_fps, blit_fps, avg_micros, cpu, "stats");
-    format!(
+    tracing::debug!(camera_fps, remote_fps, blit_fps, avg_micros, cpu, "stats");
+    let mut text = format!(
         "cam {camera_fps:.1} fps · blit {blit_fps:.1} fps · {avg_micros} µs/blit · CPU {cpu} (100% = 1 core)\n\
          turns +{} · mirror {} · camera error {camera_error:?}",
         state.extra_turns, state.mirror
-    )
+    );
+    if let Some(call) = &state.call {
+        let stats = &call.stats;
+        let count = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
+        text.push_str(&format!(
+            "\nremote {remote_fps:.1} fps · codecs {} · sent {} ({} late, {} congested) · received {} ({} dropped) · keyframe asks {}/{}",
+            if call.codecs_running() { "ok" } else { "STOPPED" },
+            count(&stats.frames_sent),
+            count(&stats.frames_late),
+            count(&stats.frames_dropped_congested),
+            count(&stats.frames_received),
+            count(&stats.frames_dropped_received),
+            count(&stats.keyframe_requests_sent),
+            count(&stats.keyframe_requests_received),
+        ));
+    }
+    text
 }
 
 fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
     let platform = Rc::new(Platform::attach(&app)?);
     let report = previous_run_report(&platform, data_dir);
+    let avc = platform.avc()?;
 
     let runtime = uplink_core::runtime::build(dispatch)?;
     let secret = runtime.block_on(identity::load_or_create(data_dir))?;
@@ -226,6 +342,9 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let state = Rc::new(RefCell::new(State {
         ui: slint::Weak::default(),
         session: None,
+        call: None,
+        avc,
+        runtime: runtime.handle().clone(),
         facing: Facing::Front,
         extra_turns: 0,
         mirror: false,
@@ -247,12 +366,14 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let ui = App::new()?;
     state.borrow_mut().ui = ui.as_weak();
     ui.set_log(report.into());
-    runtime.spawn(forward_node_events(node_events, ui.as_weak()));
+    slint::spawn_local(handle_node_events(node_events, ui.as_weak(), Rc::clone(&state), Rc::clone(&platform)))?;
 
     let (c, weak) = (calls.clone(), ui.as_weak());
     ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
         Ok(peer) => {
-            if send_call_command(&c, Command::Call(peer), &weak) && let Some(ui) = weak.upgrade() {
+            if send_call_command(&c, Command::Call(peer), &weak)
+                && let Some(ui) = weak.upgrade()
+            {
                 // Optimistic: the node confirms with Dialing, or reverts via Ended.
                 ui.set_call_state(CallState::Dialing);
             }
@@ -292,35 +413,44 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         });
     });
     let s = Rc::clone(&state);
-    ui.on_rotate(move || with_state(&s, |s| s.extra_turns = (s.extra_turns + 1) % TURNS_PER_REVOLUTION));
+    ui.on_rotate(move || {
+        with_state(&s, |s| {
+            s.extra_turns = (s.extra_turns + 1) % TURNS_PER_REVOLUTION;
+            s.sync_call_turns();
+        });
+    });
     let s = Rc::clone(&state);
     ui.on_mirror(move || with_state(&s, |s| s.mirror = !s.mirror));
 
     let s = Rc::clone(&state);
-    let mut preview: Option<Preview> = None;
+    let (mut local, mut remote): (Option<Preview>, Option<Preview>) = (None, None);
     ui.window().set_rendering_notifier(move |rendering, _| match rendering {
         RenderingState::BeforeRendering => with_state(&s, |state| {
             let started = Instant::now();
-            match render_frame(state, &mut preview) {
+            match render_local(state, &mut local) {
                 Ok(Some(frame)) => {
                     state.stats.blits.fetch_add(1, Ordering::Relaxed);
                     let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                     state.stats.blit_micros.fetch_add(micros, Ordering::Relaxed);
-                    // SAFETY: the texture was created on this window's GL context by `Preview`.
-                    let image = unsafe {
-                        slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(frame.texture, (frame.width, frame.height).into())
-                    }
-                    .build();
                     if let Some(ui) = state.ui.upgrade() {
-                        ui.set_frame(image);
+                        ui.set_frame(texture_image(frame));
                     }
                 }
                 Ok(None) => {}
                 Err(e) => tracing::warn!("preview: {e:#}"),
             }
+            match render_remote(state, &mut remote) {
+                Ok(Some(frame)) => {
+                    if let Some(ui) = state.ui.upgrade() {
+                        ui.set_remote_frame(texture_image(frame));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("remote view: {e:#}"),
+            }
         }),
         RenderingState::RenderingTeardown => {
-            if let Some(preview) = preview.take() {
+            for preview in [local.take(), remote.take()].into_iter().flatten() {
                 // SAFETY: Slint keeps the GL context current during RenderingTeardown.
                 unsafe { preview.destroy() };
             }
@@ -345,7 +475,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     });
 
     let outcome = ui.run();
-    state.borrow_mut().session = None;
+    {
+        let mut state = state.borrow_mut();
+        state.session = None;
+        state.call = None;
+    }
     runtime.block_on(node.shutdown());
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     tracing::info!("exiting");
@@ -398,27 +532,32 @@ fn describe(event: &Event) -> String {
     }
 }
 
-/// Runs on the tokio runtime; hands each node event to the UI thread.
-async fn forward_node_events(mut events: mpsc::Receiver<Event>, ui: slint::Weak<App>) {
+/// Runs on the UI thread (tokio channels work on any executor); applies node events to the UI
+/// and starts or stops call video.
+async fn handle_node_events(
+    mut events: mpsc::Receiver<Event>,
+    ui: slint::Weak<App>,
+    state: Rc<RefCell<State>>,
+    platform: Rc<Platform>,
+) {
     while let Some(event) = events.recv().await {
         tracing::info!(?event, "node event");
-        let my_id = match &event {
-            Event::Ready { id } => Some(id.to_string()),
-            _ => None,
-        };
-        let (status, state) = (describe(&event), call_state(&event));
-        let update = ui.upgrade_in_event_loop(move |ui| {
-            if let Some(id) = my_id {
-                ui.set_my_id(id.into());
+        let Some(ui) = ui.upgrade() else { break };
+        let status = describe(&event);
+        append_log(&ui, &status);
+        ui.set_call_status(status.into());
+        if let Some(call_state) = call_state(&event) {
+            ui.set_call_state(call_state);
+        }
+        match event {
+            Event::Ready { id } => ui.set_my_id(id.to_string().into()),
+            Event::Connected { media, .. } => {
+                with_state(&state, |s| s.start_call(media));
+                // (Re)starts the camera with the encoder as a second output.
+                request_camera(&state, &platform);
             }
-            append_log(&ui, &status);
-            ui.set_call_status(status.into());
-            if let Some(state) = state {
-                ui.set_call_state(state);
-            }
-        });
-        if update.is_err() {
-            break;
+            Event::Ended { .. } => with_state(&state, State::end_call),
+            _ => {}
         }
     }
 }

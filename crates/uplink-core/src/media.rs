@@ -37,6 +37,8 @@ pub struct Frame {
     pub keyframe: bool,
     /// Codec configuration (e.g. H.264 SPS/PPS), sent ahead of the first keyframe.
     pub config: bool,
+    /// Quarter turns the receiver applies to show the picture upright.
+    pub turns: u8,
     pub data: Vec<u8>,
 }
 
@@ -46,6 +48,7 @@ struct FrameHeader {
     capture_micros: u64,
     keyframe: bool,
     config: bool,
+    turns: u8,
 }
 
 /// Media counters for one call; read by telemetry.
@@ -113,8 +116,10 @@ async fn send_frame(connection: &Connection, sequence: u64, frame: Frame) -> Res
         capture_micros: frame.capture_micros,
         keyframe: frame.keyframe,
         config: frame.config,
+        turns: frame.turns,
     };
-    let mut stream = tokio::time::timeout(FRAME_DEADLINE, connection.open_uni()).await.map_err(|_| Error::FrameLate)??;
+    let mut stream =
+        tokio::time::timeout(FRAME_DEADLINE, connection.open_uni()).await.map_err(|_| Error::FrameLate)??;
     stream.set_priority(VIDEO_PRIORITY)?;
     match tokio::time::timeout(FRAME_DEADLINE, write_frame(&mut stream, &header, &frame.data)).await {
         Ok(written) => {
@@ -229,8 +234,13 @@ async fn read_frame(mut stream: RecvStream, arrived: mpsc::Sender<(u64, Frame)>,
         Ok(Ok((header, data))) => {
             MediaStats::count(&stats.frames_received, 1);
             MediaStats::count(&stats.bytes_received, u64::try_from(data.len()).unwrap_or(u64::MAX));
-            let frame =
-                Frame { capture_micros: header.capture_micros, keyframe: header.keyframe, config: header.config, data };
+            let frame = Frame {
+                capture_micros: header.capture_micros,
+                keyframe: header.keyframe,
+                config: header.config,
+                turns: header.turns,
+                data,
+            };
             if arrived.send((header.sequence, frame)).await.is_err() {
                 tracing::debug!("frame arrived after the call ended");
             }
@@ -322,7 +332,9 @@ impl Sequencer {
 
     fn next_deadline(&self) -> Option<Instant> {
         let gap = self.pending.values().next().map(|(arrived, _)| *arrived + REORDER_WAIT);
-        let retry = self.awaiting_keyframe.then(|| self.last_request.map_or_else(Instant::now, |last| last + KEYFRAME_REQUEST_INTERVAL));
+        let retry = self
+            .awaiting_keyframe
+            .then(|| self.last_request.map_or_else(Instant::now, |last| last + KEYFRAME_REQUEST_INTERVAL));
         match (gap, retry) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -353,7 +365,7 @@ mod tests {
     use super::*;
 
     fn frame(id: u64, keyframe: bool) -> Frame {
-        Frame { capture_micros: id, keyframe, config: false, data: vec![0; 1] }
+        Frame { capture_micros: id, keyframe, config: false, turns: 0, data: vec![0; 1] }
     }
 
     fn delivered(outputs: &[Output]) -> Vec<u64> {

@@ -16,6 +16,14 @@ pub enum Error {
     Handle,
     #[error("request abandoned before the activity answered")]
     RequestAbandoned,
+    #[error("no H.264 codec on this device")]
+    NoCodec,
+    #[error("MediaCodec key constant unavailable")]
+    MissingKey,
+    #[error("codec returned no buffer for index {0}")]
+    NoCodecBuffer(usize),
+    #[error("frame of {0} bytes exceeds the codec buffer")]
+    FrameTooLarge(usize),
     #[error("GL object creation returned 0")]
     GlObject,
     #[error(transparent)]

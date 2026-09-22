@@ -19,6 +19,7 @@ use jni::{Env, EnvUnowned, JavaVM, NativeMethod, Outcome, jni_sig, jni_str};
 use tokio::sync::oneshot;
 
 use crate::Error;
+use crate::codec::Avc;
 
 /// `getHistoricalProcessExitReasons` pid filter: all processes of the package.
 const ALL_PIDS: i32 = 0;
@@ -79,7 +80,11 @@ impl Platform {
             unsafe { env.register_native_methods(&class, &natives())? };
             let inner = Arc::new(Inner {
                 permission_granted: env
-                    .get_static_field(jni_str!("android/content/pm/PackageManager"), jni_str!("PERMISSION_GRANTED"), jni_sig!("I"))?
+                    .get_static_field(
+                        jni_str!("android/content/pm/PackageManager"),
+                        jni_str!("PERMISSION_GRANTED"),
+                        jni_sig!("I"),
+                    )?
                     .i()?,
                 next_request_code: AtomicI32::new(0),
                 pending: Mutex::default(),
@@ -109,7 +114,12 @@ impl Platform {
         self.with_activity(|env, activity| {
             let name = permission_string(env, permission)?;
             let state = env
-                .call_method(activity, jni_str!("checkSelfPermission"), jni_sig!("(Ljava/lang/String;)I"), &[JValue::Object(&name)])?
+                .call_method(
+                    activity,
+                    jni_str!("checkSelfPermission"),
+                    jni_sig!("(Ljava/lang/String;)I"),
+                    &[JValue::Object(&name)],
+                )?
                 .i()?;
             Ok(state == granted)
         })
@@ -142,6 +152,27 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
+    /// H.264 codec constants from the SDK (the NDK headers don't carry them).
+    pub fn avc(&self) -> Result<Avc, Error> {
+        self.with_activity(|env, _| {
+            let mime = env
+                .get_static_field(
+                    jni_str!("android/media/MediaFormat"),
+                    jni_str!("MIMETYPE_VIDEO_AVC"),
+                    jni_sig!("Ljava/lang/String;"),
+                )?
+                .l()?;
+            let surface_color_format = env
+                .get_static_field(
+                    jni_str!("android/media/MediaCodecInfo$CodecCapabilities"),
+                    jni_str!("COLOR_FormatSurface"),
+                    jni_sig!("I"),
+                )?
+                .i()?;
+            Ok(Avc { mime: java_string(env, mime)?, surface_color_format })
+        })
+    }
+
     /// Recent `ApplicationExitInfo` records, with printable excerpts of crash/ANR traces
     /// (native crashes carry a tombstone protobuf).
     pub fn previous_exits(&self) -> Result<String, Error> {
@@ -152,7 +183,11 @@ impl Platform {
                 exit_reason(env, jni_str!("REASON_ANR"))?,
             ];
             let service = env
-                .get_static_field(jni_str!("android/content/Context"), jni_str!("ACTIVITY_SERVICE"), jni_sig!("Ljava/lang/String;"))?
+                .get_static_field(
+                    jni_str!("android/content/Context"),
+                    jni_str!("ACTIVITY_SERVICE"),
+                    jni_sig!("Ljava/lang/String;"),
+                )?
                 .l()?;
             let am = env
                 .call_method(
@@ -162,7 +197,8 @@ impl Platform {
                     &[JValue::Object(&service)],
                 )?
                 .l()?;
-            let package = env.call_method(activity, jni_str!("getPackageName"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+            let package =
+                env.call_method(activity, jni_str!("getPackageName"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
             let list = env
                 .call_method(
                     &am,
@@ -174,7 +210,9 @@ impl Platform {
             let count = env.call_method(&list, jni_str!("size"), jni_sig!("()I"), &[])?.i()?;
             let mut out = String::new();
             for i in 0..count {
-                let info = env.call_method(&list, jni_str!("get"), jni_sig!("(I)Ljava/lang/Object;"), &[JValue::Int(i)])?.l()?;
+                let info = env
+                    .call_method(&list, jni_str!("get"), jni_sig!("(I)Ljava/lang/Object;"), &[JValue::Int(i)])?
+                    .l()?;
                 let text = env.call_method(&info, jni_str!("toString"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
                 out += &java_string(env, text)?;
                 out.push('\n');
@@ -229,7 +267,9 @@ extern "system" fn native_permissions_result<'local>(
     results: JIntArray<'local>,
 ) {
     // SAFETY: Java only calls this with the live handle it received from `attach`.
-    let Some(inner) = (unsafe { inner_from(handle) }) else { return };
+    let Some(inner) = (unsafe { inner_from(handle) }) else {
+        return;
+    };
     let outcome = env.with_env(|env| -> Result<bool, Error> {
         let mut grants = vec![0; results.len(env)?];
         results.get_region(env, 0, &mut grants)?;
@@ -250,7 +290,9 @@ extern "system" fn native_permissions_result<'local>(
 }
 
 extern "system" fn native_detach<'local>(_env: EnvUnowned<'local>, _class: JClass<'local>, handle: jlong) {
-    let Some(address) = address_from_handle(handle) else { return };
+    let Some(address) = address_from_handle(handle) else {
+        return;
+    };
     // SAFETY: Java calls this exactly once with the handle from `attach` and clears its copy first.
     drop(unsafe { Arc::from_raw(std::ptr::with_exposed_provenance::<Inner>(address)) });
     tracing::debug!("platform bridge detached");
@@ -258,7 +300,11 @@ extern "system" fn native_detach<'local>(_env: EnvUnowned<'local>, _class: JClas
 
 fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> Result<JObject<'local>, Error> {
     Ok(env
-        .get_static_field(jni_str!("android/Manifest$permission"), permission.manifest_field(), jni_sig!("Ljava/lang/String;"))?
+        .get_static_field(
+            jni_str!("android/Manifest$permission"),
+            permission.manifest_field(),
+            jni_sig!("Ljava/lang/String;"),
+        )?
         .l()?)
 }
 
@@ -267,7 +313,8 @@ fn exit_reason(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {
 }
 
 fn trace_excerpt(env: &mut Env, info: &JObject) -> Result<String, Error> {
-    let stream = env.call_method(info, jni_str!("getTraceInputStream"), jni_sig!("()Ljava/io/InputStream;"), &[])?.l()?;
+    let stream =
+        env.call_method(info, jni_str!("getTraceInputStream"), jni_sig!("()Ljava/io/InputStream;"), &[])?.l()?;
     if stream.is_null() {
         return Ok(String::new());
     }

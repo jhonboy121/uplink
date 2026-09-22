@@ -5,6 +5,7 @@ slint::slint! {
 
     export component App inherits Window {
         in property <image> frame;
+        in property <image> remote-frame;
         in property <string> stats;
         in property <string> log;
         in-out property <bool> log-open;
@@ -31,10 +32,24 @@ slint::slint! {
                 Text { text: root.stats; color: #9f9; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
                 Button { text: "Log"; clicked => { root.log-open = true; } }
             }
-            Image {
-                source: root.frame;
-                image-fit: contain;
+            // In a call the peer fills the view, with our camera as a small self-view.
+            Rectangle {
                 vertical-stretch: 1;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.call-state == CallState.connected ? root.remote-frame : root.frame;
+                    image-fit: contain;
+                }
+                if root.call-state == CallState.connected: Image {
+                    property <length> margin: 8px;
+                    width: parent.width * 30%;
+                    height: parent.height * 30%;
+                    x: parent.width - self.width - self.margin;
+                    y: self.margin;
+                    source: root.frame;
+                    image-fit: contain;
+                }
             }
             HorizontalBox {
                 Button { text: "Start"; clicked => { root.start(); } }
@@ -44,7 +59,18 @@ slint::slint! {
                 Button { text: "Mir"; clicked => { root.mirror(); } }
             }
             Text { text: "my key"; color: #aaa; font-size: 10px; }
-            LineEdit { text: root.my-id; read-only: true; font-size: 11px; }
+            HorizontalBox {
+                padding: 0;
+                my-key := LineEdit { text: root.my-id; read-only: true; font-size: 11px; }
+                Button {
+                    text: "Copy";
+                    enabled: root.my-id != "";
+                    clicked => {
+                        my-key.select-all();
+                        my-key.copy();
+                    }
+                }
+            }
             LineEdit {
                 placeholder-text: "peer key";
                 text <=> root.peer-key;

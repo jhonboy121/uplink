@@ -180,7 +180,7 @@ mod media {
 
     fn frame(id: u64, keyframe: bool) -> Frame {
         let fill = u8::try_from(id % u64::from(u8::MAX)).unwrap_or_default();
-        Frame { capture_micros: id, keyframe, config: false, data: vec![fill; FRAME_BYTES] }
+        Frame { capture_micros: id, keyframe, config: false, turns: 1, data: vec![fill; FRAME_BYTES] }
     }
 
     async fn connected() -> Result<(Peer, Peer, MediaSession, MediaSession)> {

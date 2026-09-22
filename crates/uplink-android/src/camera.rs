@@ -1,4 +1,4 @@
-//! Camera2 NDK preview session streaming into an `ANativeWindow`.
+//! Camera2 NDK capture session streaming into one or more `ANativeWindow`s.
 
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::ptr::null_mut;
@@ -63,19 +63,15 @@ unsafe extern "C" fn on_error(ctx: *mut c_void, _: *mut ffi::ACameraDevice, erro
 }
 
 fn check(call: &'static str, status: ffi::camera_status_t) -> Result<(), Error> {
-    if status == ffi::camera_status_t::ACAMERA_OK {
-        Ok(())
-    } else {
-        Err(Error::Camera { call, status: status.0 })
-    }
+    if status == ffi::camera_status_t::ACAMERA_OK { Ok(()) } else { Err(Error::Camera { call, status: status.0 }) }
 }
 
 pub struct Camera {
     mgr: *mut ffi::ACameraManager,
     device: *mut ffi::ACameraDevice,
     outputs: *mut ffi::ACaptureSessionOutputContainer,
-    output: *mut ffi::ACaptureSessionOutput,
-    target: *mut ffi::ACameraOutputTarget,
+    session_outputs: Vec<*mut ffi::ACaptureSessionOutput>,
+    targets: Vec<*mut ffi::ACameraOutputTarget>,
     request: *mut ffi::ACaptureRequest,
     session: *mut ffi::ACameraCaptureSession,
     // Referenced by the device/session until they are closed in `Drop`.
@@ -88,8 +84,8 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// Opens the first camera facing `facing` and repeats a preview request into `window`.
-    pub fn open(facing: Facing, window: &NativeWindow, fps: i32) -> Result<Self, Error> {
+    /// Opens the first camera facing `facing` and repeats a capture request into every window.
+    pub fn open(facing: Facing, windows: &[&NativeWindow], fps: i32) -> Result<Self, Error> {
         let error = Arc::<DeviceError>::default();
         let ctx = Arc::as_ptr(&error).cast_mut().cast::<c_void>();
         // SAFETY: plain C constructor.
@@ -98,8 +94,8 @@ impl Camera {
             mgr,
             device: null_mut(),
             outputs: null_mut(),
-            output: null_mut(),
-            target: null_mut(),
+            session_outputs: Vec::with_capacity(windows.len()),
+            targets: Vec::with_capacity(windows.len()),
             request: null_mut(),
             session: null_mut(),
             device_callbacks: Box::new(ffi::ACameraDevice_StateCallbacks {
@@ -122,7 +118,6 @@ impl Camera {
         let (id, orientation) = find(mgr, facing)?;
         cam.id = id.to_string_lossy().into_owned();
         cam.sensor_orientation = orientation;
-        let anw = window.ptr().as_ptr();
         let range = [fps; FPS_RANGE_LEN];
         // SAFETY: every out-pointer is a field of `cam`; `Drop` releases whatever was created
         // if a later step fails.
@@ -131,12 +126,30 @@ impl Camera {
                 "openCamera",
                 ffi::ACameraManager_openCamera(mgr, id.as_ptr(), &raw mut *cam.device_callbacks, &raw mut cam.device),
             )?;
-            check("ACaptureSessionOutputContainer_create", ffi::ACaptureSessionOutputContainer_create(&raw mut cam.outputs))?;
-            check("ACaptureSessionOutput_create", ffi::ACaptureSessionOutput_create(anw, &raw mut cam.output))?;
-            check("ACaptureSessionOutputContainer_add", ffi::ACaptureSessionOutputContainer_add(cam.outputs, cam.output))?;
+            check(
+                "ACaptureSessionOutputContainer_create",
+                ffi::ACaptureSessionOutputContainer_create(&raw mut cam.outputs),
+            )?;
+            for window in windows {
+                let mut output = null_mut();
+                check(
+                    "ACaptureSessionOutput_create",
+                    ffi::ACaptureSessionOutput_create(window.ptr().as_ptr(), &raw mut output),
+                )?;
+                cam.session_outputs.push(output);
+                check(
+                    "ACaptureSessionOutputContainer_add",
+                    ffi::ACaptureSessionOutputContainer_add(cam.outputs, output),
+                )?;
+            }
             check(
                 "createCaptureSession",
-                ffi::ACameraDevice_createCaptureSession(cam.device, cam.outputs, &raw const *cam.session_callbacks, &raw mut cam.session),
+                ffi::ACameraDevice_createCaptureSession(
+                    cam.device,
+                    cam.outputs,
+                    &raw const *cam.session_callbacks,
+                    &raw mut cam.session,
+                ),
             )?;
             check(
                 "createCaptureRequest",
@@ -146,8 +159,15 @@ impl Camera {
                     &raw mut cam.request,
                 ),
             )?;
-            check("ACameraOutputTarget_create", ffi::ACameraOutputTarget_create(anw, &raw mut cam.target))?;
-            check("ACaptureRequest_addTarget", ffi::ACaptureRequest_addTarget(cam.request, cam.target))?;
+            for window in windows {
+                let mut target = null_mut();
+                check(
+                    "ACameraOutputTarget_create",
+                    ffi::ACameraOutputTarget_create(window.ptr().as_ptr(), &raw mut target),
+                )?;
+                cam.targets.push(target);
+                check("ACaptureRequest_addTarget", ffi::ACaptureRequest_addTarget(cam.request, target))?;
+            }
             check(
                 "AE_TARGET_FPS_RANGE",
                 ffi::ACaptureRequest_setEntry_i32(
@@ -159,7 +179,13 @@ impl Camera {
             )?;
             check(
                 "setRepeatingRequest",
-                ffi::ACameraCaptureSession_setRepeatingRequest(cam.session, null_mut(), SINGLE_REQUEST, &raw mut cam.request, null_mut()),
+                ffi::ACameraCaptureSession_setRepeatingRequest(
+                    cam.session,
+                    null_mut(),
+                    SINGLE_REQUEST,
+                    &raw mut cam.request,
+                    null_mut(),
+                ),
             )?;
         }
         Ok(cam)
@@ -192,7 +218,8 @@ fn find(mgr: *mut ffi::ACameraManager, facing: Facing) -> Result<(CString, i32),
     // SAFETY: `mgr` is valid; `list` is freed below.
     check("getCameraIdList", unsafe { ffi::ACameraManager_getCameraIdList(mgr, &raw mut list) })?;
     // SAFETY: the list stays valid until deleteCameraIdList.
-    let ids = unsafe { std::slice::from_raw_parts((*list).cameraIds, usize::try_from((*list).numCameras).unwrap_or(0)) };
+    let ids =
+        unsafe { std::slice::from_raw_parts((*list).cameraIds, usize::try_from((*list).numCameras).unwrap_or(0)) };
     let found = ids.iter().find_map(|&id| {
         // SAFETY: ids are valid C strings owned by `list`.
         let (lens, orientation) = unsafe { characteristics(mgr, id) }?;
@@ -238,8 +265,8 @@ impl Drop for Camera {
             if !self.request.is_null() {
                 ffi::ACaptureRequest_free(self.request);
             }
-            if !self.target.is_null() {
-                ffi::ACameraOutputTarget_free(self.target);
+            for &target in &self.targets {
+                ffi::ACameraOutputTarget_free(target);
             }
             if !self.device.is_null() {
                 ffi::ACameraDevice_close(self.device);
@@ -247,8 +274,8 @@ impl Drop for Camera {
             if !self.outputs.is_null() {
                 ffi::ACaptureSessionOutputContainer_free(self.outputs);
             }
-            if !self.output.is_null() {
-                ffi::ACaptureSessionOutput_free(self.output);
+            for &output in &self.session_outputs {
+                ffi::ACaptureSessionOutput_free(output);
             }
             ffi::ACameraManager_delete(self.mgr);
         }
