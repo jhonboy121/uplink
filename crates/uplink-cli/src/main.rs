@@ -93,23 +93,18 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
     match cli {
         Cli::Id => println!("{}", identity::load_or_create(dir).await?.public()),
         Cli::Contacts => {
-            for contact in Contacts::load(dir).await?.iter() {
-                println!("{}\t{}", contact.name, contact.id);
+            for contact in Contacts::open(dir)?.iter() {
+                let mark = if contact.favourite { "*" } else { " " };
+                println!("{mark}\t{}\t{}", contact.name, contact.id);
             }
         }
-        Cli::Add { name, key } => {
-            let mut contacts = Contacts::load(dir).await?;
-            contacts.add(&name, key)?;
-            contacts.save().await?;
-        }
+        Cli::Add { name, key } => Contacts::open(dir)?.add(&name, key)?,
         Cli::Remove { name } => {
-            let mut contacts = Contacts::load(dir).await?;
-            contacts.remove(&name)?;
-            contacts.save().await?;
+            Contacts::open(dir)?.remove(&name)?;
         }
         Cli::Listen { media } => session(dir, None, media).await?,
         Cli::Call { target, media } => {
-            let peer = Contacts::load(dir).await?.resolve(&target)?;
+            let peer = Contacts::open(dir)?.resolve(&target)?;
             session(dir, Some(peer), media).await?;
         }
     }
@@ -123,7 +118,7 @@ async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) ->
         // Fail early on a bad clip; each call reopens it to start from the beginning.
         clip::Clip::open(path)?;
     }
-    let contacts = Contacts::load(dir).await?;
+    let contacts = Contacts::open(dir)?;
     let (node, mut events) = Node::start(identity::load_or_create(dir).await?, Network::N0).await?;
     if let Some(peer) = call {
         node.send(Command::Call(peer)).await?;

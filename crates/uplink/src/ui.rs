@@ -28,7 +28,20 @@ slint::slint! {
     // the whole window when there is one.
     // People is who you can call, Connect is how anyone becomes one of them, Settings is the rest.
     // Your own identity is not a contact, so it lives in Connect rather than in People.
-    export enum Screen { people, connect, settings }
+    export enum Screen { people, calls, connect, settings }
+
+    export struct CallItem {
+        name: string,
+        id: string,
+        // "Missed · 20 minutes ago", and the mark that says which way it went.
+        detail: string,
+        initial: string,
+        tint: int,
+        missed: bool,
+        incoming: bool,
+        // Set when this row is the first of a day, so the list can date its groups.
+        header: string,
+    }
     export enum CallState { idle, dialing, ringing, incoming, connected }
 
     // A call cannot happen without all three, so the gate is not dismissable. `blocked` is the
@@ -45,9 +58,13 @@ slint::slint! {
     export struct ContactItem {
         name: string,
         id: string,
-        fingerprint: string,
+        // When they were last called, and the heading of the group this row opens — set only on
+        // the first row of each, so the markup never looks at the row before this one.
+        detail: string,
+        header: string,
         initial: string,
         tint: int,
+        favourite: bool,
     }
 
     export enum Appearance { system, light, dark }
@@ -121,6 +138,7 @@ slint::slint! {
         out property <length> splash-mark: 105px;
         out property <length> splash-gap: 20px;
         out property <length> splash-foot: 32px;
+        out property <length> group-head: 30px;
         // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text
         // gets the taller box explicitly and centres in it.
         out property <float> line-box: 1.6;
@@ -386,6 +404,7 @@ slint::slint! {
             spacing: 4px;
             for tab in [
                 { label: "People", screen: Screen.people },
+                { label: "Calls", screen: Screen.calls },
                 { label: "Connect", screen: Screen.connect },
                 { label: "Settings", screen: Screen.settings },
             ] : Rectangle {
@@ -565,7 +584,21 @@ slint::slint! {
                     // A flat list: rows are divided by a hairline, never boxed. The hairline is
                     // part of the stack, as the design's border-top is, so the pitch includes it.
                     for contact[index] in root.contacts : VerticalLayout {
-                        if index > 0 : Rectangle {
+                        if contact.header != "" : HorizontalLayout {
+                            padding-left: Theme.edge;
+                            padding-right: Theme.edge;
+                            Text {
+                                text: contact.header;
+                                color: Theme.muted;
+                                font-family: Theme.mono;
+                                font-size: 0.6875rem;
+                                letter-spacing: 1.6px;
+                                height: Theme.group-head;
+                                vertical-alignment: bottom;
+                            }
+                        }
+                        // A hairline divides rows within a group; a heading already divides groups.
+                        if index > 0 && contact.header == "" : Rectangle {
                             height: 1px;
                             background: Theme.hairline;
                         }
@@ -598,12 +631,11 @@ slint::slint! {
                                         overflow: elide;
                                     }
                                     Text {
-                                        text: contact.fingerprint;
+                                        text: contact.detail;
                                         color: Theme.muted;
-                                        // 12.34dp, not 12: the design's sizes are fractional, and
-                                        // rounding one costs five over a run this long.
-                                        font-size: 0.771rem;
-                                        font-family: Theme.mono;
+                                        // When they were last called is prose, not a code, so it
+                                        // takes the body face rather than the monospace one.
+                                        font-size: 0.8125rem;
                                         height: self.font-size * Theme.line-box;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -622,6 +654,132 @@ slint::slint! {
                 }
             }
 
+        }
+    }
+
+    // What happened, and with whom. A missed call is the only thing here worth a colour.
+    component CallsPage inherits Rectangle {
+        in property <[CallItem]> calls;
+        in property <length> top-inset;
+        callback call(string);
+        callback clear();
+        background: Theme.ground;
+
+        VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 0;
+                padding-top: root.top-inset + Theme.bar-top;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                padding-bottom: Theme.bar-bottom;
+                spacing: Theme.gap;
+                PageTitle {
+                    text: "Calls";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                if root.calls.length > 0 : VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Clear";
+                        clicked => { root.clear(); }
+                    }
+                }
+            }
+
+            if root.calls.length == 0 : Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Theme.gap;
+                    padding-left: Theme.edge;
+                    padding-right: Theme.edge;
+                    Text {
+                        text: "No calls yet";
+                        color: Theme.text;
+                        font-size: 1.0625rem;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "Calls you make and calls you miss both end up here.";
+                        color: Theme.muted;
+                        font-size: 0.875rem;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            if root.calls.length > 0 : ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    for entry[index] in root.calls : VerticalLayout {
+                        if entry.header != "" : HorizontalLayout {
+                            padding-left: Theme.edge;
+                            padding-right: Theme.edge;
+                            Text {
+                                text: entry.header;
+                                color: Theme.muted;
+                                font-family: Theme.mono;
+                                font-size: 0.6875rem;
+                                letter-spacing: 1.6px;
+                                height: Theme.group-head;
+                                vertical-alignment: bottom;
+                            }
+                        }
+                        if index > 0 && entry.header == "" : Rectangle {
+                            height: 1px;
+                            background: Theme.hairline;
+                        }
+                        Rectangle {
+                            height: Theme.row-height;
+                            HorizontalLayout {
+                                padding-left: Theme.edge;
+                                padding-right: Theme.edge;
+                                spacing: Theme.row-gap;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Avatar {
+                                        initial: entry.initial;
+                                        tint: entry.tint;
+                                        size: Theme.avatar;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: entry.name;
+                                        color: entry.missed ? Theme.end : Theme.text;
+                                        font-family: Theme.display;
+                                        font-size: 1.0625rem;
+                                        font-weight: 600;
+                                        height: self.font-size * Theme.line-box;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: (entry.incoming ? "↓ " : "↑ ") + entry.detail;
+                                        color: Theme.muted;
+                                        font-size: 0.8125rem;
+                                        height: self.font-size * Theme.line-box;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Pill {
+                                        text: "Call";
+                                        clicked => { root.call(entry.id); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1016,6 +1174,7 @@ slint::slint! {
         in property <string> call-timer;
         in property <string> key-exchange;
         in property <[ContactItem]> contacts;
+        in property <[CallItem]> calls;
         in property <string> quality: "720p · 30";
 
         in property <bool> booting: true;
@@ -1050,6 +1209,7 @@ slint::slint! {
         callback scan(bool);
         callback grant-permissions();
         callback open-settings();
+        callback clear-calls();
 
         title: "uplink";
         background: Theme.ground;
@@ -1074,6 +1234,12 @@ slint::slint! {
                     call(id) => { root.call(id); }
                     remove(id) => { root.remove-contact(id); }
                     connect => { root.screen = Screen.connect; }
+                }
+                if root.screen == Screen.calls : CallsPage {
+                    top-inset: root.safe-area-insets.top;
+                    calls: root.calls;
+                    call(id) => { root.call(id); }
+                    clear => { root.clear-calls(); }
                 }
                 if root.screen == Screen.connect : KeyPage {
                     top-inset: root.safe-area-insets.top;

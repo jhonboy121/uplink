@@ -17,7 +17,7 @@ mod dump;
 #[path = "../../../crates/uplink/src/ui.rs"]
 mod ui;
 
-use ui::{App, Appearance, CallState, ContactItem, Grant, PermissionItem, Screen, Theme};
+use ui::{App, Appearance, CallItem, CallState, ContactItem, Grant, PermissionItem, Screen, Theme};
 
 /// Logical pixels.
 /// The S24 Ultra is 1440x3120 at 3x. `UPLINK_PREVIEW_SIZE=360x799` renders at the design's own
@@ -88,7 +88,12 @@ fn main() -> Result<()> {
 
     // Idle screens.
     app.set_call_state(CallState::Idle);
-    for (screen, name) in [(Screen::People, "people"), (Screen::Connect, "connect"), (Screen::Settings, "settings")] {
+    for (screen, name) in [
+        (Screen::People, "people"),
+        (Screen::Calls, "calls"),
+        (Screen::Connect, "connect"),
+        (Screen::Settings, "settings"),
+    ] {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
@@ -152,17 +157,45 @@ fn populate(app: &App) -> Result<()> {
         ("Ammar", "7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641"),
         ("Laptop in the other room", "e90241d7ba3816fe0e62c81291e383bbc63b305338200d8562904d24a46cd641"),
     ];
+    // One favourite, one called recently, one never — the three states a row can be in.
+    let rows = [("FAVOURITES", "Called 20 minutes ago", true), ("ALL", "Called Tuesday", false), ("", "Never called", false)];
     let contacts: Vec<ContactItem> = keys
         .iter()
-        .map(|(name, key)| ContactItem {
+        .zip(rows)
+        .map(|((name, key), (header, detail, favourite))| ContactItem {
             name: (*name).into(),
             id: (*key).into(),
-            fingerprint: groups(key, ROW_GROUPS, " · ").into(),
+            detail: detail.into(),
+            header: header.into(),
             initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
             tint: 0,
+            favourite,
         })
         .collect();
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(contacts)));
+
+    // One of each ending, so the screen is reviewed against every state it can show.
+    let log = [
+        ("Noor", "Missed · 23:04", "TODAY", true, true),
+        ("Ammar", "4:12 · 22:15", "", false, false),
+        ("Noor", "Cancelled · 19:40", "YESTERDAY", false, false),
+        ("7d19 2bb4", "Declined · 11:02", "", false, true),
+    ];
+    let calls: Vec<CallItem> = log
+        .iter()
+        .zip(keys.iter().cycle())
+        .map(|((name, detail, header, missed, incoming), (_, key))| CallItem {
+            initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+            name: (*name).into(),
+            id: (*key).into(),
+            detail: (*detail).into(),
+            header: (*header).into(),
+            tint: 0,
+            missed: *missed,
+            incoming: *incoming,
+        })
+        .collect();
+    app.set_calls(slint::ModelRc::new(slint::VecModel::from(calls)));
     app.set_my_id(keys[0].1.into());
     app.set_my_fingerprint_lines(fingerprint_lines(keys[0].1));
     app.set_my_short_fingerprint(groups(keys[0].1, SELF_GROUPS, " · ").into());

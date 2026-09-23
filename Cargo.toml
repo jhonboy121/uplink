@@ -23,6 +23,10 @@ clap = { version = "4.6", features = ["derive", "env"] }
 # Read-only XML DOM, no transitive dependencies: android-res compiles real XML to Android's
 # binary form, so the manifest and resources are XML in the repo rather than Rust element trees.
 roxmltree = "0.20"
+# Contacts. `bundled` compiles SQLite's own C through our clang wrapper, like libopus; the
+# alternative pure-Rust rewrite is beta by its maintainers' own account, and contacts are the one
+# thing here a person cannot regenerate.
+rusqlite = { version = "0.37", features = ["bundled"] }
 # Deflate and CRC32 for the APK writer, pure Rust: `zipalign` is x86-64 like aapt2, and API 30+
 # refuses an APK whose resources.arsc is compressed or unaligned.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
@@ -47,7 +51,6 @@ symphonia = { version = "0.5", default-features = false, features = ["aac"] }
 tempfile = "3"
 tokio = { version = "1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
-toml = "0.9"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
 

@@ -8,10 +8,8 @@ pub enum Error {
     CorruptKey(PathBuf),
     #[error(transparent)]
     KeyParse(#[from] iroh::KeyParsingError),
-    #[error("contacts file: {0}")]
-    ContactsRead(#[from] toml::de::Error),
-    #[error("contacts file: {0}")]
-    ContactsWrite(#[from] toml::ser::Error),
+    #[error("contacts: {0}")]
+    Contacts(#[from] rusqlite::Error),
     #[error("contact `{0}` already exists")]
     DuplicateContact(String),
     #[error("unknown contact `{0}`")]

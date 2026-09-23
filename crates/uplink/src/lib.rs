@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
@@ -31,14 +31,15 @@ use uplink_android::platform::{Permission, Platform};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
+use uplink_core::calls::{CallLog, CallRecord, Outcome};
 use uplink_core::contacts::Contacts;
 use uplink_core::qr;
 use uplink_core::media::MediaSession;
-use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
+use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::audio::CallAudio;
-use crate::ui::{App, CallState, ContactItem, Grant, PermissionItem, Screen};
+use crate::ui::{App, CallItem, CallState, ContactItem, Grant, PermissionItem, Screen};
 use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
@@ -113,6 +114,9 @@ struct State {
     /// One decode at a time; frames that arrive meanwhile are dropped.
     scan_busy: Arc<AtomicBool>,
     contacts: Contacts,
+    log: CallLog,
+    /// The call in flight, so its outcome is known by the time it ends.
+    pending: Option<PendingCall>,
     connected_at: Option<Instant>,
     stats: Arc<FrameStats>,
     /// Both are absent until the endpoint finishes binding, which happens on the runtime while
@@ -346,11 +350,6 @@ fn fingerprint_lines(id: &EndpointId) -> slint::ModelRc<slint::SharedString> {
     slint::ModelRc::new(slint::VecModel::from(lines))
 }
 
-/// The same key abbreviated for a list row, where only enough to tell two contacts apart fits.
-fn short_fingerprint(id: &EndpointId) -> String {
-    groups(id, FINGERPRINT_ROW_GROUPS, " · ")
-}
-
 fn groups(id: &EndpointId, count: usize, separator: &str) -> String {
     id.to_string()
         .chars()
@@ -379,14 +378,26 @@ fn qr_image(id: &EndpointId) -> Result<slint::Image> {
 /// Contacts for the list, in the order they were added.
 fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     let items = with_contacts(state, |contacts| {
+        // The store already orders favourites first, so a group starts wherever the flag changes.
+        let mut previous: Option<bool> = None;
         contacts
             .iter()
-            .map(|contact| ContactItem {
-                name: contact.name.clone().into(),
-                id: contact.id.to_string().into(),
-                fingerprint: short_fingerprint(&contact.id).into(),
-                initial: contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
-                tint: 0,
+            .map(|contact| {
+                let header = match previous {
+                    Some(was) if was == contact.favourite => "",
+                    _ if contact.favourite => "FAVOURITES",
+                    _ => "ALL",
+                };
+                previous = Some(contact.favourite);
+                ContactItem {
+                    name: contact.name.clone().into(),
+                    id: contact.id.to_string().into(),
+                    detail: last_called(contact.last_called).into(),
+                    header: header.into(),
+                    initial: contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+                    tint: 0,
+                    favourite: contact.favourite,
+                }
             })
             .collect::<Vec<_>>()
     });
@@ -395,19 +406,154 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     }
 }
 
+/// How many the Calls screen shows; the store keeps more than a screen can use.
+const CALLS_SHOWN: i64 = 100;
+
+/// Fills the Calls screen, newest first, grouped by day.
+fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
+    let items = with_state_value(state, |s| {
+        let records = match s.log.recent(CALLS_SHOWN) {
+            Ok(records) => records,
+            Err(e) => {
+                tracing::warn!("reading the call log: {e}");
+                return Vec::new();
+            }
+        };
+        let mut previous = String::new();
+        records
+            .iter()
+            .map(|record| {
+                let day = day_of(record.at);
+                let header = if day == previous { String::new() } else { day.clone() };
+                previous = day;
+                // A name we chose, else what they called themselves, else the key itself.
+                let name = s
+                    .contacts
+                    .get(&record.peer)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| short(&record.peer));
+                CallItem {
+                    initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+                    name: name.into(),
+                    id: record.peer.to_string().into(),
+                    detail: describe_call(record).into(),
+                    tint: 0,
+                    missed: record.outcome == Outcome::Missed,
+                    incoming: record.incoming,
+                    header: header.into(),
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    if let Some(items) = items {
+        ui.set_calls(slint::ModelRc::new(slint::VecModel::from(items)));
+    }
+}
+
+/// "Missed · 20 minutes ago", or "4:12 · Tuesday" for one that was answered.
+fn describe_call(record: &CallRecord) -> String {
+    let what = match record.outcome {
+        Outcome::Answered => match record.duration {
+            Some(d) => format!("{}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
+            None => "Answered".to_owned(),
+        },
+        Outcome::Missed => "Missed".to_owned(),
+        Outcome::Declined => "Declined".to_owned(),
+        Outcome::Rejected => "They declined".to_owned(),
+        Outcome::Cancelled => "Cancelled".to_owned(),
+        Outcome::Failed => "Did not connect".to_owned(),
+    };
+    format!("{what} · {}", clock_of(record.at))
+}
+
+/// The day a call happened, as the heading above its group.
+fn day_of(at: SystemTime) -> String {
+    let Ok(ago) = SystemTime::now().duration_since(at) else {
+        return "TODAY".to_owned();
+    };
+    match ago.as_secs() / 60 / 60 / 24 {
+        0 => "TODAY".to_owned(),
+        1 => "YESTERDAY".to_owned(),
+        days if days < 7 => format!("{days} DAYS AGO"),
+        days => format!("{} WEEKS AGO", days / 7),
+    }
+}
+
+/// Time of day is what a log row wants; the group heading already carries the date.
+fn clock_of(at: SystemTime) -> String {
+    let Ok(since_epoch) = at.duration_since(UNIX_EPOCH) else {
+        return "just now".to_owned();
+    };
+    let minutes_today = (since_epoch.as_secs() / 60) % (24 * 60);
+    format!("{:02}:{:02}", minutes_today / 60, minutes_today % 60)
+}
+
+/// A call from the moment it starts until it ends, which is when the log can say what it was.
+struct PendingCall {
+    peer: EndpointId,
+    incoming: bool,
+    at: SystemTime,
+    answered: bool,
+}
+
+/// What an ending means, given which way the call went and whether it was ever picked up.
+const fn outcome_of(reason: &EndReason, call: &PendingCall) -> Outcome {
+    match reason {
+        EndReason::Busy | EndReason::Failed(_) => Outcome::Failed,
+        EndReason::Declined => Outcome::Declined,
+        EndReason::Rejected => Outcome::Rejected,
+        EndReason::LocalHangup | EndReason::RemoteHangup => {
+            if call.answered {
+                Outcome::Answered
+            } else if call.incoming {
+                // They rang off, or we never picked up: either way nobody spoke.
+                Outcome::Missed
+            } else {
+                Outcome::Cancelled
+            }
+        }
+    }
+}
+
+/// Coarse on purpose: the second line of a contact row answers "recently?", not "when exactly?".
+fn last_called(at: Option<SystemTime>) -> String {
+    let Some(at) = at else {
+        return "Never called".to_owned();
+    };
+    let Ok(ago) = SystemTime::now().duration_since(at) else {
+        return "Called just now".to_owned();
+    };
+    let minutes = ago.as_secs() / 60;
+    let (hours, days) = (minutes / 60, minutes / 60 / 24);
+    if minutes < 1 {
+        "Called just now".to_owned()
+    } else if minutes < 60 {
+        format!("Called {minutes} minute{} ago", plural(minutes))
+    } else if hours < 24 {
+        format!("Called {hours} hour{} ago", plural(hours))
+    } else if days < 7 {
+        format!("Called {days} day{} ago", plural(days))
+    } else {
+        let weeks = days / 7;
+        format!("Called {weeks} week{} ago", plural(weeks))
+    }
+}
+
+const fn plural(n: u64) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 fn with_contacts<T>(state: &Rc<RefCell<State>>, f: impl FnOnce(&Contacts) -> T) -> Option<T> {
     state.try_borrow().ok().map(|s| f(&s.contacts))
 }
 
-/// Applies a change and writes contacts.toml; the error is what the UI shows.
+/// Applies a change, which the store writes as it goes; the error is what the UI shows.
 fn save_contact(
     state: &Rc<RefCell<State>>,
     change: impl FnOnce(&mut Contacts) -> Result<(), uplink_core::Error>,
 ) -> Result<(), String> {
     let mut state = state.try_borrow_mut().map_err(|_| "busy, try again".to_owned())?;
-    change(&mut state.contacts).map_err(|e| e.to_string())?;
-    let runtime = state.runtime.clone();
-    runtime.block_on(state.contacts.save()).map_err(|e| e.to_string())
+    change(&mut state.contacts).map_err(|e| e.to_string())
 }
 
 fn with_state_value<T>(state: &Rc<RefCell<State>>, f: impl FnOnce(&mut State) -> T) -> Option<T> {
@@ -717,7 +863,8 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let runtime = uplink_core::runtime::build(dispatch)?;
     let secret = runtime.block_on(identity::load_or_create(data_dir))?;
     let identity = secret.public();
-    let contacts = runtime.block_on(Contacts::load(data_dir))?;
+    let contacts = Contacts::open(data_dir)?;
+    let log = CallLog::open(data_dir)?;
     // Binding the endpoint reaches the network, so it happens on the runtime while the window is
     // already up and the splash is showing, rather than in front of a blank screen.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -739,6 +886,8 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         scanning: false,
         scan_busy: Arc::default(),
         contacts,
+        log,
+        pending: None,
         connected_at: None,
         stats: Arc::default(),
         node: None,
@@ -776,6 +925,20 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
     show_contacts(&state, &ui);
+    show_calls(&state, &ui);
+
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_clear_calls(move || {
+        with_state(&s, |state| {
+            if let Err(e) = state.log.clear() {
+                tracing::warn!("clearing the call log: {e}");
+            }
+        });
+        if let Some(ui) = weak.upgrade() {
+            show_calls(&s, &ui);
+        }
+    });
+
     // Anything missing on a launch that has already seen the explainer goes straight to Android's
     // dialog: a lapsed one-time grant should not mean reading the same screen again.
     if !refresh_gate(&ui, &platform) && gate_explained(data_dir) {
@@ -1092,6 +1255,51 @@ async fn handle_node_events(
         if let Some(peer) = peer_of(&event) {
             let name = with_contacts(&state, |contacts| contacts.name_of(&peer).map(str::to_owned));
             set_peer(&ui, &name.flatten().unwrap_or_else(|| short(&peer)));
+        }
+        // A call starts here and is only written to the log once it ends, because until then
+        // there is no outcome to write.
+        match &event {
+            Event::Dialing { peer } | Event::Incoming { peer } => {
+                let incoming = matches!(event, Event::Incoming { .. });
+                with_state(&state, |s| {
+                    s.pending = Some(PendingCall { peer: *peer, incoming, at: SystemTime::now(), answered: false });
+                });
+            }
+            Event::Connected { .. } => {
+                with_state(&state, |s| {
+                    if let Some(call) = s.pending.as_mut() {
+                        call.answered = true;
+                    }
+                });
+            }
+            Event::Ended { reason, .. } => {
+                let reason = reason.clone();
+                with_state(&state, |s| {
+                    let Some(call) = s.pending.take() else { return };
+                    let duration = s.connected_at.map(|since| since.elapsed());
+                    let record = CallRecord {
+                        peer: call.peer,
+                        incoming: call.incoming,
+                        outcome: outcome_of(&reason, &call),
+                        at: call.at,
+                        duration: call.answered.then_some(duration).flatten(),
+                    };
+                    if let Err(e) = s.log.record(&record) {
+                        tracing::warn!("recording the call: {e}");
+                    }
+                    // A contact's second line is the same fact, kept beside it so the list does
+                    // not have to query the log per row.
+                    if record.outcome == Outcome::Answered
+                        && s.contacts.contains(&call.peer)
+                        && let Err(e) = s.contacts.called(call.peer)
+                    {
+                        tracing::warn!("stamping the call: {e}");
+                    }
+                });
+                show_calls(&state, &ui);
+                show_contacts(&state, &ui);
+            }
+            _ => {}
         }
         match event {
             Event::Ready { id } => ui.set_my_id(id.to_string().into()),
