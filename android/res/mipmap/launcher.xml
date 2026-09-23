@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon. minSdk 30 means every device masks an adaptive icon, so this is the only
+  form needed — no density variants, no legacy square fallback.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ground" />
+    <foreground android:drawable="@drawable/mark" />
+    <!-- Tinted by the system for themed icons, so it is the mark alone on nothing. -->
+    <monochrome android:drawable="@drawable/mark_mono" />
+</adaptive-icon>

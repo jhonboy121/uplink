@@ -1,0 +1,15 @@
+[package]
+name = "android-res"
+description = "Writes Android's binary resource formats — manifest, XML and resources.arsc — in place of aapt2, which ships x86-64 only"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+flate2.workspace = true
+roxmltree.workspace = true

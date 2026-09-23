@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Compiled to binary XML by `android-res compile`. ${…} comes from the build; everything else is
+  the app's own business and belongs here rather than in a command line.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="${package}"
+    android:versionCode="${versionCode}"
+    android:versionName="${versionName}">
+
+    <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="${targetSdk}" />
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- A call keeps the camera and microphone while the app is in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <application
+        android:label="${label}"
+        android:icon="@mipmap/launcher"
+        android:roundIcon="@mipmap/launcher"
+        android:theme="@style/Theme.Uplink"
+        android:hasCode="true"
+        android:debuggable="${debuggable}"
+        android:hardwareAccelerated="true">
+
+        <!-- configChanges: the native side handles these rather than being restarted.
+             0x1ff0 = keyboard | keyboardHidden | orientation | screenLayout | uiMode |
+                      screenSize | smallestScreenSize | density.
+             windowSoftInputMode 0x10 = adjustResize, so the IME does not cover the field. -->
+        <activity
+            android:name="${activity}"
+            android:exported="true"
+            android:configChanges="0x1ff0"
+            android:launchMode="1"
+            android:windowSoftInputMode="0x10">
+            <meta-data android:name="android.app.lib_name" android:value="${lib}" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- foregroundServiceType 0xc0 = camera | microphone. -->
+        <service
+            android:name="${service}"
+            android:exported="false"
+            android:foregroundServiceType="0xc0" />
+    </application>
+</manifest>

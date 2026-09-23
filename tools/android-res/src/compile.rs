@@ -1,0 +1,147 @@
+//! Turns real XML into Android's binary form: the same job aapt2 does, for the subset this app
+//! needs.
+//!
+//! Two things have to be resolved on the way. `android:` attribute names become framework ids,
+//! looked up in the generated table rather than copied by hand; and `@type/name` values become
+//! resource ids, either ours from the symbol table or the framework's.
+
+use std::collections::HashMap;
+
+use anyhow::{Context, Result, bail};
+
+use crate::chunk::{TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE, TYPE_STRING};
+use crate::framework;
+use crate::xml::{ANDROID_NS, Attr, Element, Value};
+
+/// Our own resources, `type/name` to id, built from the values file before anything referencing
+/// them is compiled.
+pub type Symbols = HashMap<String, u32>;
+
+/// `${name}` in an attribute value, substituted from the command line — the few parts of a
+/// manifest that are a build's business rather than the app's.
+fn substitute(text: &str, defines: &HashMap<String, String>) -> Result<String> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 2..];
+        let Some(end) = tail.find('}') else {
+            bail!("unterminated ${{ in {text}");
+        };
+        let name = &tail[..end];
+        let value = defines.get(name).with_context(|| format!("{text} needs --define {name}=..."))?;
+        out.push_str(value);
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// `@android:style/Theme.Foo`, `@color/ground`, or `@0x7f010000`.
+fn reference(text: &str, symbols: &Symbols) -> Result<u32> {
+    let body = text.trim_start_matches('@');
+    if let Some(hex) = body.strip_prefix("0x") {
+        return Ok(u32::from_str_radix(hex, 16)?);
+    }
+    if let Some(rest) = body.strip_prefix("android:") {
+        let (kind, name) = rest.split_once('/').with_context(|| format!("{text} is not type/name"))?;
+        let table = match kind {
+            "attr" => framework::ATTRS,
+            "style" => framework::STYLES,
+            _ => bail!("{text}: only android attr and style are resolvable here"),
+        };
+        return framework::lookup(table, &name.replace('.', "_"))
+            .with_context(|| format!("{text} is not in the framework table; run `just android-table`"));
+    }
+    symbols.get(body).copied().with_context(|| format!("{text} is not declared in the values file"))
+}
+
+/// Attribute values carry no type in XML, so the text decides: a reference, a boolean, a number,
+/// otherwise a string.
+fn value(text: &str, symbols: &Symbols) -> Result<Value> {
+    if text.starts_with('@') {
+        return Ok(Value::Ref(reference(text, symbols)?));
+    }
+    Ok(match text {
+        "true" => Value::Bool(true),
+        "false" => Value::Bool(false),
+        _ => {
+            if let Some(hex) = text.strip_prefix("0x") {
+                Value::Hex(u32::from_str_radix(hex, 16)?)
+            } else if let Ok(number) = text.parse::<u32>() {
+                Value::Int(number)
+            } else {
+                Value::Str(text.to_owned())
+            }
+        }
+    })
+}
+
+/// Element and attribute names outlive the document they were parsed from, so they are leaked
+/// deliberately: this is a short-lived tool and the alternative is threading a lifetime through
+/// the writer for no gain.
+fn name_of(text: &str) -> &'static str {
+    Box::leak(text.to_owned().into_boxed_str())
+}
+
+pub fn element(node: roxmltree::Node, symbols: &Symbols, defines: &HashMap<String, String>) -> Result<Element> {
+    let mut attrs = Vec::new();
+    for attr in node.attributes() {
+        let text = substitute(attr.value(), defines)?;
+        let res_id = match attr.namespace() {
+            Some(ANDROID_NS) => Some(
+                framework::lookup(framework::ATTRS, attr.name())
+                    .with_context(|| format!("android:{} is not a framework attribute", attr.name()))?,
+            ),
+            Some(other) => bail!("unknown namespace {other} on {}", attr.name()),
+            None => None,
+        };
+        attrs.push(Attr { res_id, name: name_of(attr.name()), value: value(&text, symbols)? });
+    }
+    let children = node
+        .children()
+        .filter(roxmltree::Node::is_element)
+        .map(|child| element(child, symbols, defines))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Element { name: name_of(node.tag_name().name()), attrs, children })
+}
+
+pub fn document(text: &str, symbols: &Symbols, defines: &HashMap<String, String>) -> Result<Element> {
+    let parsed = roxmltree::Document::parse(text)?;
+    element(parsed.root_element(), symbols, defines)
+}
+
+/// A colour literal as `#AARRGGBB` or `#RRGGBB`.
+pub fn color(text: &str) -> Result<u32> {
+    let body = text.trim_start_matches('#');
+    let packed = u32::from_str_radix(body, 16)?;
+    Ok(match body.len() {
+        6 => 0xff00_0000 | packed,
+        8 => packed,
+        _ => bail!("{text} is not #RRGGBB or #AARRGGBB"),
+    })
+}
+
+/// A style's `parent="@android:style/Theme.Foo"`.
+pub fn style_parent(text: &str, symbols: &Symbols) -> Result<u32> {
+    reference(text, symbols).with_context(|| format!("style parent {text}"))
+}
+
+/// One item of a style, as `<item name="android:windowBackground">@color/ground</item>`.
+pub fn style_item(node: roxmltree::Node, symbols: &Symbols) -> Result<(u32, u8, u32)> {
+    // An item names an attribute directly — `android:windowBackground`, not a `type/name` pair.
+    let name = node.attribute("name").context("a style item needs a name")?;
+    let attr = match name.strip_prefix("android:") {
+        Some(bare) => framework::lookup(framework::ATTRS, bare)
+            .with_context(|| format!("android:{bare} is not a framework attribute"))?,
+        None => bail!("{name}: only android: attributes can be set in a style here"),
+    };
+    let text = node.text().unwrap_or_default().trim();
+    Ok(match value(text, symbols)? {
+        Value::Ref(id) => (attr, TYPE_REFERENCE, id),
+        Value::Bool(b) => (attr, TYPE_INT_BOOLEAN, u32::from(b) * u32::MAX),
+        Value::Int(n) => (attr, TYPE_INT_DEC, n),
+        Value::Hex(n) => (attr, TYPE_INT_HEX, n),
+        Value::Str(_) => (attr, TYPE_STRING, 0),
+    })
+}

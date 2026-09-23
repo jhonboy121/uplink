@@ -18,7 +18,6 @@ android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
 call_service := "dev.uplink.UplinkCallService"
 adb_user := "0"
-permissions := "android.permission.CAMERA android.permission.RECORD_AUDIO android.permission.MODIFY_AUDIO_SETTINGS android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE android.permission.FOREGROUND_SERVICE android.permission.FOREGROUND_SERVICE_CAMERA android.permission.FOREGROUND_SERVICE_MICROPHONE android.permission.POST_NOTIFICATIONS"
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
@@ -57,7 +56,7 @@ d8_mode := if profile == "release" { "--release" } else { "--debug" }
 java_src := "crates/uplink-android/java"
 dex_dir := "target" / "dex" / profile
 android_crates := "-p uplink -p uplink-android -p uplink-core"
-host_crates := "-p axml -p ndk-bindgen -p uplink-core -p uplink-cli -p ui-preview"
+host_crates := "-p android-res -p ndk-bindgen -p uplink-core -p uplink-cli -p ui-preview"
 
 [doc("List recipes")]
 default:
@@ -111,21 +110,24 @@ apk: build dex
     #!/bin/sh
     set -eu
     stage=$(mktemp -d)
-    trap 'rm -rf "$stage"' EXIT
+    unsigned="$stage.apk"
+    trap 'rm -rf "$stage" "$unsigned"' EXIT
     mkdir -p "$stage/lib/arm64-v8a" "{{out_dir}}"
     strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
     cp "{{dex_dir}}/classes.dex" "$stage/"
-    cargo run -q -p axml -- out="$stage/AndroidManifest.xml" package={{app_id}} label={{app_label}} \
-        lib={{lib}} activity={{activity}} service={{call_service}} dex=1 min={{min_sdk}} \
-        target={{target_sdk}} version={{version_code}} \
-        debuggable={{debuggable}} $(for p in {{permissions}}; do printf "perm=%s " "$p"; done)
-    (cd "$stage" && jar --create --no-manifest --file unsigned.apk AndroidManifest.xml classes.dex lib)
+    cargo run -q -p android-res -- compile --out "$stage" \
+        --define package={{app_id}} --define label={{app_label}} --define lib={{lib}} \
+        --define activity={{activity}} --define service={{call_service}} \
+        --define minSdk={{min_sdk}} --define targetSdk={{target_sdk}} \
+        --define versionCode={{version_code}} --define versionName=0.{{version_code}} \
+        --define debuggable={{ if debuggable == "1" { "true" } else { "false" } }}
+    cargo run -q -p android-res -- package --dir "$stage" --out "$unsigned"
     if [ ! -f "{{keystore}}" ]; then
         keytool -genkeypair -keystore "{{keystore}}" -storepass "{{keystore_pass}}" -keypass "{{keystore_pass}}" \
             -alias debug -keyalg RSA -validity {{keystore_validity_days}} -dname "CN=uplink debug" >/dev/null
     fi
     java -jar "{{apksigner}}" sign --v4-signing-enabled false --ks "{{keystore}}" --ks-pass "pass:{{keystore_pass}}" \
-        --out "{{apk}}" "$stage/unsigned.apk"
+        --out "{{apk}}" "$unsigned"
     echo "{{apk}} ($(du -h "{{apk}}" | cut -f1))"
     echo "install (Termux): termux-open {{replace(apk, home_directory(), '~/alpine-data')}}"
 
@@ -168,6 +170,14 @@ the debug-info variable is what puts the markup's own element names in that tabl
 ''')]
 preview:
     SLINT_EMIT_DEBUG_INFO=1 nice cargo run -q -p ui-preview
+
+[doc('''
+Regenerate tools/android-res/src/framework.rs — every android: attribute and style id, read out
+of android.jar with javap. Run it when the compile SDK changes; the result is checked in.
+''')]
+android-table:
+    javap -constants -cp "{{android_jar}}" 'android.R$attr' 'android.R$style' \
+        | cargo run -q -p android-res -- gen-table --out tools/android-res/src/framework.rs
 
 [doc('''
 Measure the locked design (docs/design/uplink-call-ui.html) in headless Chromium.

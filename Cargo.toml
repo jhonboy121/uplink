@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tools/axml", "tools/ndk-bindgen", "tools/ui-preview"]
+members = ["crates/*", "tools/android-res", "tools/ndk-bindgen", "tools/ui-preview"]
 # Vendored upstream + generated bindings: built as path deps, not linted as ours.
 exclude = ["vendor", "sys"]
 
@@ -20,6 +20,12 @@ opus-sys = { path = "sys/opus-sys" }
 android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
 bindgen = { version = "=0.72.1", default-features = false, features = ["logging", "prettyplease"] }
 clap = { version = "4.6", features = ["derive", "env"] }
+# Read-only XML DOM, no transitive dependencies: android-res compiles real XML to Android's
+# binary form, so the manifest and resources are XML in the repo rather than Rust element trees.
+roxmltree = "0.20"
+# Deflate and CRC32 for the APK writer, pure Rust: `zipalign` is x86-64 like aapt2, and API 30+
+# refuses an APK whose resources.arsc is compressed or unaligned.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false }
 iroh = { version = "1.2", default-features = false, features = ["tls-aws-lc-rs", "portmapper"] }
 jni = "0.22"

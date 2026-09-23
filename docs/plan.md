@@ -103,8 +103,8 @@ default); keep disk usage lean. Avoid build scripts.
    themed; 7b the shell (three tabs, contacts with favourites and last-called, Connect, Settings), first run (splash,
    permission gate, profile), profile over the wire + `rusqlite` contacts, privacy switches; 7c PiP, lock-screen calls,
    diagnostics report; 7d verification, identity rotation, history.
-8. **Resource table**: our own `resources.arsc` writer beside `axml`, which buys the launcher icon, the monochrome
-   themed icon and the Android 12+ system splash. Blocked on nothing but the work; `aapt2` is x86-64 only.
+8. ~~**Resource table**~~ **done**: `tools/android-res` compiles `android/` into the manifest, `resources.arsc` and the
+   APK itself. Launcher icon and system splash confirmed on the S24. See [docs/ref/android-res.md](ref/android-res.md).
 9. Security to-dos above; then iOS (CI) and web.
 
 ## Revisions
@@ -264,3 +264,14 @@ default); keep disk usage lean. Avoid build scripts.
     for the icon and map entries for the splash theme. minSdk 30 means **adaptive icons are always available**, so
     `mipmap-anydpi-v26` alone is enough and no legacy PNG mipmaps are needed. Until it exists the launcher shows
     Android's placeholder; the in-app splash, the permission gate and the tab shell need none of it.
+- **2026-09-23**: **the resource table is done and the icon is on the phone.** `tools/axml` became
+  `tools/android-res`, which compiles real XML under `android/` — manifest, `values.xml`, an adaptive icon — into
+  binary XML and `resources.arsc`, and writes the APK zip itself. Method notes and the format's two hard rules are in
+  [docs/ref/android-res.md](ref/android-res.md). Three things worth carrying: **`zipalign` is x86-64 like `aapt2`**, and
+  API 30+ refuses an APK whose `resources.arsc` is compressed or unaligned, so the zip is ours (stored + 4-byte aligned
+  via a `0xd935` extra field, everything else deflated); **`apkanalyzer` is Java**, so it verifies output here without a
+  device; and framework ids are **generated** from `android.jar` (`just android-table`) after a hand-copied
+  `Theme.DeviceDefault.DayNight` turned out to be wrong — a wrong id fails silently, which is the worst kind.
+  The system splash needs no `values-v31`: Android 12+ composes it from `android:icon` and the theme's
+  `windowBackground`, so pointing those at the mark and `@color/ground` makes it match the in-app splash, and on API 30
+  the same attribute paints the window before the first frame.
