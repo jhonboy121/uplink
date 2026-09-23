@@ -335,6 +335,20 @@ default); keep disk usage lean. Avoid build scripts.
         later), which differ per OEM *and per OEM version*, may not exist (`ActivityNotFound`) and
         may not be exported (`SecurityException`). So: wrap every one, fall back to our own
         settings page, and **never claim it worked** — the screen can be offered, not confirmed.
+        The button is only shown when `PackageManager.resolveActivity` finds the component, which
+        needs a `<queries>` block naming those vendor packages: from Android 11 an explicit
+        `ComponentName` probe resolves to null when the package is not visible to us, installed
+        or not.
+    - **Surviving a reboot needs a second service, not the call one.** `BOOT_COMPLETED` is on the
+      exemption list for starting a foreground service from the background, but the *type* matters:
+      Android 14 blocks **microphone** started that way and 15 adds **camera**, phone call,
+      dataSync, mediaPlayback and mediaProjection — the attempt throws
+      `ForegroundServiceStartNotAllowedException`. `specialUse` is not on that list. So the
+      listening service that holds the endpoint is `specialUse` and starts at boot, and the
+      existing camera+microphone service stays what it is: started from the foreground when a call
+      connects, which is allowed. An app that has never been launched, or that the user
+      force-stopped, receives no `BOOT_COMPLETED` at all — so the first launch after installing is
+      on the user either way.
     - Two more costs to go in with eyes open: from API 34 a foreground service must declare a type
       and none of them honestly means "waiting for a call" (`specialUse` is the closest), and a
       factory reset or a system update can quietly undo whatever the user granted.
