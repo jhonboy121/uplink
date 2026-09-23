@@ -1619,6 +1619,14 @@ slint::slint! {
         // What is behind the bars is whatever is on top: a call, a dimmed sheet and the log are
         // dark whatever the theme says, so only a bare page follows it.
         callback bars-changed(bool);
+        // The two settings the user can change. Read back rather than driven from here: the rows
+        // write straight to the theme, and this says so afterwards for whoever stores it.
+        callback appearance-changed(Appearance);
+        out property <Appearance> appearance: Theme.appearance;
+        changed appearance => { root.appearance-changed(self.appearance); }
+        callback rtl-changed(bool);
+        out property <bool> rtl: Theme.rtl;
+        changed rtl => { root.rtl-changed(self.rtl); }
         out property <bool> bars-light: !Theme.dark
             && root.call-state == CallState.idle
             && root.confirming == Confirm.none

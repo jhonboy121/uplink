@@ -1,17 +1,14 @@
 //! The call log: what was attempted, which way it went, and how it ended.
 //!
-//! It is its own connection to the same database as contacts. Two connections in one process is
-//! what WAL is for, and it keeps the two stores from having to share a borrow through the UI's
-//! state. A row is written when a call *ends*, because until then its outcome is unknown.
+//! It shares the one connection with contacts and settings. A row is written when a call *ends*,
+//! because until then its outcome is unknown.
 
-use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, params};
+use rusqlite::params;
 
+use crate::db::Db;
 use crate::{EndpointId, Error};
-
-const DATABASE: &str = "uplink.db";
 /// Enough to look back over, and small enough that the screen never pages.
 const KEEP: i64 = 500;
 
@@ -75,82 +72,90 @@ pub struct CallRecord {
 }
 
 pub struct CallLog {
-    db: Connection,
+    db: Db,
 }
 
 impl CallLog {
-    pub fn open(dir: &Path) -> Result<Self, Error> {
-        let db = Connection::open(dir.join(DATABASE))?;
-        db.pragma_update(None, "journal_mode", "WAL")?;
-        db.execute_batch(
-            "CREATE TABLE IF NOT EXISTS calls (
-                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                 peer     TEXT NOT NULL,
-                 incoming INTEGER NOT NULL,
-                 outcome  TEXT NOT NULL,
-                 at       INTEGER NOT NULL,
-                 seconds  INTEGER
-             );
-             CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)",
-        )?;
+    pub fn open(db: Db) -> Result<Self, Error> {
+        db.with(|db| {
+            db.execute_batch(
+                "CREATE TABLE IF NOT EXISTS calls (
+                     id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                     peer     TEXT NOT NULL,
+                     incoming INTEGER NOT NULL,
+                     outcome  TEXT NOT NULL,
+                     at       INTEGER NOT NULL,
+                     seconds  INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)",
+            )?;
+            Ok(())
+        })?;
         Ok(Self { db })
     }
 
     pub fn record(&self, record: &CallRecord) -> Result<(), Error> {
         let at = i64::try_from(record.at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(i64::MAX);
         let seconds = record.duration.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-        self.db.execute(
-            "INSERT INTO calls (peer, incoming, outcome, at, seconds) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![record.peer.to_string(), record.incoming, record.outcome.as_str(), at, seconds],
-        )?;
-        // Trimmed here rather than on a timer: the log only grows when a call ends.
-        self.db.execute(
-            "DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY at DESC, id DESC LIMIT ?1)",
-            params![KEEP],
-        )?;
-        Ok(())
+        self.db.with(|db| {
+            db.execute(
+                "INSERT INTO calls (peer, incoming, outcome, at, seconds) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![record.peer.to_string(), record.incoming, record.outcome.as_str(), at, seconds],
+            )?;
+            // Trimmed here rather than on a timer: the log only grows when a call ends.
+            db.execute(
+                "DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY at DESC, id DESC LIMIT ?1)",
+                params![KEEP],
+            )?;
+            Ok(())
+        })
     }
 
     /// Most recent first.
     pub fn recent(&self, limit: i64) -> Result<Vec<CallRecord>, Error> {
-        let mut statement = self
-            .db
-            .prepare("SELECT peer, incoming, outcome, at, seconds FROM calls ORDER BY at DESC, id DESC LIMIT ?1")?;
-        let rows = statement.query_map(params![limit], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, bool>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-            ))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (peer, incoming, outcome, at, seconds) = row?;
-            let Ok(peer) = peer.parse::<EndpointId>() else {
-                tracing::warn!(peer, "a logged key no longer parses; skipping");
-                continue;
-            };
-            out.push(CallRecord {
-                peer,
-                incoming,
-                outcome: Outcome::parse(&outcome),
-                at: UNIX_EPOCH + Duration::from_secs(u64::try_from(at).unwrap_or_default()),
-                duration: seconds.and_then(|s| u64::try_from(s).ok()).map(Duration::from_secs),
-            });
-        }
-        Ok(out)
+        self.db.with(|db| {
+            let mut statement = db.prepare(
+                "SELECT peer, incoming, outcome, at, seconds FROM calls ORDER BY at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = statement.query_map(params![limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (peer, incoming, outcome, at, seconds) = row?;
+                let Ok(peer) = peer.parse::<EndpointId>() else {
+                    tracing::warn!(peer, "a logged key no longer parses; skipping");
+                    continue;
+                };
+                out.push(CallRecord {
+                    peer,
+                    incoming,
+                    outcome: Outcome::parse(&outcome),
+                    at: UNIX_EPOCH + Duration::from_secs(u64::try_from(at).unwrap_or_default()),
+                    duration: seconds.and_then(|s| u64::try_from(s).ok()).map(Duration::from_secs),
+                });
+            }
+            Ok(out)
+        })
     }
 
     /// How many calls came in and were never answered, which is what a tab badge would show.
     pub fn missed(&self) -> Result<i64, Error> {
-        Ok(self.db.query_row("SELECT COUNT(*) FROM calls WHERE outcome = 'missed'", [], |row| row.get(0))?)
+        self.db
+            .with(|db| Ok(db.query_row("SELECT COUNT(*) FROM calls WHERE outcome = 'missed'", [], |row| row.get(0))?))
     }
 
     pub fn clear(&self) -> Result<(), Error> {
-        self.db.execute("DELETE FROM calls", [])?;
-        Ok(())
+        self.db.with(|db| {
+            db.execute("DELETE FROM calls", [])?;
+            Ok(())
+        })
     }
 }
 
@@ -168,7 +173,7 @@ mod tests {
     #[test]
     fn the_newest_call_is_first() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(dir.path())?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
         let old = UNIX_EPOCH + Duration::from_secs(1_000);
         let new = UNIX_EPOCH + Duration::from_secs(2_000);
         log.record(&record(true, Outcome::Missed, old))?;
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn a_duration_survives_the_round_trip() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(dir.path())?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
         let mut call = record(false, Outcome::Answered, SystemTime::now());
         call.duration = Some(Duration::from_secs(252));
         log.record(&call)?;
@@ -194,7 +199,7 @@ mod tests {
     #[test]
     fn missed_calls_are_counted() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(dir.path())?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
         let now = SystemTime::now();
         log.record(&record(true, Outcome::Missed, now))?;
         log.record(&record(true, Outcome::Missed, now))?;
@@ -208,7 +213,7 @@ mod tests {
     #[test]
     fn the_log_stops_growing() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(dir.path())?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
         for second in 0..KEEP + 20 {
             let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(second).unwrap_or_default());
             log.record(&record(false, Outcome::Answered, at))?;

@@ -15,6 +15,7 @@ use tracing::Dispatch;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use uplink_core::contacts::Contacts;
+use uplink_core::db::Db;
 use uplink_core::node::{Command, Event, Network, Node};
 use uplink_core::{EndpointId, identity, runtime};
 
@@ -93,18 +94,18 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
     match cli {
         Cli::Id => println!("{}", identity::load_or_create(dir).await?.public()),
         Cli::Contacts => {
-            for contact in Contacts::open(dir)?.iter() {
+            for contact in Contacts::open(Db::open(dir)?)?.iter() {
                 let mark = if contact.favourite { "*" } else { " " };
                 println!("{mark}\t{}\t{}", contact.name, contact.id);
             }
         }
-        Cli::Add { name, key } => Contacts::open(dir)?.add(&name, key)?,
+        Cli::Add { name, key } => Contacts::open(Db::open(dir)?)?.add(&name, key)?,
         Cli::Remove { name } => {
-            Contacts::open(dir)?.remove(&name)?;
+            Contacts::open(Db::open(dir)?)?.remove(&name)?;
         }
         Cli::Listen { media } => session(dir, None, media).await?,
         Cli::Call { target, media } => {
-            let peer = Contacts::open(dir)?.resolve(&target)?;
+            let peer = Contacts::open(Db::open(dir)?)?.resolve(&target)?;
             session(dir, Some(peer), media).await?;
         }
     }
@@ -118,7 +119,7 @@ async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) ->
         // Fail early on a bad clip; each call reopens it to start from the beginning.
         clip::Clip::open(path)?;
     }
-    let contacts = Contacts::open(dir)?;
+    let contacts = Contacts::open(Db::open(dir)?)?;
     let (node, mut events) = Node::start(identity::load_or_create(dir).await?, Network::N0).await?;
     if let Some(peer) = call {
         node.send(Command::Call(peer)).await?;

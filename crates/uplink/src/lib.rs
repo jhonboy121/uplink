@@ -19,6 +19,7 @@ use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
+use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
@@ -34,14 +35,16 @@ use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{CallLog, CallRecord, Outcome};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
+use uplink_core::db::Db;
 use uplink_core::logs;
+use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
 use uplink_core::media::MediaSession;
 use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::audio::CallAudio;
-use crate::ui::{App, CallItem, CallState, ContactItem, Grant, PermissionItem};
+use crate::ui::{App, Appearance, CallItem, CallState, ContactItem, Grant, PermissionItem, Theme};
 use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
@@ -128,7 +131,7 @@ struct State {
     log: CallLog,
     /// Contacts ticked for removal. Kept here rather than in the model, which is rebuilt whenever
     /// the list changes and would drop the ticks with it.
-    selected: std::collections::HashSet<EndpointId>,
+    selected: FxHashSet<EndpointId>,
     /// The call in flight, so its outcome is known by the time it ends.
     pending: Option<PendingCall>,
     connected_at: Option<Instant>,
@@ -757,11 +760,6 @@ fn refresh_gate(ui: &App, platform: &Platform) -> bool {
     all
 }
 
-/// Written once the explainer has been shown, so later launches go straight to Android's dialogs.
-/// A one-time grant lapses when the process dies, and re-reading the same screen every launch
-/// would be a wall between the user and the prompt they already understand.
-const GATE_EXPLAINED: &str = "gate-explained";
-
 /// Runs `task` on the UI loop, saying so if the loop is gone rather than dropping it silently.
 fn spawn_ui(task: impl Future<Output = ()> + 'static) {
     if let Err(e) = slint::spawn_local(task) {
@@ -769,14 +767,29 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
     }
 }
 
-/// Owned paths and no borrows: both run as tasks on the runtime, because the UI loop has no
-/// reactor for `tokio::fs` and no business waiting on flash either.
-async fn gate_explained(data_dir: PathBuf) -> bool {
-    tokio::fs::try_exists(data_dir.join(GATE_EXPLAINED)).await.unwrap_or(false)
+/// Recorded once the explainer has been shown, so later launches go straight to Android's own
+/// dialog. A one-time grant lapses when the process dies, and re-reading the same screen every
+/// launch would be a wall between the user and the prompt they already understand.
+/// Stored as a word rather than a number, so a row stays readable and reordering the enum cannot
+/// silently change what someone chose. Anything unrecognised means following the system.
+const fn appearance_name(appearance: Appearance) -> &'static str {
+    match appearance {
+        Appearance::System => "system",
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    }
 }
 
-async fn mark_gate_explained(data_dir: PathBuf) {
-    if let Err(e) = tokio::fs::write(data_dir.join(GATE_EXPLAINED), []).await {
+fn appearance_from(stored: Option<&str>) -> Appearance {
+    match stored {
+        Some("light") => Appearance::Light,
+        Some("dark") => Appearance::Dark,
+        _ => Appearance::System,
+    }
+}
+
+fn mark_gate_explained(settings: &Settings) {
+    if let Err(e) = settings.set_flag(settings::GATE_EXPLAINED, true) {
         tracing::warn!("recording that the gate was explained: {e}");
     }
 }
@@ -990,8 +1003,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let runtime = uplink_core::runtime::build(dispatch)?;
     let secret = runtime.block_on(identity::load_or_create(data_dir))?;
     let identity = secret.public();
-    let contacts = Contacts::open(data_dir)?;
-    let log = CallLog::open(data_dir)?;
+    // One connection for all three stores; each creates its own table on top of it.
+    let db = Db::open(data_dir)?;
+    let contacts = Contacts::open(db.clone())?;
+    let log = CallLog::open(db.clone())?;
+    let settings = Settings::open(db)?;
     // Binding the endpoint reaches the network, so it happens on the runtime while the window is
     // already up and the splash is showing, rather than in front of a blank screen.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -1014,7 +1030,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         scan_busy: Arc::default(),
         contacts,
         log,
-        selected: std::collections::HashSet::new(),
+        selected: FxHashSet::default(),
         pending: None,
         connected_at: None,
         stats: Arc::default(),
@@ -1130,36 +1146,39 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 
     // Anything missing on a launch that has already seen the explainer goes straight to Android's
     // dialog: a lapsed one-time grant should not mean reading the same screen again.
-    if !refresh_gate(&ui, &platform) {
-        let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
-        // The read is the runtime's, the gate is the UI loop's; a JoinHandle joins the two
-        // without either doing the other's work.
-        let reading = runtime.handle().spawn(gate_explained(data_dir.to_path_buf()));
-        spawn_ui(async move {
-            if matches!(reading.await, Ok(true))
-                && let Some(ui) = weak.upgrade()
-            {
-                request_gate(&ui, &p);
-            }
-        });
+    if !refresh_gate(&ui, &platform) && settings.flag(settings::GATE_EXPLAINED) {
+        request_gate(&ui, &platform);
     }
 
-    let (weak, p, dir) = (ui.as_weak(), Rc::clone(&platform), data_dir.to_path_buf());
-    let handle = runtime.handle().clone();
+    let (weak, p, s) = (ui.as_weak(), Rc::clone(&platform), settings.clone());
     ui.on_grant_permissions(move || {
-        let (weak, p) = (weak.clone(), Rc::clone(&p));
-        let writing = handle.spawn(mark_gate_explained(dir.clone()));
-        spawn_ui(async move {
-            drop(writing.await);
-            if let Some(ui) = weak.upgrade() {
-                request_gate(&ui, &p);
-            }
-        });
+        if let Some(ui) = weak.upgrade() {
+            mark_gate_explained(&s);
+            request_gate(&ui, &p);
+        }
     });
     let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
     ui.on_open_settings(move || {
         if let Err(e) = p.open_app_settings() {
             set_call_status(&weak, format!("could not open settings: {e}"));
+        }
+    });
+
+    // What the user chose last time, before anything can report a change back.
+    let theme = ui.global::<Theme>();
+    theme.set_appearance(appearance_from(settings.get(settings::APPEARANCE).as_deref()));
+    theme.set_rtl(settings.flag(settings::LAYOUT_RTL));
+
+    let s = settings.clone();
+    ui.on_appearance_changed(move |appearance| {
+        if let Err(e) = s.set(settings::APPEARANCE, appearance_name(appearance)) {
+            tracing::warn!("storing the appearance: {e}");
+        }
+    });
+    let s = settings.clone();
+    ui.on_rtl_changed(move |rtl| {
+        if let Err(e) = s.set_flag(settings::LAYOUT_RTL, rtl) {
+            tracing::warn!("storing the layout direction: {e}");
         }
     });
 

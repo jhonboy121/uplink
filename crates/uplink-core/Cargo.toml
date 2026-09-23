@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 ab_glyph.workspace = true
 flate2.workspace = true
+parking_lot.workspace = true
 tar.workspace = true
 # PNG in and out: the mark that goes in the middle of a code, and the card that comes out.
 image = { workspace = true, features = ["png"] }

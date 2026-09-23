@@ -5,11 +5,10 @@
 //! `Platform` owns its `JavaVM` and a global ref to the activity. Android constants are read from
 //! their Java classes.
 
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use android_activity::AndroidApp;
 use jni::objects::{JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue};
@@ -17,6 +16,8 @@ use jni::refs::Global;
 use jni::strings::JNIStr;
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JavaVM, NativeMethod, Outcome, jni_sig, jni_str};
+use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
 
 use crate::Error;
@@ -69,13 +70,13 @@ pub struct Greyscale {
 struct Inner {
     permission_granted: jint,
     next_request_code: AtomicI32,
-    pending: Mutex<HashMap<jint, oneshot::Sender<bool>>>,
-    pending_images: Mutex<HashMap<jint, oneshot::Sender<Option<Greyscale>>>>,
+    pending: Mutex<FxHashMap<jint, oneshot::Sender<bool>>>,
+    pending_images: Mutex<FxHashMap<jint, oneshot::Sender<Option<Greyscale>>>>,
 }
 
 impl Inner {
     fn complete(&self, request_code: jint, granted: bool) {
-        let sender = self.pending.lock().unwrap_or_else(PoisonError::into_inner).remove(&request_code);
+        let sender = self.pending.lock().remove(&request_code);
         match sender {
             // The receiver may have been dropped by a caller that stopped waiting.
             Some(tx) => drop(tx.send(granted)),
@@ -84,7 +85,7 @@ impl Inner {
     }
 
     fn complete_image(&self, request_code: jint, image: Option<Greyscale>) {
-        let sender = self.pending_images.lock().unwrap_or_else(PoisonError::into_inner).remove(&request_code);
+        let sender = self.pending_images.lock().remove(&request_code);
         match sender {
             Some(tx) => drop(tx.send(image)),
             None => tracing::warn!(request_code, "image result for unknown request"),
@@ -238,7 +239,7 @@ impl Platform {
         }
         let code = self.inner.next_request_code.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().unwrap_or_else(PoisonError::into_inner).insert(code, tx);
+        self.inner.pending.lock().insert(code, tx);
         let requested = self.with_activity(|env, activity| {
             let name = permission_string(env, permission)?;
             let names = env.new_object_array(SINGLE_PERMISSION, jni_str!("java/lang/String"), &name)?;
@@ -251,7 +252,7 @@ impl Platform {
             Ok(())
         });
         if let Err(e) = requested {
-            self.inner.pending.lock().unwrap_or_else(PoisonError::into_inner).remove(&code);
+            self.inner.pending.lock().remove(&code);
             return Err(e);
         }
         tracing::debug!(?permission, code, "permission requested");
@@ -281,13 +282,13 @@ impl Platform {
     pub async fn pick_image(&self) -> Result<Option<Greyscale>, Error> {
         let code = self.inner.next_request_code.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.inner.pending_images.lock().unwrap_or_else(PoisonError::into_inner).insert(code, tx);
+        self.inner.pending_images.lock().insert(code, tx);
         let opened = self.with_activity(|env, activity| {
             env.call_method(activity, jni_str!("pickImageAsync"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
             Ok(())
         });
         if let Err(e) = opened {
-            self.inner.pending_images.lock().unwrap_or_else(PoisonError::into_inner).remove(&code);
+            self.inner.pending_images.lock().remove(&code);
             return Err(e);
         }
         rx.await.map_err(|_| Error::RequestAbandoned)

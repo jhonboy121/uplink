@@ -24,11 +24,27 @@ public class UplinkFiles extends ContentProvider {
     /** Inside the app's files directory, which is what Rust knows as its data directory. */
     static final String DIRECTORY = "share";
     private static final String PNG = "image/png";
-    private static final String TEXT = "text/plain";
+    /** RFC 6713. Not `application/x-gzip`, which predates it, and not `text/plain`, which would
+     *  invite a target to treat a compressed archive as something it could show. */
+    private static final String GZIP = "application/gzip";
+    /** Whatever else ends up here is bytes, and saying so is better than guessing wrong. */
+    private static final String BYTES = "application/octet-stream";
 
-    /** The type a name implies. Only what the app actually shares is worth listing. */
+    /**
+     * The type a name implies. Both the provider and the share intent ask this, so a target is
+     * told the same thing twice rather than being able to disagree with itself.
+     */
     static String typeOf(String name) {
-        return name != null && name.endsWith(".png") ? PNG : TEXT;
+        if (name == null) {
+            return BYTES;
+        }
+        if (name.endsWith(".png")) {
+            return PNG;
+        }
+        if (name.endsWith(".gz")) {
+            return GZIP;
+        }
+        return BYTES;
     }
 
     /** The URI for a file already written into {@link #DIRECTORY}. */

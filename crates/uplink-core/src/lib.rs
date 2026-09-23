@@ -5,6 +5,7 @@ pub mod calls;
 pub mod card;
 pub mod contacts;
 pub mod crypto;
+pub mod db;
 mod error;
 pub mod identity;
 pub mod logs;
@@ -13,6 +14,7 @@ pub mod node;
 pub mod qr;
 mod protocol;
 pub mod runtime;
+pub mod settings;
 mod telemetry;
 
 pub use error::Error;
