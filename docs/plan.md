@@ -272,6 +272,20 @@ default); keep disk usage lean. Avoid build scripts.
     thing people actually send each other, and a scanned image is already a supported way in.
   - **Errors belong inline** where the thing went wrong; a modal only when the user has to decide something. A toast
     that disappears is not an error report.
+  - **Nothing destructive happens on one tap.** Clearing the call log and removing a contact both
+    need confirming — a tap can be an accident, and a contact is a key that may be gone for good.
+    Contacts also want **batch selection**, so clearing out several is one confirmation rather than
+    one per row.
+  - **The system bars and the keyboard.** The status bar reads as white rather than sitting over
+    our ground, so the safe-area insets need checking against what the window actually reports; and
+    the IME covers the field it was opened for, so the activity has to resize to it (the manifest
+    asks for `adjustResize` — confirm it survives with a NativeActivity and that our layouts use
+    the bottom inset).
+  - **A dialling call is still a call.** The camera preview should be up while it rings, all the
+    controls should be there and working rather than present-but-inert, and answering should play
+    the locked transition — the self-view folding from full frame into its corner. A call that
+    times out should **stay on the call screen** long enough to say it did not connect, the way
+    every phone does, instead of vanishing back to the list. "Calling…" wants its dots animated.
   - **A call attempt needs a sound and an end.** Ringback while an outgoing call is ringing, a
     ringtone for an incoming one, and a **timeout on establishing an outgoing call** — dialing a
     key nobody is listening on currently waits until the user gives up. The tone routes through the
