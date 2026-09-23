@@ -18,7 +18,7 @@ use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JavaVM, NativeMethod, Outcome, jni_sig, jni_str};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::Error;
 use crate::codec::Avc;
@@ -72,6 +72,8 @@ struct Inner {
     next_request_code: AtomicI32,
     pending: Mutex<FxHashMap<jint, oneshot::Sender<bool>>>,
     pending_images: Mutex<FxHashMap<jint, oneshot::Sender<Option<Greyscale>>>>,
+    /// Unsolicited platform events, answered on the UI loop.
+    events: mpsc::UnboundedSender<PlatformEvent>,
 }
 
 impl Inner {
@@ -82,6 +84,11 @@ impl Inner {
             Some(tx) => drop(tx.send(granted)),
             None => tracing::warn!(request_code, "permission result for unknown request"),
         }
+    }
+
+    /// Fails only once the app is shutting down, when nothing is left to answer it.
+    fn send(&self, event: PlatformEvent) {
+        let _ = self.events.send(event);
     }
 
     fn complete_image(&self, request_code: jint, image: Option<Greyscale>) {
@@ -103,10 +110,32 @@ pub struct Platform {
     sdk: jint,
 }
 
+/// Something the platform did that nobody asked for. The codes match `UplinkActivity`'s own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlatformEvent {
+    /// The call window shrank into, or grew out of, picture-in-picture.
+    PictureInPicture(bool),
+    Hangup,
+    ToggleMic,
+}
+
+impl PlatformEvent {
+    const fn action(code: jint) -> Option<Self> {
+        match code {
+            0 => Some(Self::Hangup),
+            1 => Some(Self::ToggleMic),
+            _ => None,
+        }
+    }
+}
+
+pub type PlatformEvents = mpsc::UnboundedReceiver<PlatformEvent>;
+
 impl Platform {
-    pub fn attach(app: &AndroidApp) -> Result<Self, Error> {
+    pub fn attach(app: &AndroidApp) -> Result<(Self, PlatformEvents), Error> {
         // SAFETY: android-activity guarantees a valid JavaVM pointer for the process lifetime.
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let (events, incoming) = mpsc::unbounded_channel();
         let (activity, inner, sdk) = vm.attach_current_thread(|env| -> Result<_, Error> {
             // SAFETY: a global ref to the activity owned by android-activity; not deleted here.
             let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
@@ -124,6 +153,7 @@ impl Platform {
                 next_request_code: AtomicI32::new(0),
                 pending: Mutex::default(),
                 pending_images: Mutex::default(),
+                events,
             });
             let handle = Arc::into_raw(Arc::clone(&inner)).expose_provenance();
             let attached = handle_from_address(handle).and_then(|handle| {
@@ -143,7 +173,7 @@ impl Platform {
         // At info, and once per process: which Android this is decides what the app may ask for,
         // and it is the first thing worth knowing about a device that behaves oddly.
         tracing::info!(sdk, "platform bridge attached");
-        Ok(Self { vm, activity, inner, sdk })
+        Ok((Self { vm, activity, inner, sdk }, incoming))
     }
 
     /// Every call into the activity goes through here, which is also the one place that can see a
@@ -221,6 +251,15 @@ impl Platform {
                 jni_sig!("(Z)V"),
                 &[JValue::Bool(light)],
             )?;
+            Ok(())
+        })
+    }
+
+    /// Tells the activity what the mic is doing, so the picture-in-picture window's own button
+    /// offers the move the user has not made yet.
+    pub fn set_mic_on(&self, on: bool) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("setMicOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
             Ok(())
         })
     }
@@ -422,7 +461,7 @@ impl Platform {
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 4] {
+fn natives() -> [NativeMethod<'static>; 6] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkActivity's natives.
     unsafe {
         [
@@ -442,6 +481,16 @@ fn natives() -> [NativeMethod<'static>; 4] {
                 native_image_picked as *mut c_void,
             ),
             NativeMethod::from_raw_parts(jni_str!("nativeDetach"), jni_str!("(J)V"), native_detach as *mut c_void),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativePictureInPicture"),
+                jni_str!("(JZ)V"),
+                native_picture_in_picture as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeCallAction"),
+                jni_str!("(JI)V"),
+                native_call_action as *mut c_void,
+            ),
         ]
     }
 }
@@ -578,6 +627,35 @@ extern "system" fn native_detach<'local>(_env: EnvUnowned<'local>, _class: JClas
     // SAFETY: Java calls this exactly once with the handle from `attach` and clears its copy first.
     drop(unsafe { Arc::from_raw(std::ptr::with_exposed_provenance::<Inner>(address)) });
     tracing::debug!("platform bridge detached");
+}
+
+extern "system" fn native_picture_in_picture<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    active: bool,
+) {
+    // SAFETY: Java passes back the handle from `attach` and clears it before detaching.
+    let Some(inner) = (unsafe { inner_from(handle) }) else {
+        return;
+    };
+    inner.send(PlatformEvent::PictureInPicture(active));
+}
+
+extern "system" fn native_call_action<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    action: jint,
+) {
+    // SAFETY: as above.
+    let Some(inner) = (unsafe { inner_from(handle) }) else {
+        return;
+    };
+    match PlatformEvent::action(action) {
+        Some(event) => inner.send(event),
+        None => tracing::warn!(action, "unknown call action"),
+    }
 }
 
 fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> Result<JObject<'local>, Error> {

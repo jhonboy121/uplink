@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
-use uplink_android::platform::{Permission, Platform};
+use uplink_android::platform::{Permission, Platform, PlatformEvent};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
@@ -1042,7 +1042,8 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
 
 fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
-    let platform = Rc::new(Platform::attach(&app)?);
+    let (platform, platform_events) = Platform::attach(&app)?;
+    let platform = Rc::new(platform);
     log_previous_exits(&platform);
     let avc = platform.avc()?;
 
@@ -1252,6 +1253,20 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         }
     });
 
+    // What the platform did unasked: the window shrinking into picture-in-picture, and the taps
+    // on the buttons that window carries. The receiver needs no reactor, so the UI loop owns it.
+    let (weak, mut events) = (ui.as_weak(), platform_events);
+    spawn_ui(async move {
+        while let Some(event) = events.recv().await {
+            let Some(ui) = weak.upgrade() else { break };
+            match event {
+                PlatformEvent::PictureInPicture(active) => ui.set_call_pip(active),
+                PlatformEvent::Hangup => ui.invoke_hangup(),
+                PlatformEvent::ToggleMic => ui.invoke_toggle_mic(),
+            }
+        }
+    });
+
     // The splash stays until the endpoint is bound, because until then no call could arrive.
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     slint::spawn_local(async move {
@@ -1308,11 +1323,15 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
             }
         });
     });
-    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_toggle_mic(move || {
         let muted = with_state_value(&s, State::toggle_mic).unwrap_or_default();
         if let Some(ui) = weak.upgrade() {
             ui.set_mic_on(!muted);
+        }
+        // The picture-in-picture window carries its own mute button; it has to agree.
+        if let Err(e) = p.set_mic_on(!muted) {
+            tracing::warn!("mic state for the call window: {e}");
         }
     });
     let (p, weak) = (Rc::clone(&platform), ui.as_weak());

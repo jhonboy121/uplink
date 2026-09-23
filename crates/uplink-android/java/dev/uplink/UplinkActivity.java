@@ -1,9 +1,23 @@
 package dev.uplink;
 
-import android.content.ClipData;
-import android.content.Intent;
 import android.app.NativeActivity;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.PictureInPictureParams;
+import android.app.RemoteAction;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.res.Configuration;
+import android.graphics.drawable.Icon;
+import android.os.Build;
+import android.os.Bundle;
+import android.util.Rational;
+
+import java.util.ArrayList;
+import java.util.List;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -23,6 +37,14 @@ public class UplinkActivity extends NativeActivity {
     private static final String TAG = "uplink";
     /** Longest edge kept when decoding a picked image; plenty for reading a QR code. */
     private static final int MAX_SCAN_PIXELS = 1600;
+    /** The picture-in-picture window's shape: upright, like the phones on both ends of a call. */
+    private static final int PIP_WIDTH = 9;
+    private static final int PIP_HEIGHT = 16;
+    /** Our own broadcast, sent only to ourselves; the codes match `platform::CallAction` in Rust. */
+    private static final String ACTION_CALL = "dev.uplink.CALL_ACTION";
+    private static final String EXTRA_ACTION = "action";
+    private static final int ACTION_HANGUP = 0;
+    private static final int ACTION_MIC = 1;
 
     /**
      * Static so {@link #log} works from anywhere in the app (the call service has no activity).
@@ -33,6 +55,34 @@ public class UplinkActivity extends NativeActivity {
     /** What the UI last asked the system bars to look like; see {@link #applySystemBars()}. */
     private volatile boolean lightSystemBars;
 
+    /** A call is running, so leaving the app should shrink it rather than hide it. */
+    private volatile boolean inCall;
+    /** Mirrors the UI, so the window's own mute button shows the state it would move to. */
+    private volatile boolean micOn = true;
+
+    /** Taps on the picture-in-picture buttons arrive here; nothing outside the app may send them. */
+    private final BroadcastReceiver callActions = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            long handle = nativeHandle;
+            if (handle != 0) {
+                nativeCallAction(handle, intent.getIntExtra(EXTRA_ACTION, -1));
+            }
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        IntentFilter filter = new IntentFilter(ACTION_CALL);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Required from 33, and right at any version: these are ours to send.
+            registerReceiver(callActions, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(callActions, filter);
+        }
+    }
+
 
     private static native void nativePermissionsResult(
             long handle, int requestCode, String[] permissions, int[] grantResults);
@@ -42,6 +92,10 @@ public class UplinkActivity extends NativeActivity {
     private static native void nativeImagePicked(long handle, int requestCode, int[] pixels, int width, int height);
 
     private static native void nativeDetach(long handle);
+
+    private static native void nativePictureInPicture(long handle, boolean active);
+
+    private static native void nativeCallAction(long handle, int action);
 
     /** Logs to logcat and, when the bridge is up, into the app's own log file. */
     static void log(int priority, String message) {
@@ -74,6 +128,12 @@ public class UplinkActivity extends NativeActivity {
      */
     boolean shouldExplain(String permission) {
         return shouldShowRequestPermissionRationale(permission);
+    }
+
+    /** Told by the UI, so the window's mute button offers the move the user has not made yet. */
+    void setMicOn(boolean on) {
+        micOn = on;
+        refreshPictureInPicture();
     }
 
     /**
@@ -233,8 +293,118 @@ public class UplinkActivity extends NativeActivity {
         }
     }
 
+    /**
+     * Leaving the app during a call shrinks it to a picture-in-picture window rather than leaving
+     * the call running behind a blank screen. `onUserLeaveHint` is the press of Home or a switch
+     * to another app; a new activity opening over ours is not the user leaving and does not count.
+     */
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        log(Log.INFO, "user leaving, call " + inCall + ", already small " + isInPictureInPictureMode());
+        if (inCall && !isInPictureInPictureMode()) {
+            try {
+                enterPictureInPictureMode(pictureInPictureParams());
+            } catch (RuntimeException e) {
+                log(Log.WARN, "entering picture-in-picture: " + e);
+            }
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean active, Configuration config) {
+        super.onPictureInPictureModeChanged(active, config);
+        log(Log.INFO, "picture-in-picture " + active);
+        long handle = nativeHandle;
+        if (handle != 0) {
+            nativePictureInPicture(handle, active);
+        }
+    }
+
+    /**
+     * Portrait, because both ends of a call are phones held upright and the picture is cropped to
+     * fill either way. The actions are what the window can be driven with once it is small.
+     */
+    private PictureInPictureParams pictureInPictureParams() {
+        PictureInPictureParams.Builder params = new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(PIP_WIDTH, PIP_HEIGHT))
+                .setActions(callActions());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Hands the shrink animation to the system, so the home gesture is one movement
+            // instead of the window appearing after it.
+            params.setAutoEnterEnabled(true);
+        }
+        return params.build();
+    }
+
+    /**
+     * Arms the system's own shrink and keeps the window's buttons current. Published when a call
+     * starts, not only when the user leaves: `setAutoEnterEnabled` only takes effect if the
+     * params were registered beforehand, and with gesture navigation `onUserLeaveHint` is not
+     * dependable — which is the reason auto-enter exists at all.
+     */
+    void refreshPictureInPicture() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    setPictureInPictureParams(inCall ? pictureInPictureParams() : idleParams());
+                } catch (RuntimeException e) {
+                    log(Log.WARN, "picture-in-picture params: " + e);
+                }
+            }
+        });
+    }
+
+    /**
+     * A call hung up from the small window's own button leaves the window with nothing in it, so
+     * the window goes. Android offers no way out of picture-in-picture but finishing or coming
+     * back to the front, and finishing would take the endpoint with it — so the task steps behind
+     * everything instead, which dismisses the window and leaves the app running.
+     */
+    private void leavePictureInPicture() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isInPictureInPictureMode()) {
+                    moveTaskToBack(true);
+                }
+            }
+        });
+    }
+
+    /** Nothing to watch, so leaving the app should just leave it. */
+    private PictureInPictureParams idleParams() {
+        PictureInPictureParams.Builder params = new PictureInPictureParams.Builder();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            params.setAutoEnterEnabled(false);
+        }
+        return params.build();
+    }
+
+    private List<RemoteAction> callActions() {
+        List<RemoteAction> actions = new ArrayList<>();
+        actions.add(action(micOn ? "mic" : "mic_off", micOn ? "Mute" : "Unmute", ACTION_MIC));
+        actions.add(action("call_end", "End call", ACTION_HANGUP));
+        return actions;
+    }
+
+    private RemoteAction action(String drawable, String title, int code) {
+        int id = getResources().getIdentifier(drawable, "drawable", getPackageName());
+        Intent intent = new Intent(ACTION_CALL).setPackage(getPackageName()).putExtra(EXTRA_ACTION, code);
+        PendingIntent pending = PendingIntent.getBroadcast(
+                this, code, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new RemoteAction(Icon.createWithResource(this, id), title, title, pending);
+    }
+
     /** Starts or stops the foreground service that keeps a call alive in the background. */
     void setCallService(boolean running) {
+        inCall = running;
+        // Arms the shrink now, while the app is still in front; too late once the user has left.
+        refreshPictureInPicture();
+        if (!running) {
+            leavePictureInPicture();
+        }
         Intent intent = new Intent(this, UplinkCallService.class);
         if (running) {
             startForegroundService(intent);
@@ -256,6 +426,7 @@ public class UplinkActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        unregisterReceiver(callActions);
         long handle = nativeHandle;
         nativeHandle = 0;
         if (handle != 0) {

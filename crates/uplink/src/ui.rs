@@ -1695,6 +1695,9 @@ slint::slint! {
         // A running call folded into a corner so the rest of the app can be used. Its position
         // is kept here so a drag outlives being restored and folded away again.
         in-out property <bool> call-folded: false;
+        // The window itself has been shrunk by the system. Everything but the picture goes: at
+        // that size chrome is unreadable, and the controls are the window's own buttons.
+        in property <bool> call-pip: false;
         in-out property <length> call-fold-x;
         in-out property <length> call-fold-y;
         in-out property <bool> call-fold-placed: false;
@@ -1876,8 +1879,22 @@ slint::slint! {
                 }
             }
 
+            // Shrunk by the system: the remote picture fills the window and nothing else is
+            // drawn, because the system draws the buttons over it and there is room for no more.
+            if root.call-pip : Rectangle {
+                background: Theme.video;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    // Always the other person, whatever the full screen was showing when it
+                    // shrank. A window this small is for watching them, not yourself.
+                    source: root.remote-frame;
+                    image-fit: cover;
+                }
+            }
+
             // Overlays: declared last, so they cover the pages and the tab bar.
-            if root.call-state != CallState.idle && !root.call-folded : CallScreen {
+            if root.call-state != CallState.idle && !root.call-folded && !root.call-pip : CallScreen {
                 frame: root.frame;
                 remote-frame: root.remote-frame;
                 peer-name: root.peer-name;
@@ -1904,8 +1921,10 @@ slint::slint! {
 
             // The folded call, over the pages and the tab bar but under anything that wants an
             // answer.
-            if root.call-state != CallState.idle && root.call-folded : MiniCall {
-                frame: root.swapped ? root.frame : root.remote-frame;
+            if root.call-state != CallState.idle && root.call-folded && !root.call-pip : MiniCall {
+                // The other person, like the shrunken window: your own face is the one thing you
+                // do not need a corner of the screen for.
+                frame: root.remote-frame;
                 timer: root.call-timer;
                 top-clear: root.safe-area-insets.top;
                 bottom-clear: root.safe-area-insets.bottom + Theme.tab-height;

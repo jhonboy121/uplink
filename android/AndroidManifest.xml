@@ -42,6 +42,7 @@
             android:exported="true"
             android:configChanges="0x1ff0"
             android:launchMode="1"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="0x10">
             <meta-data android:name="android.app.lib_name" android:value="${lib}" />
             <intent-filter>
