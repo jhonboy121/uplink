@@ -146,8 +146,13 @@ impl Platform {
         Ok(Self { vm, activity, inner, sdk })
     }
 
+    /// Every call into the activity goes through here, which is also the one place that can see a
+    /// throw while the throwable is still pending — so it is where Java's own message is read.
     fn with_activity<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
-        self.vm.attach_current_thread(|env| f(env, self.activity.as_obj()))
+        self.vm.attach_current_thread(|env| match f(env, self.activity.as_obj()) {
+            Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
+            outcome => outcome,
+        })
     }
 
     /// Whether this Android has a notification permission at all. Before 13 there is none to
@@ -607,6 +612,30 @@ fn trace_excerpt(env: &mut Env, info: &JObject) -> Result<String, Error> {
     let bytes = env.call_method(&stream, jni_str!("readAllBytes"), jni_sig!("()[B"), &[])?.l()?;
     let bytes = env.convert_byte_array(env.cast_local::<JByteArray>(bytes)?)?;
     Ok(printable_runs(&bytes))
+}
+
+/// Reads the pending exception's `toString()` — which is the class and the message, e.g.
+/// `java.io.FileNotFoundException: no such shared file` — and clears it, so the next JNI call on
+/// this thread is not refused by an exception nobody handled. Anything that goes wrong while
+/// reading it is reported as itself rather than replacing the throw with a second failure.
+fn thrown(env: &mut Env) -> Error {
+    let Some(throwable) = env.exception_occurred() else {
+        return Error::Jni(jni::errors::Error::JavaException);
+    };
+    // Cleared before calling back into Java: a pending exception makes every further call fail.
+    env.exception_clear();
+    let described = env
+        .call_method(&throwable, jni_str!("toString"), jni_sig!("()Ljava/lang/String;"), &[])
+        .and_then(|text| text.l())
+        .map_err(Error::from)
+        .and_then(|text| java_string(env, text));
+    match described {
+        Ok(text) => Error::Thrown(text),
+        Err(e) => {
+            tracing::warn!("reading a java exception: {e}");
+            Error::Jni(jni::errors::Error::JavaException)
+        }
+    }
 }
 
 fn java_string(env: &mut Env, obj: JObject) -> Result<String, Error> {

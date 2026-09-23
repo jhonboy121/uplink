@@ -14,6 +14,7 @@ use ndk_sys as ffi;
 use tokio::sync::mpsc;
 
 use crate::Error;
+use crate::error::At;
 
 /// `KEY_PRIORITY`: 0 is realtime, 1 best effort.
 const REALTIME_PRIORITY: i32 = 0;
@@ -84,7 +85,6 @@ fn base_format(avc: &Avc, width: i32, height: i32) -> Result<MediaFormat, Error>
     format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_WIDTH)?, width);
     format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_HEIGHT)?, height);
     format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_PRIORITY)?, REALTIME_PRIORITY);
-    format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_LOW_LATENCY)?, ENABLED);
     Ok(format)
 }
 
@@ -114,7 +114,8 @@ impl Codec {
                 let detail = format!("{e}: {}", detail.to_string_lossy());
                 drop(error.send(Event::Error { detail, fatal }));
             })),
-        }))?;
+        }))
+        .at("AMediaCodec_setAsyncNotifyCallback")?;
         Ok((Self(codec), events))
     }
 
@@ -146,10 +147,15 @@ impl Encoder {
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_BIT_RATE)?, video.bitrate);
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_FRAME_RATE)?, video.fps);
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL)?, video.keyframe_interval_secs);
-        codec.0.configure(&format, None, MediaCodecDirection::Encoder)?;
-        let window = codec.0.create_input_surface()?;
-        codec.0.start()?;
-        tracing::info!(name = codec.name(), ?video, "encoder started");
+        let name = codec.name();
+        codec
+            .0
+            .configure(&format, None, MediaCodecDirection::Encoder)
+            .inspect_err(|e| tracing::warn!(name, ?video, "configuring the encoder: {e}"))
+            .at("AMediaCodec_configure (encoder)")?;
+        let window = codec.0.create_input_surface().at("AMediaCodec_createInputSurface")?;
+        codec.0.start().at("AMediaCodec_start (encoder)")?;
+        tracing::info!(name, ?video, "encoder started");
         Ok((Self { codec, window, config: Vec::new() }, events))
     }
 
@@ -161,7 +167,7 @@ impl Encoder {
     pub fn request_keyframe(&self) -> Result<(), Error> {
         let mut params = MediaFormat::new();
         params.set_i32(ndk_key!(AMEDIACODEC_KEY_REQUEST_SYNC_FRAME)?, REQUEST);
-        Ok(self.codec.0.set_parameters(params)?)
+        self.codec.0.set_parameters(params).at("AMediaCodec_setParameters (sync frame)")
     }
 
     /// Takes the output reported by [`Event::OutputAvailable`]; `None` for codec config, which is
@@ -178,7 +184,7 @@ impl Encoder {
         } else {
             Some(data.to_vec())
         };
-        self.codec.0.release_output_buffer_by_index(index, false)?;
+        self.codec.0.release_output_buffer_by_index(index, false).at("AMediaCodec_releaseOutputBuffer (encoder)")?;
         Ok(packet.map(|data| Packet { data, presentation_micros: info.presentation_time_us(), keyframe }))
     }
 }
@@ -195,11 +201,43 @@ pub struct Decoder {
 
 impl Decoder {
     /// Decodes into `window`; the stream's own size wins over `width`x`height`.
+    ///
+    /// `low-latency` is a hint, and an optional one — the platform documents it as a feature a
+    /// decoder may or may not have. Some vendors' decoders refuse the whole format for carrying
+    /// it rather than ignoring it, and a call with no picture is a steep price for a hint, so a
+    /// refusal is retried without it. A failed `configure` leaves the codec unusable, so the
+    /// retry builds a new one.
     pub fn new(avc: &Avc, width: i32, height: i32, window: &NativeWindow) -> Result<(Self, Events), Error> {
+        match Self::configured(avc, width, height, window, true) {
+            Ok(decoder) => Ok(decoder),
+            Err(e) => {
+                tracing::warn!("decoder refused a low-latency format ({e}); retrying without it");
+                Self::configured(avc, width, height, window, false)
+            }
+        }
+    }
+
+    fn configured(
+        avc: &Avc,
+        width: i32,
+        height: i32,
+        window: &NativeWindow,
+        low_latency: bool,
+    ) -> Result<(Self, Events), Error> {
         let (codec, events) = Codec::new(MediaCodec::from_decoder_type(&avc.mime))?;
-        codec.0.configure(&base_format(avc, width, height)?, Some(window), MediaCodecDirection::Decoder)?;
-        codec.0.start()?;
-        tracing::info!(name = codec.name(), "decoder started");
+        let mut format = base_format(avc, width, height)?;
+        if low_latency {
+            format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_LOW_LATENCY)?, ENABLED);
+        }
+        // Named before it is configured, so a device that refuses says which codec refused.
+        let name = codec.name();
+        codec
+            .0
+            .configure(&format, Some(window), MediaCodecDirection::Decoder)
+            .inspect_err(|e| tracing::warn!(name, low_latency, width, height, "configuring the decoder: {e}"))
+            .at("AMediaCodec_configure (decoder)")?;
+        codec.0.start().at("AMediaCodec_start (decoder)")?;
+        tracing::info!(name, low_latency, "decoder started");
         Ok((Self { codec }, events))
     }
 
@@ -209,11 +247,14 @@ impl Decoder {
         let target = buffer.get_mut(..data.len()).ok_or(Error::FrameTooLarge(data.len()))?;
         target.write_copy_of_slice(data);
         let flags = if keyframe { KEYFRAME_FLAG } else { NO_FLAGS };
-        Ok(self.codec.0.queue_input_buffer_by_index(index, 0, data.len(), presentation_micros, flags)?)
+        self.codec
+            .0
+            .queue_input_buffer_by_index(index, 0, data.len(), presentation_micros, flags)
+            .at("AMediaCodec_queueInputBuffer")
     }
 
     /// Renders the output reported by [`Event::OutputAvailable`] to the surface.
     pub fn render(&self, index: usize) -> Result<(), Error> {
-        Ok(self.codec.0.release_output_buffer_by_index(index, true)?)
+        self.codec.0.release_output_buffer_by_index(index, true).at("AMediaCodec_releaseOutputBuffer (decoder)")
     }
 }

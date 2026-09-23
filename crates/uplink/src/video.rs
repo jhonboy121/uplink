@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
@@ -50,16 +50,21 @@ impl CallVideo {
     ) -> Result<Self> {
         let VideoParts { sender, incoming: incoming_video, keyframe_requests, stats } = parts;
         let (local_turns, remote_turns) = (Arc::<AtomicU8>::default(), Arc::<AtomicU8>::default());
+        // Three things that can fail differently on a device we do not have. Named, because
+        // "call video: ErrorUnknown" costs a day and a round trip to someone else's phone.
         let mut remote = ImageReader::new_with_usage(
             video.width,
             video.height,
             ImageFormat::PRIVATE,
             HardwareBufferUsage::GPU_SAMPLED_IMAGE,
             REMOTE_MAX_IMAGES,
-        )?;
+        )
+        .context("the reader the remote picture is decoded into")?;
         remote.set_image_listener(Box::new(move |_| on_remote_frame()))?;
-        let (decoder, decoder_events) = Decoder::new(avc, video.width, video.height, &remote.window()?)?;
-        let (encoder, encoder_events) = Encoder::new(avc, video)?;
+        let window = remote.window().context("the reader's surface")?;
+        let (decoder, decoder_events) =
+            Decoder::new(avc, video.width, video.height, &window).context("the decoder")?;
+        let (encoder, encoder_events) = Encoder::new(avc, video).context("the encoder")?;
         let encoder_window = encoder.window().clone();
 
         let mut tasks = Tasks::new(runtime);

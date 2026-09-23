@@ -18,6 +18,7 @@ use ndk::audio::{
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::Error;
+use crate::error::At;
 
 pub const SAMPLE_RATE: i32 = 48_000;
 const CHANNELS: i32 = 1;
@@ -67,7 +68,7 @@ pub struct Rings {
 
 fn builder(direction: AudioDirection, health: &Arc<AudioHealth>, what: &'static str) -> Result<AudioStreamBuilder, Error> {
     let health = Arc::clone(health);
-    Ok(AudioStreamBuilder::new()?
+    Ok(AudioStreamBuilder::new().at("AAudio_createStreamBuilder")?
         .direction(direction)
         .format(AudioFormat::PCM_I16)
         .channel_count(CHANNELS)
@@ -109,8 +110,9 @@ pub fn open(health: &Arc<AudioHealth>) -> Result<(Streams, Rings), Error> {
             }
             AudioCallbackResult::Continue
         }))
-        .open_stream()?;
-    capture.request_start()?;
+        .open_stream()
+        .at("AAudioStreamBuilder_openStream (capture)")?;
+    capture.request_start().at("AAudioStream_requestStart (capture)")?;
 
     let played = Arc::clone(health);
     let playback = builder(AudioDirection::Output, health, "playback")?
@@ -130,8 +132,9 @@ pub fn open(health: &Arc<AudioHealth>) -> Result<(Streams, Rings), Error> {
             }
             AudioCallbackResult::Continue
         }))
-        .open_stream()?;
-    playback.request_start()?;
+        .open_stream()
+        .at("AAudioStreamBuilder_openStream (playback)")?;
+    playback.request_start().at("AAudioStream_requestStart (playback)")?;
 
     let streams = Streams { capture, playback };
     let (capture, playback) = (&streams.capture, &streams.playback);

@@ -28,10 +28,19 @@ pub enum Error {
     GlObject,
     #[error(transparent)]
     Jni(#[from] jni::errors::Error),
-    #[error(transparent)]
-    Media(#[from] ndk::media_error::MediaError),
-    #[error(transparent)]
-    Audio(#[from] ndk::audio::AudioError),
+    /// What Java actually said. `jni` reports any throw as the single word "JavaException" and
+    /// leaves the throwable pending, so without lifting its own text across, the one sentence
+    /// describing the failure never reaches the log.
+    #[error("java threw: {0}")]
+    Thrown(String),
+    // No `#[from]`: both of these print as a bare variant name and nothing else — `MediaError`'s
+    // Display is `{:?}` of itself — so an anonymous `?` puts "ErrorUnknown" in the log and the
+    // reader is left to guess which of a dozen platform calls produced it. Naming the call is
+    // the only thing that carries information, so the conversion has to be written out.
+    #[error("{call}: {source:?}")]
+    Media { call: &'static str, source: ndk::media_error::MediaError },
+    #[error("{call}: {source:?}")]
+    Audio { call: &'static str, source: ndk::audio::AudioError },
     #[error("voice stream disconnected while audio was being re-routed")]
     AudioRouting,
     #[error(transparent)]
@@ -42,4 +51,21 @@ pub enum Error {
     TooBig(#[from] std::num::TryFromIntError),
     #[error(transparent)]
     Core(#[from] uplink_core::Error),
+}
+
+/// Names the platform call a failure came from, for the errors that cannot describe themselves.
+pub trait At<T> {
+    fn at(self, call: &'static str) -> Result<T, Error>;
+}
+
+impl<T> At<T> for Result<T, ndk::media_error::MediaError> {
+    fn at(self, call: &'static str) -> Result<T, Error> {
+        self.map_err(|source| Error::Media { call, source })
+    }
+}
+
+impl<T> At<T> for Result<T, ndk::audio::AudioError> {
+    fn at(self, call: &'static str) -> Result<T, Error> {
+        self.map_err(|source| Error::Audio { call, source })
+    }
 }
