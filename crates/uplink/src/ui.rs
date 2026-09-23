@@ -48,6 +48,9 @@ slint::slint! {
     // one Android will not ask about again, which is the only case that needs Settings.
     export enum Grant { needed, granted, blocked }
 
+    // What is waiting on a yes. `none` is the usual state.
+    export enum Confirm { none, remove-contact, remove-selected, clear-calls }
+
     export struct PermissionItem {
         name: string,
         why: string,
@@ -65,6 +68,7 @@ slint::slint! {
         initial: string,
         tint: int,
         favourite: bool,
+        selected: bool,
     }
 
     export enum Appearance { system, light, dark }
@@ -139,6 +143,7 @@ slint::slint! {
         out property <length> splash-gap: 20px;
         out property <length> splash-foot: 32px;
         out property <length> group-head: 30px;
+        out property <length> brand: 26px;
         out property <length> sheet-width: 320px;
         out property <length> toast-bottom: 88px;
         // Long enough to read a sentence, short enough not to sit in the way.
@@ -210,6 +215,19 @@ slint::slint! {
         animate opacity, background { duration: 160ms; easing: ease-out; }
     }
 
+    // The mark, small, at the end of every app bar — so whichever screen someone is looking at
+    // still says whose app it is.
+    component Brand inherits VerticalLayout {
+        alignment: center;
+        Image {
+            source: Theme.dark ? @image-url("icons/mark.svg") : @image-url("icons/mark-light.svg");
+            width: Theme.brand;
+            height: self.width;
+            accessible-role: image;
+            accessible-label: "uplink";
+        }
+    }
+
     component PageTitle inherits Text {
         color: Theme.text;
         font-family: Theme.display;
@@ -224,20 +242,22 @@ slint::slint! {
     component Wide inherits Rectangle {
         in property <string> text;
         in property <bool> primary: false;
+        in property <bool> danger: false;
         in property <bool> enabled: true;
         callback clicked();
+        property <color> accent: root.danger ? Theme.end : Theme.beacon;
         height: Theme.wide-height;
         border-radius: Theme.wide-radius;
-        background: root.primary ? Theme.beacon : Theme.beacon.with-alpha(0.12);
+        background: root.primary ? Theme.beacon : self.accent.with-alpha(0.12);
         border-width: root.primary ? 0px : 1px;
-        border-color: Theme.beacon.with-alpha(0.30);
+        border-color: self.accent.with-alpha(0.30);
         opacity: root.enabled ? 1.0 : 0.45;
         accessible-role: button;
         accessible-label: text;
         accessible-action-default => { root.clicked(); }
         Text {
             text: root.text;
-            color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : Theme.beacon;
+            color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : root.accent;
             font-size: 1rem;
             font-weight: root.primary ? 600 : 400;
             height: self.font-size * Theme.line-box;
@@ -431,26 +451,34 @@ slint::slint! {
     // The design's one button shape: an outlined pill, for both the header action and Call.
     component Pill inherits Rectangle {
         in property <string> text;
+        in property <bool> danger: false;
+        in property <bool> enabled: true;
         callback clicked();
+        property <color> accent: root.danger ? Theme.end : Theme.beacon;
         height: Theme.pill-height;
         width: label.preferred-width + 28px;
         border-radius: self.height / 2;
         background: transparent;
         border-width: 1px;
-        border-color: Theme.beacon.with-alpha(0.35);
+        border-color: root.accent.with-alpha(0.35);
+        opacity: root.enabled ? 1.0 : 0.4;
         accessible-role: button;
         accessible-label: text;
         accessible-action-default => { root.clicked(); }
         label := Text {
             text: root.text;
-            color: Theme.beacon;
+            color: root.accent;
             font-size: 0.8125rem;
         }
         touch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.clicked(); }
+            mouse-cursor: root.enabled ? pointer : default;
+            clicked => {
+                if (root.enabled) {
+                    root.clicked();
+                }
+            }
         }
-        states [ pressed when touch.pressed : { opacity: 0.6; } ]
+        states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
         animate opacity { duration: 160ms; easing: ease-out; }
     }
 
@@ -539,9 +567,15 @@ slint::slint! {
         in property <[ContactItem]> contacts;
         in property <length> top-inset;
         in property <bool> online;
+        in property <bool> selecting;
+        in property <int> selected-count;
         callback call(string);
         callback open(string);
         callback connect();
+        callback select(string);
+        callback start-selecting();
+        callback stop-selecting();
+        callback remove-selected();
         background: Theme.ground;
 
         VerticalLayout {
@@ -553,12 +587,28 @@ slint::slint! {
                 padding-right: Theme.edge;
                 padding-bottom: Theme.bar-bottom;
                 PageTitle {
-                    text: "People";
+                    text: root.selecting ? root.selected-count + " selected" : "People";
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
+                if root.selecting : VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Remove";
+                        danger: true;
+                        enabled: root.selected-count > 0;
+                        clicked => { root.remove-selected(); }
+                    }
+                }
+                if root.selecting : VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Done";
+                        clicked => { root.stop-selecting(); }
+                    }
+                }
                 // Reachability, not diagnostics: whether someone could call you right now.
-                VerticalLayout {
+                if !root.selecting : VerticalLayout {
                     alignment: center;
                     Rectangle {
                         height: Theme.pill-height;
@@ -574,6 +624,14 @@ slint::slint! {
                         }
                     }
                 }
+                if !root.selecting && root.contacts.length > 0 : VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Select";
+                        clicked => { root.start-selecting(); }
+                    }
+                }
+                Brand { }
             }
 
             if root.contacts.length == 0 : Rectangle {
@@ -636,9 +694,17 @@ slint::slint! {
                             // now has more to do to it than one button can carry.
                             open-touch := TouchArea {
                                 mouse-cursor: pointer;
-                                clicked => { root.open(contact.id); }
+                                clicked => {
+                                    if (root.selecting) {
+                                        root.select(contact.id);
+                                    } else {
+                                        root.open(contact.id);
+                                    }
+                                }
                             }
-                            background: open-touch.pressed ? Theme.surface : transparent;
+                            background: contact.selected ? Theme.raised
+                                : open-touch.pressed ? Theme.surface
+                                : transparent;
                             animate background { duration: 160ms; easing: ease-out; }
                             accessible-role: button;
                             accessible-label: contact.name;
@@ -682,9 +748,17 @@ slint::slint! {
                                 }
                                 VerticalLayout {
                                     alignment: center;
-                                    Pill {
+                                    if !root.selecting : Pill {
                                         text: "Call";
                                         clicked => { root.call(contact.id); }
+                                    }
+                                    if root.selecting : Image {
+                                        source: contact.selected
+                                            ? @image-url("icons/check-on.svg")
+                                            : @image-url("icons/check-off.svg");
+                                        width: Theme.key-icon;
+                                        height: self.width;
+                                        colorize: contact.selected ? Theme.beacon : Theme.muted;
                                     }
                                 }
                             }
@@ -693,6 +767,55 @@ slint::slint! {
                 }
             }
 
+        }
+    }
+
+    // Anything that cannot be undone asks first. A tap is cheap and a key may be gone for good.
+    component ConfirmSheet inherits Rectangle {
+        in property <string> title;
+        in property <string> body;
+        in property <string> confirm-label;
+        callback confirm();
+        callback cancel();
+        background: #000000CC;
+
+        // Swallows taps on the dimmed area, so the sheet is dismissed deliberately.
+        TouchArea { }
+
+        Rectangle {
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+            height: body-layout.preferred-height;
+            border-radius: Theme.wide-radius;
+            background: Theme.ground;
+            body-layout := VerticalLayout {
+                padding: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-family: Theme.display;
+                    font-size: 1.1875rem;
+                    font-weight: 600;
+                    height: self.font-size * Theme.line-box;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.body;
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    wrap: word-wrap;
+                }
+                Wide {
+                    text: root.confirm-label;
+                    danger: true;
+                    clicked => { root.confirm(); }
+                }
+                Wide {
+                    text: "Keep";
+                    clicked => { root.cancel(); }
+                }
+            }
         }
     }
 
@@ -910,9 +1033,11 @@ slint::slint! {
                     alignment: center;
                     Pill {
                         text: "Clear";
+                        danger: true;
                         clicked => { root.clear(); }
                     }
                 }
+                Brand { }
             }
 
             if root.calls.length == 0 : Rectangle {
@@ -1044,6 +1169,7 @@ slint::slint! {
                         clicked => { root.scan(false); }
                     }
                 }
+                Brand { }
             }
 
             // Code, fingerprint and actions are one stack, as the design has them; the slack
@@ -1128,7 +1254,13 @@ slint::slint! {
                 padding-left: Theme.edge;
                 padding-right: Theme.edge;
                 padding-bottom: Theme.bar-bottom;
-                PageTitle { text: "Settings"; }
+                spacing: Theme.gap;
+                PageTitle {
+                    text: "Settings";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Brand { }
             }
             // A flat list like the design's, hairline above every row including the first.
             DetailRow {
@@ -1386,6 +1518,9 @@ slint::slint! {
         in property <[CallItem]> calls;
         in property <bool> online: false;
         in-out property <string> toast;
+        in-out property <Confirm> confirming: Confirm.none;
+        in-out property <bool> selecting: false;
+        in property <int> selected-count: 0;
         // The contact being looked at. Empty means none, which is also how it is dismissed.
         in-out property <string> open-contact-id;
         in property <string> open-contact-name;
@@ -1430,6 +1565,9 @@ slint::slint! {
         callback clear-calls();
         callback open-contact(string);
         callback set-favourite(string, bool);
+        callback toggle-selected(string);
+        callback clear-selection();
+        callback remove-selected();
 
         title: "uplink";
         background: Theme.ground;
@@ -1451,15 +1589,21 @@ slint::slint! {
                     top-inset: root.safe-area-insets.top;
                     online: root.online;
                     contacts: root.contacts;
+                    selecting: root.selecting;
+                    selected-count: root.selected-count;
                     call(id) => { root.call(id); }
                     open(id) => { root.open-contact(id); }
                     connect => { root.screen = Screen.connect; }
+                    select(id) => { root.toggle-selected(id); }
+                    start-selecting => { root.selecting = true; }
+                    stop-selecting => { root.clear-selection(); }
+                    remove-selected => { root.confirming = Confirm.remove-selected; }
                 }
                 if root.screen == Screen.calls : CallsPage {
                     top-inset: root.safe-area-insets.top;
                     calls: root.calls;
                     call(id) => { root.call(id); }
-                    clear => { root.clear-calls(); }
+                    clear => { root.confirming = Confirm.clear-calls; }
                 }
                 if root.screen == Screen.connect : KeyPage {
                     top-inset: root.safe-area-insets.top;
@@ -1543,6 +1687,29 @@ slint::slint! {
             }
         }
 
+        // Nothing here happens on the tap that asked for it.
+        if root.confirming != Confirm.none : ConfirmSheet {
+            title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
+                : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
+                : "Remove " + root.open-contact-name + "?";
+            body: root.confirming == Confirm.clear-calls
+                ? "Every call is forgotten. It does not affect your contacts."
+                : "Their key goes with them. You would need it again to call them, and they can still call you.";
+            confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
+            confirm => {
+                if (root.confirming == Confirm.clear-calls) {
+                    root.clear-calls();
+                } else if (root.confirming == Confirm.remove-selected) {
+                    root.remove-selected();
+                } else {
+                    root.remove-contact(root.open-contact-id);
+                    root.open-contact-id = "";
+                }
+                root.confirming = Confirm.none;
+            }
+            cancel => { root.confirming = Confirm.none; }
+        }
+
         // A key that has arrived and has no name yet, over everything below it.
         if root.peer-key != "" : NameSheet {
             key: root.peer-key;
@@ -1566,10 +1733,7 @@ slint::slint! {
             call => { root.call(root.open-contact-id); }
             toggle-favourite => { root.set-favourite(root.open-contact-id, !root.open-contact-favourite); }
             rename(name) => { root.rename-contact(root.open-contact-id, name); }
-            remove => {
-                root.remove-contact(root.open-contact-id);
-                root.open-contact-id = "";
-            }
+            remove => { root.confirming = Confirm.remove-contact; }
             close => { root.open-contact-id = ""; }
         }
 

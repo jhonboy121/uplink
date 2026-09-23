@@ -115,6 +115,9 @@ struct State {
     scan_busy: Arc<AtomicBool>,
     contacts: Contacts,
     log: CallLog,
+    /// Contacts ticked for removal. Kept here rather than in the model, which is rebuilt whenever
+    /// the list changes and would drop the ticks with it.
+    selected: std::collections::HashSet<EndpointId>,
     /// The call in flight, so its outcome is known by the time it ends.
     pending: Option<PendingCall>,
     connected_at: Option<Instant>,
@@ -386,10 +389,11 @@ fn qr_image(id: &EndpointId) -> Result<slint::Image> {
 
 /// Contacts for the list, in the order they were added.
 fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
-    let items = with_contacts(state, |contacts| {
+    let items = with_state_value(state, |s| {
         // The store already orders favourites first, so a group starts wherever the flag changes.
         let mut previous: Option<bool> = None;
-        contacts
+        let selected = &s.selected;
+        s.contacts
             .iter()
             .map(|contact| {
                 let header = match previous {
@@ -406,6 +410,7 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
                     initial: contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
                     tint: 0,
                     favourite: contact.favourite,
+                    selected: selected.contains(&contact.id),
                 }
             })
             .collect::<Vec<_>>()
@@ -413,6 +418,8 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     if let Some(items) = items {
         ui.set_contacts(slint::ModelRc::new(slint::VecModel::from(items)));
     }
+    let count = with_state_value(state, |s| i32::try_from(s.selected.len()).unwrap_or(i32::MAX));
+    ui.set_selected_count(count.unwrap_or_default());
 }
 
 /// Fills the contact sheet, and closes it if that key is no longer a contact. Refreshing one that
@@ -922,6 +929,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         scan_busy: Arc::default(),
         contacts,
         log,
+        selected: std::collections::HashSet::new(),
         pending: None,
         connected_at: None,
         stats: Arc::default(),
@@ -962,6 +970,44 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     show_contacts(&state, &ui);
     show_calls(&state, &ui);
 
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_toggle_selected(move |id| {
+        let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
+        with_state(&s, |state| {
+            if !state.selected.remove(&peer) {
+                state.selected.insert(peer);
+            }
+        });
+        if let Some(ui) = weak.upgrade() {
+            show_contacts(&s, &ui);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_clear_selection(move || {
+        with_state(&s, |state| state.selected.clear());
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selecting(false);
+            show_contacts(&s, &ui);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_remove_selected(move || {
+        // Taken first so a failure part-way leaves the rest of the list alone.
+        let chosen = with_state_value(&s, |state| state.selected.drain().collect::<Vec<_>>()).unwrap_or_default();
+        let mut failed = 0;
+        for peer in &chosen {
+            if save_contact(&s, |contacts| contacts.remove_id(*peer).map(drop)).is_err() {
+                failed += 1;
+            }
+        }
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selecting(false);
+            show_contacts(&s, &ui);
+            if failed > 0 {
+                toast(&ui, format!("{failed} of {} could not be removed", chosen.len()));
+            }
+        }
+    });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_open_contact(move |id| {
         let Some(ui) = weak.upgrade() else { return };

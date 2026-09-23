@@ -17,7 +17,7 @@ mod dump;
 #[path = "../../../crates/uplink/src/ui.rs"]
 mod ui;
 
-use ui::{App, Appearance, CallItem, CallState, ContactItem, Grant, PermissionItem, Screen, Theme};
+use ui::{App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, Screen, Theme};
 
 /// Logical pixels.
 /// The S24 Ultra is 1440x3120 at 3x. `UPLINK_PREVIEW_SIZE=360x799` renders at the design's own
@@ -97,6 +97,16 @@ fn main() -> Result<()> {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
+
+    // Picking several to remove, and the sheet that asks before anything goes.
+    app.set_screen(Screen::People);
+    app.set_selecting(true);
+    app.set_selected_count(2);
+    shoot(&window, &app, canvas, "selecting")?;
+    app.set_confirming(Confirm::RemoveSelected);
+    shoot(&window, &app, canvas, "confirm")?;
+    app.set_confirming(Confirm::None);
+    app.set_selecting(false);
 
     // One contact, opened from People.
     app.set_screen(Screen::People);
@@ -186,6 +196,7 @@ fn populate(app: &App) -> Result<()> {
             initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
             tint: 0,
             favourite,
+            selected: false,
         })
         .collect();
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(contacts)));
