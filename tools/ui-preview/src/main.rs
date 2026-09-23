@@ -28,6 +28,8 @@ const FRAME_STEP: Duration = Duration::from_millis(16);
 /// Long enough for the answer transition (620ms) to finish.
 const SETTLE_FRAMES: u32 = 48;
 const OUT_DIR: &str = "target/ui-preview";
+/// What the app asks for, so the preview's code is drawn at the same scale.
+const QR_PIXELS: usize = 512;
 /// Fingerprint grouping, as the app formats it.
 const GROUP: usize = 4;
 const FULL_GROUPS: usize = 8;
@@ -226,7 +228,9 @@ fn populate(app: &App) -> Result<()> {
     app.set_my_id(keys[0].1.into());
     app.set_my_fingerprint_lines(fingerprint_lines(keys[0].1));
     app.set_my_short_fingerprint(groups(keys[0].1, SELF_GROUPS, " · ").into());
-    app.set_qr(qr_image(keys[0].1)?);
+    let (qr, mark) = qr_image(keys[0].1)?;
+    app.set_qr(qr);
+    app.set_qr_mark(mark);
     app.set_peer_name("Noor".into());
     app.set_peer_initial("N".into());
     app.set_call_timer("04:12".into());
@@ -288,13 +292,18 @@ fn groups(key: &str, count: usize, separator: &str) -> String {
         .join(separator)
 }
 
-fn qr_image(key: &str) -> Result<slint::Image> {
-    let (luma, side) = uplink_core::qr::render(key, 512)?;
+/// The code, and the share of its width the mark in the middle covers.
+fn qr_image(key: &str) -> Result<(slint::Image, f32)> {
+    let matrix = uplink_core::qr::encode(key)?;
+    let (luma, side) = matrix.render(QR_PIXELS);
+    let side = u32::try_from(side)?;
     let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
     for (pixel, value) in buffer.make_mut_slice().iter_mut().zip(luma) {
         *pixel = slint::Rgb8Pixel { r: value, g: value, b: value };
     }
-    Ok(slint::Image::from_rgb8(buffer))
+    #[expect(clippy::cast_precision_loss, reason = "a code is at most 177 modules across")]
+    let mark = matrix.logo() as f32 / matrix.framed() as f32;
+    Ok((slint::Image::from_rgb8(buffer), mark))
 }
 
 /// A gradient where a camera frame would be, so the call screens aren't reviewed against black.

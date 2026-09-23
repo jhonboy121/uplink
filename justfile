@@ -17,6 +17,7 @@ build_tools_version := "37.0.0"
 android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
 call_service := "dev.uplink.UplinkCallService"
+files_provider := "dev.uplink.UplinkFiles"
 adb_user := "0"
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
@@ -112,12 +113,16 @@ apk: build dex
     stage=$(mktemp -d)
     unsigned="$stage.apk"
     trap 'rm -rf "$stage" "$unsigned"' EXIT
-    mkdir -p "$stage/lib/arm64-v8a" "{{out_dir}}"
+    mkdir -p "$stage/lib/arm64-v8a" "$stage/assets" "{{out_dir}}"
     strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
     cp "{{dex_dir}}/classes.dex" "$stage/"
+    # What the Java side draws the shared identity card with. The UI reaches these through the
+    # slint! macro's include path instead, so this is the same file, not a second copy.
+    cp assets/icons/mark-badge.png assets/fonts/Outfit-SemiBold.ttf "$stage/assets/"
     cargo run -q -p android-res -- compile --out "$stage" \
         --define package={{app_id}} --define label={{app_label}} --define lib={{lib}} \
         --define activity={{activity}} --define service={{call_service}} \
+        --define provider={{files_provider}} \
         --define minSdk={{min_sdk}} --define targetSdk={{target_sdk}} \
         --define versionCode={{version_code}} --define versionName=0.{{version_code}} \
         --define debuggable={{ if debuggable == "1" { "true" } else { "false" } }}

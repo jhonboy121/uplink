@@ -268,8 +268,6 @@ default); keep disk usage lean. Avoid build scripts.
 - **2026-09-23**: **noted while designing the shell, all still to do.**
   - **Your own identity must never become a contact.** Refuse it wherever a key is accepted — scan, image, paste — with
     a plain message rather than a silent no-op. Calling yourself is not a feature.
-  - **Sharing an identity shares the code as an image**, the way a UPI app does, not a line of text. The picture is the
-    thing people actually send each other, and a scanned image is already a supported way in.
   - **Errors belong inline** where the thing went wrong; a modal only when the user has to decide something. A toast
     that disappears is not an error report.
   - **Nothing destructive happens on one tap.** Clearing the call log and removing a contact both
@@ -314,3 +312,19 @@ default); keep disk usage lean. Avoid build scripts.
   focused field back into view, and the naming sheet centres itself in what the keyboard leaves
   rather than in the window. Separately: a `ScrollView` does **not** pan under a finger unless
   `mouse-drag-pan-enabled` is set — every list in the app was drag-only on its scrollbar.
+- **2026-09-23**: **an identity is shared as its code, not as its key.** "Share my identity" now
+  sends a picture — the code with the uplink mark on a plate in the middle and *Scan to connect*
+  under it — the way a payment app does, because a picture is both what people send each other and
+  something the other side can already open with "Choose an image".
+  The mark in the middle is why every code is now drawn at error correction **H**: level H spends
+  about 30% of the code on recovery and the mark covers a fifth of its width, which is a
+  twenty-fifth of its area. `qr::Matrix::logo` owns that number, a test punches exactly that hole
+  and decodes the result, and both the screen and the shared card are drawn from it — the UI gets
+  it as a fraction, Java as a count of modules.
+  The drawing is Java's: `IdentityCard` has a text engine and a PNG writer, which Rust here does
+  not, so Rust sends the modules and Java draws paper, code, plate, mark and caption. Sharing a
+  file needs a `content://` URI at this target level, so there is a minimal read-only
+  `ContentProvider` (`UplinkFiles`) over one cache directory rather than a dependency on androidx.
+  The mark's art is **not centred in its own 48-unit viewBox** (it runs y 4.4–38.75), so the badge
+  is a separate render from `mark.py` with the art's bounding box as the viewBox; a square crop of
+  the viewBox would hang the mark high on its plate.

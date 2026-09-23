@@ -50,6 +50,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Serves the one cache directory a shared picture is written to. Not exported: a target
+             the user picked from the chooser reads the URI it was granted, and nothing else. -->
+        <provider
+            android:name="${provider}"
+            android:authorities="${package}.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <!-- foregroundServiceType 0xc0 = camera | microphone. -->
         <service
             android:name="${service}"

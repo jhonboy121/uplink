@@ -138,6 +138,9 @@ slint::slint! {
         out property <length> stack-top: 17px;
         out property <length> qr-size: 171px;
         out property <length> qr-pad: 12px;
+        // The mark on its plate in the middle of a code: the plate is round, so what fits inside
+        // it is the square on its diameter — 1/√2 of the width, not all of it.
+        out property <float> mark-in-plate: 0.707;
         // The splash, scaled from the design's frame like everything else.
         out property <length> splash-mark: 105px;
         out property <length> splash-gap: 20px;
@@ -1157,6 +1160,7 @@ slint::slint! {
     component KeyPage inherits Rectangle {
         in property <length> top-inset;
         in property <image> qr;
+        in property <float> mark;
         in property <image> frame;
         in property <[string]> fingerprint-lines;
         in property <bool> scanning;
@@ -1206,11 +1210,25 @@ slint::slint! {
                         border-radius: Theme.wide-radius;
                         background: root.scanning ? Theme.surface : #FFFFFF;
                         clip: true;
-                        Image {
+                        code := Image {
                             width: parent.width - (root.scanning ? 0px : Theme.qr-pad * 2);
                             height: self.width;
                             source: root.scanning ? root.frame : root.qr;
                             image-fit: root.scanning ? ImageFit.cover : ImageFit.contain;
+                        }
+                        // The mark in the middle, the way a payment app puts its own there. The
+                        // code is drawn with the error correction to lose it: `mark` is the share
+                        // of its width uplink-core says can go, and the plate stays inside that.
+                        if !root.scanning : Rectangle {
+                            width: code.width * root.mark;
+                            height: self.width;
+                            border-radius: self.width / 2;
+                            background: #FFFFFF;
+                            Image {
+                                source: @image-url("icons/mark-badge.png");
+                                width: parent.width * Theme.mark-in-plate;
+                                height: self.width;
+                            }
                         }
                     }
                 }
@@ -1522,6 +1540,8 @@ slint::slint! {
         in property <image> frame;
         in property <image> remote-frame;
         in property <image> qr;
+        // The share of the code's width the mark in its middle may cover; uplink-core picks it.
+        in property <float> qr-mark;
         in property <string> my-id;
         in property <[string]> my-fingerprint-lines;
         in property <string> my-short-fingerprint;
@@ -1638,6 +1658,7 @@ slint::slint! {
                 if root.screen == Screen.connect : KeyPage {
                     top-inset: root.safe-area-insets.top;
                     qr: root.qr;
+                    mark: root.qr-mark;
                     frame: root.frame;
                     fingerprint-lines: root.my-fingerprint-lines;
                     scanning: root.scanning;

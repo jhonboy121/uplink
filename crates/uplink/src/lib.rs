@@ -63,7 +63,10 @@ const FINGERPRINT_GROUPS: usize = 8;
 /// A contact row and the "Your key" row show only the leading groups.
 const FINGERPRINT_ROW_GROUPS: usize = 4;
 const FINGERPRINT_SELF_GROUPS: usize = 3;
-const QR_PIXELS: u32 = 512;
+const QR_PIXELS: usize = 512;
+/// Under the code on the shared picture, and the name the chooser goes out under.
+const SHARE_CAPTION: &str = "Scan to connect";
+const SHARE_TITLE: &str = "My uplink code";
 // Scanning: CPU-readable frames, big enough to read a code held up to the camera.
 const SCAN_WIDTH: i32 = 960;
 const SCAN_HEIGHT: i32 = 720;
@@ -377,14 +380,37 @@ fn short(id: &EndpointId) -> String {
     id.fmt_short().to_string()
 }
 
-/// The key as a QR image. `qrcode` draws it; we only widen its greyscale to the RGB Slint takes.
-fn qr_image(id: &EndpointId) -> Result<slint::Image> {
-    let (luma, side) = qr::render(&id.to_string(), QR_PIXELS)?;
+/// The key as a QR image, and the share of its width the mark in the middle may cover. Only the
+/// widening of the greyscale to the RGB Slint takes happens here; the code itself is core's.
+fn qr_image(id: &EndpointId) -> Result<(slint::Image, f32)> {
+    let matrix = qr::encode(&id.to_string())?;
+    let (luma, side) = matrix.render(QR_PIXELS);
+    let side = u32::try_from(side).unwrap_or_default();
     let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
     for (pixel, value) in buffer.make_mut_slice().iter_mut().zip(luma) {
         *pixel = slint::Rgb8Pixel { r: value, g: value, b: value };
     }
-    Ok(slint::Image::from_rgb8(buffer))
+    Ok((slint::Image::from_rgb8(buffer), ratio(matrix.logo(), matrix.framed())))
+}
+
+/// Hands the identity to the share sheet as a picture of its code. The encoding is ours, the
+/// drawing is Java's, because that is where there is a text engine for the line underneath.
+fn share_identity(platform: &Platform, key: &str) -> Result<()> {
+    let matrix = qr::encode(key)?;
+    Ok(platform.share_identity(
+        &matrix.modules,
+        matrix.size,
+        matrix.logo(),
+        SHARE_CAPTION,
+        SHARE_TITLE,
+    )?)
+}
+
+/// A count of modules as a share of the whole drawing.
+fn ratio(part: usize, whole: usize) -> f32 {
+    #[expect(clippy::cast_precision_loss, reason = "a code is at most 177 modules across")]
+    let ratio = part as f32 / whole.max(1) as f32;
+    ratio
 }
 
 /// Contacts for the list, in the order they were added.
@@ -964,7 +990,10 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     ui.set_my_fingerprint_lines(fingerprint_lines(&identity));
     ui.set_my_short_fingerprint(groups(&identity, FINGERPRINT_SELF_GROUPS, " · ").into());
     match qr_image(&identity) {
-        Ok(image) => ui.set_qr(image),
+        Ok((image, mark)) => {
+            ui.set_qr(image);
+            ui.set_qr_mark(mark);
+        }
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
     show_contacts(&state, &ui);
@@ -1194,9 +1223,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let (p, weak) = (Rc::clone(&platform), ui.as_weak());
     ui.on_share_key(move || {
         let Some(ui) = weak.upgrade() else { return };
-        if let Err(e) = p.share_text(&ui.get_my_id(), "My uplink key") {
-            tracing::error!("sharing the key: {e}");
-            ui.set_call_status(format!("could not share: {e}").into());
+        // The picture, not the key: a code is what someone points a camera at, and it is what
+        // arrives if they save it and open it from the other side.
+        if let Err(e) = share_identity(&p, &ui.get_my_id()) {
+            tracing::error!("sharing the identity: {e:#}");
+            toast(&ui, "Could not share your code");
         }
     });
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());

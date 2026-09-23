@@ -249,15 +249,33 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
-    /// Offers `text` to the share sheet — how a key reaches someone who isn't in the room.
-    pub fn share_text(&self, text: &str, subject: &str) -> Result<(), Error> {
+    /// Offers the identity to the share sheet as a picture of its code — the thing people
+    /// actually send each other. `modules` is the code row by row, `logo` how many of them the
+    /// mark in the middle covers, and Java draws the rest.
+    pub fn share_identity(
+        &self,
+        modules: &[bool],
+        size: usize,
+        logo: usize,
+        caption: &str,
+        title: &str,
+    ) -> Result<(), Error> {
+        let dark: Vec<u8> = modules.iter().map(|&dark| u8::from(dark)).collect();
+        let (size, logo) = (jint::try_from(size)?, jint::try_from(logo)?);
         self.with_activity(|env, activity| {
-            let (text, subject) = (env.new_string(text)?, env.new_string(subject)?);
+            let dark = env.byte_array_from_slice(&dark)?;
+            let (caption, title) = (env.new_string(caption)?, env.new_string(title)?);
             env.call_method(
                 activity,
-                jni_str!("shareText"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
-                &[JValue::Object(&text), JValue::Object(&subject)],
+                jni_str!("shareIdentity"),
+                jni_sig!("([BIILjava/lang/String;Ljava/lang/String;)V"),
+                &[
+                    JValue::Object(&dark),
+                    JValue::Int(size),
+                    JValue::Int(logo),
+                    JValue::Object(&caption),
+                    JValue::Object(&title),
+                ],
             )?;
             Ok(())
         })

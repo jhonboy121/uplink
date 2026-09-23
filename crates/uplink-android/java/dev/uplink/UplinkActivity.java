@@ -1,5 +1,6 @@
 package dev.uplink;
 
+import android.content.ClipData;
 import android.content.Intent;
 import android.app.NativeActivity;
 import android.graphics.Bitmap;
@@ -9,6 +10,8 @@ import android.provider.Settings;
 import android.util.Log;
 import android.view.WindowInsetsController;
 
+import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 
 /**
@@ -122,16 +125,26 @@ public class UplinkActivity extends NativeActivity {
         }
     }
 
-    /** Hands `text` to whatever the user wants to send it with. */
-    void shareText(final String text, final String subject) {
+    /**
+     * Sends the identity as a picture: the code with the mark in it, drawn by {@link IdentityCard}
+     * from the modules Rust encodes. The drawing and the file are done on the calling thread, so
+     * a failure is thrown back to Rust rather than disappearing into a posted runnable.
+     */
+    void shareIdentity(byte[] modules, int size, int logo, String caption, final String title)
+            throws IOException {
+        File card = IdentityCard.write(this, modules, size, logo, caption);
+        final Uri uri = UplinkFiles.uriFor(this, card);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 Intent send = new Intent(Intent.ACTION_SEND);
-                send.setType("text/plain");
-                send.putExtra(Intent.EXTRA_TEXT, text);
-                send.putExtra(Intent.EXTRA_SUBJECT, subject);
-                startActivity(Intent.createChooser(send, subject));
+                send.setType("image/png");
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+                // The chooser reads the grant off the clip data, so a target that never looks at
+                // EXTRA_STREAM still gets permission for the file.
+                send.setClipData(ClipData.newUri(getContentResolver(), title, uri));
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(send, title));
             }
         });
     }
