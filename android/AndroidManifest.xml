@@ -33,7 +33,10 @@
         <!-- configChanges: the native side handles these rather than being restarted.
              0x1ff0 = keyboard | keyboardHidden | orientation | screenLayout | uiMode |
                       screenSize | smallestScreenSize | density.
-             windowSoftInputMode 0x10 = adjustResize, so the IME does not cover the field. -->
+             windowSoftInputMode 0x10 = adjustResize. Under the enforced edge-to-edge of recent
+             target levels the window is not actually resized; the keyboard arrives as an inset,
+             which the UI reads as `virtual-keyboard-size`. The flag stays for the levels and
+             display modes where Android still honours it. -->
         <activity
             android:name="${activity}"
             android:exported="true"

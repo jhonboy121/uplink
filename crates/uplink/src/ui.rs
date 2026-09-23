@@ -665,6 +665,8 @@ slint::slint! {
             }
             if root.contacts.length > 0 : ScrollView {
                 vertical-stretch: 1;
+                // A finger drags the list itself; without this only the scrollbar moves it.
+                mouse-drag-pan-enabled: true;
                 VerticalLayout {
                     alignment: start;
                     // A flat list: rows are divided by a hairline, never boxed. The hairline is
@@ -824,6 +826,7 @@ slint::slint! {
     // thing left to do should not be somewhere else.
     component NameSheet inherits Rectangle {
         in property <string> key;
+        in property <length> keyboard;
         in-out property <string> name;
         callback add(string);
         callback cancel();
@@ -835,6 +838,10 @@ slint::slint! {
         Rectangle {
             width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
             height: body.preferred-height;
+            // Centred in what the keyboard leaves, not in the window, so the field the sheet
+            // exists for is never the part that ends up underneath it.
+            y: max(Theme.edge, (parent.height - root.keyboard - self.height) / 2);
+            animate y { duration: 180ms; easing: ease-out; }
             border-radius: Theme.wide-radius;
             background: Theme.ground;
             body := VerticalLayout {
@@ -894,6 +901,7 @@ slint::slint! {
         in property <bool> favourite;
         in property <[string]> fingerprint-lines;
         in property <length> top-inset;
+        in property <length> bottom-inset;
         in-out property <string> draft;
         in-out property <bool> renaming;
         callback call();
@@ -925,86 +933,95 @@ slint::slint! {
                 }
             }
 
-            VerticalLayout {
-                vertical-stretch: 0;
-                padding-left: Theme.edge;
-                padding-right: Theme.edge;
-                spacing: Theme.stack-gap;
-                HorizontalLayout {
-                    alignment: center;
-                    Avatar {
-                        initial: root.initial;
-                        tint: 0;
-                        size: Theme.peer-avatar;
-                    }
-                }
-                // Their claim sits under your name for them, in quotes, and never replaces it.
-                if root.advertised != "" : Text {
-                    text: "calls themselves “" + root.advertised + "”";
-                    color: Theme.muted;
-                    font-size: 0.8125rem;
-                    height: self.font-size * Theme.line-box;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            // Everything below the bar scrolls: when the keyboard covers the rename field, Slint
+            // looks up the parent chain for something scrollable and brings the field back into
+            // view. Without it the field just sits underneath the keyboard.
+            ScrollView {
+                vertical-stretch: 1;
+                mouse-drag-pan-enabled: true;
                 VerticalLayout {
-                    for line in root.fingerprint-lines : Text {
-                        text: line;
-                        color: Theme.muted;
-                        font-size: 0.9375rem;
-                        font-family: Theme.mono;
-                        letter-spacing: 0.6px;
-                        height: self.font-size * Theme.line-box;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    alignment: start;
+                    padding-bottom: root.bottom-inset + Theme.gap-large;
+                    VerticalLayout {
+                        padding-left: Theme.edge;
+                        padding-right: Theme.edge;
+                        spacing: Theme.stack-gap;
+                        HorizontalLayout {
+                            alignment: center;
+                            Avatar {
+                                initial: root.initial;
+                                tint: 0;
+                                size: Theme.peer-avatar;
+                            }
+                        }
+                        // Their claim sits under your name for them, in quotes, and never replaces it.
+                        if root.advertised != "" : Text {
+                            text: "calls themselves “" + root.advertised + "”";
+                            color: Theme.muted;
+                            font-size: 0.8125rem;
+                            height: self.font-size * Theme.line-box;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        VerticalLayout {
+                            for line in root.fingerprint-lines : Text {
+                                text: line;
+                                color: Theme.muted;
+                                font-size: 0.9375rem;
+                                font-family: Theme.mono;
+                                letter-spacing: 0.6px;
+                                height: self.font-size * Theme.line-box;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if !root.renaming : Wide {
+                            text: "Call";
+                            primary: true;
+                            clicked => { root.call(); }
+                        }
+                        if root.renaming : LineEdit {
+                            placeholder-text: "Their name";
+                            text <=> root.draft;
+                        }
+                        if root.renaming : Wide {
+                            text: "Save";
+                            primary: true;
+                            enabled: root.draft != "" && root.draft != root.name;
+                            clicked => {
+                                root.rename(root.draft);
+                                root.renaming = false;
+                            }
+                        }
                     }
-                }
-                if !root.renaming : Wide {
-                    text: "Call";
-                    primary: true;
-                    clicked => { root.call(); }
-                }
-                if root.renaming : LineEdit {
-                    placeholder-text: "Their name";
-                    text <=> root.draft;
-                }
-                if root.renaming : Wide {
-                    text: "Save";
-                    primary: true;
-                    enabled: root.draft != "" && root.draft != root.name;
-                    clicked => {
-                        root.rename(root.draft);
-                        root.renaming = false;
-                    }
-                }
-            }
 
-            // The actions sit clear of the Call button rather than butting against it.
-            Rectangle { height: Theme.stack-top; }
-            DetailRow {
-                title: "Favourite";
-                detail: root.favourite ? "Kept at the top of People" : "Keep them at the top of People";
-                icon: root.favourite ? @image-url("icons/star-filled.svg") : @image-url("icons/star.svg");
-                clicked => { root.toggle-favourite(); }
-            }
-            DetailRow {
-                title: "Rename";
-                detail: "What you call them, only on this phone";
-                value: root.renaming ? "Cancel" : "Edit";
-                clicked => {
-                    root.draft = root.name;
-                    root.renaming = !root.renaming;
+                    // The actions sit clear of the Call button rather than butting against it.
+                    Rectangle { height: Theme.stack-top; }
+                    DetailRow {
+                        title: "Favourite";
+                        detail: root.favourite ? "Kept at the top of People" : "Keep them at the top of People";
+                        icon: root.favourite ? @image-url("icons/star-filled.svg") : @image-url("icons/star.svg");
+                        clicked => { root.toggle-favourite(); }
+                    }
+                    DetailRow {
+                        title: "Rename";
+                        detail: "What you call them, only on this phone";
+                        value: root.renaming ? "Cancel" : "Edit";
+                        clicked => {
+                            root.draft = root.name;
+                            root.renaming = !root.renaming;
+                        }
+                    }
+                    DetailRow {
+                        title: "Remove";
+                        detail: "Their key goes; they can still call you";
+                        icon: @image-url("icons/close.svg");
+                        danger: true;
+                        clicked => { root.remove(); }
+                    }
                 }
             }
-            DetailRow {
-                title: "Remove";
-                detail: "Their key goes; they can still call you";
-                icon: @image-url("icons/close.svg");
-                danger: true;
-                clicked => { root.remove(); }
-            }
-            Rectangle { vertical-stretch: 1; }
         }
     }
 
@@ -1064,6 +1081,7 @@ slint::slint! {
             }
             if root.calls.length > 0 : ScrollView {
                 vertical-stretch: 1;
+                mouse-drag-pan-enabled: true;
                 VerticalLayout {
                     alignment: start;
                     for entry[index] in root.calls : VerticalLayout {
@@ -1568,6 +1586,18 @@ slint::slint! {
         callback toggle-selected(string);
         callback clear-selection();
         callback remove-selected();
+        // The window draws under the system bars, so what shows through them is our own ground.
+        // Android paints their icons, and only we know which shade they have to read against.
+        // A change callback is evaluated eagerly, so this fires even though nothing reads it.
+        // What is behind the bars is whatever is on top: a call, a dimmed sheet and the log are
+        // dark whatever the theme says, so only a bare page follows it.
+        callback bars-changed(bool);
+        out property <bool> bars-light: !Theme.dark
+            && root.call-state == CallState.idle
+            && root.confirming == Confirm.none
+            && root.peer-key == ""
+            && !root.log-open;
+        changed bars-light => { root.bars-changed(self.bars-light); }
 
         title: "uplink";
         background: Theme.ground;
@@ -1713,6 +1743,7 @@ slint::slint! {
         // A key that has arrived and has no name yet, over everything below it.
         if root.peer-key != "" : NameSheet {
             key: root.peer-key;
+            keyboard: root.virtual-keyboard-size.height;
             name <=> root.new-name;
             add(name) => { root.add-contact(name, root.peer-key); }
             cancel => {
@@ -1724,6 +1755,7 @@ slint::slint! {
         // A contact takes the window, over the tabs, until it is dismissed.
         if root.open-contact-id != "" : ContactPage {
             top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
             name: root.open-contact-name;
             advertised: root.open-contact-advertised;
             initial: root.open-contact-initial;
@@ -1795,6 +1827,7 @@ slint::slint! {
                 }
                 ScrollView {
                     vertical-stretch: 1;
+                    mouse-drag-pan-enabled: true;
                     Text {
                         text: root.log;
                         color: Theme.muted;

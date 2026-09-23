@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.WindowInsetsController;
 
 import java.io.InputStream;
 
@@ -24,6 +25,9 @@ public class UplinkActivity extends NativeActivity {
      * There is one activity per process; it is cleared before the handle is released.
      */
     private static volatile long nativeHandle;
+
+    /** What the UI last asked the system bars to look like; see {@link #applySystemBars()}. */
+    private volatile boolean lightSystemBars;
 
     private static native void nativePermissionsResult(
             long handle, int requestCode, String[] permissions, int[] grantResults);
@@ -78,6 +82,44 @@ public class UplinkActivity extends NativeActivity {
                 startActivity(settings);
             }
         });
+    }
+
+    /**
+     * The app draws under the system bars, so the bars have no background of their own: their
+     * icons have to be told which way to go. `light` means a light surface behind them, which
+     * Android answers with dark icons.
+     */
+    void setLightSystemBars(final boolean light) {
+        lightSystemBars = light;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                applySystemBars();
+            }
+        });
+    }
+
+    /**
+     * There is no controller until the window has a view root, and another activity we came back
+     * from may have left its own appearance behind, so the wanted state is kept and re-applied
+     * rather than set once.
+     */
+    private void applySystemBars() {
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller == null) {
+            return;
+        }
+        int bars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        controller.setSystemBarsAppearance(lightSystemBars ? bars : 0, bars);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            applySystemBars();
+        }
     }
 
     /** Hands `text` to whatever the user wants to send it with. */

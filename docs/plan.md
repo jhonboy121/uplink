@@ -276,11 +276,6 @@ default); keep disk usage lean. Avoid build scripts.
     need confirming — a tap can be an accident, and a contact is a key that may be gone for good.
     Contacts also want **batch selection**, so clearing out several is one confirmation rather than
     one per row.
-  - **The system bars and the keyboard.** The status bar reads as white rather than sitting over
-    our ground, so the safe-area insets need checking against what the window actually reports; and
-    the IME covers the field it was opened for, so the activity has to resize to it (the manifest
-    asks for `adjustResize` — confirm it survives with a NativeActivity and that our layouts use
-    the bottom inset).
   - **A dialling call is still a call.** The camera preview should be up while it rings, all the
     controls should be there and working rather than present-but-inert, and answering should play
     the locked transition — the self-view folding from full frame into its corner. A call that
@@ -306,3 +301,16 @@ default); keep disk usage lean. Avoid build scripts.
   The system splash needs no `values-v31`: Android 12+ composes it from `android:icon` and the theme's
   `windowBackground`, so pointing those at the mark and `@color/ground` makes it match the in-app splash, and on API 30
   the same attribute paints the window before the first frame.
+- **2026-09-23**: **the system bars and the keyboard.** The white status bar was not an inset bug —
+  the insets were already applied. Under the enforced edge-to-edge of recent target levels the bars
+  have no background of their own, so what shows through them is our own ground, and Android was
+  painting white icons on it in the light theme. The app now tells it which way to go
+  (`WindowInsetsController.setSystemBarsAppearance`, via `UplinkActivity.setLightSystemBars`), driven
+  by a `changed` handler on the window: a bare page follows the theme, while a call, a dimmed sheet
+  and the log are dark whatever the theme says.
+  `adjustResize` does **not** survive edge-to-edge — the window is not resized; the keyboard arrives
+  as an inset, which Slint's Android backend already dispatches as `virtual-keyboard-size`. So the
+  contact screen puts its body in a `ScrollView`, which is what Slint looks for when it brings a
+  focused field back into view, and the naming sheet centres itself in what the keyboard leaves
+  rather than in the window. Separately: a `ScrollView` does **not** pan under a finger unless
+  `mouse-drag-pan-enabled` is set — every list in the app was drag-only on its scrollbar.

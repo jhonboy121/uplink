@@ -1061,6 +1061,18 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         }
     });
 
+    // The window's own `init` has already run by the time callbacks are set, so the first state
+    // is sent from here; the callback only carries the changes after it.
+    let p = Rc::clone(&platform);
+    ui.on_bars_changed(move |light| {
+        if let Err(e) = p.set_light_system_bars(light) {
+            tracing::warn!("system bar appearance: {e}");
+        }
+    });
+    if let Err(e) = platform.set_light_system_bars(ui.get_bars_light()) {
+        tracing::warn!("system bar appearance: {e}");
+    }
+
     // The splash stays until the endpoint is bound, because until then no call could arrive.
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     slint::spawn_local(async move {

@@ -165,6 +165,20 @@ impl Platform {
         })
     }
 
+    /// Tells the status and navigation bars which way their icons should go. The app draws under
+    /// them, so what is behind them is the app's own ground and only the app knows its shade.
+    pub fn set_light_system_bars(&self, light: bool) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(
+                activity,
+                jni_str!("setLightSystemBars"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(light)],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Opens this app's own page in Settings, where a permission refused for good can be granted.
     pub fn open_app_settings(&self) -> Result<(), Error> {
         self.with_activity(|env, activity| {
