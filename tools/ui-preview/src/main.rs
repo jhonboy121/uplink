@@ -153,6 +153,13 @@ fn main() -> Result<()> {
     app.set_swapped(false);
     app.set_mic_on(false);
     shoot(&window, &app, canvas, "call-connected-muted")?;
+    app.set_mic_on(true);
+
+    // The call folded into a corner, with People underneath it and usable.
+    app.set_screen(Screen::People);
+    app.set_call_folded(true);
+    shoot(&window, &app, canvas, "call-folded")?;
+    app.set_call_folded(false);
 
     app.set_call_state(CallState::Idle);
 
@@ -238,6 +245,7 @@ fn populate(app: &App) -> Result<()> {
     app.set_peer_initial("N".into());
     app.set_call_timer("04:12".into());
     app.set_key_exchange("X25519MLKEM768".into());
+    app.set_call_route("Relayed".into());
     app.set_call_status("".into());
     app.set_frame(stand_in(0x2B, 0x4B, 0x6B));
     app.set_remote_frame(stand_in(0x3A, 0x33, 0x50));

@@ -39,12 +39,14 @@ use uplink_core::db::Db;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
-use uplink_core::media::MediaSession;
+use uplink_core::media::{MediaSession, Route};
 use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::audio::CallAudio;
-use crate::ui::{App, Appearance, CallItem, CallState, ContactItem, Grant, PermissionItem, Theme};
+use crate::ui::{
+    App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, Screen, Theme,
+};
 use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
@@ -778,6 +780,42 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 /// Recorded once the explainer has been shown, so later launches go straight to Android's own
 /// dialog. A one-time grant lapses when the process dies, and re-reading the same screen every
 /// launch would be a wall between the user and the prompt they already understand.
+/// Answers the system back gesture with whatever is innermost on screen, and steps the app into
+/// the background when there is nothing left to close. Java hands every press here rather than
+/// finishing the activity, because finishing it takes the endpoint with it.
+fn went_back(ui: &App) -> bool {
+    if ui.get_confirming() != Confirm::None {
+        ui.set_confirming(Confirm::None);
+    } else if !ui.get_peer_key().is_empty() {
+        ui.set_peer_key(Default::default());
+        ui.set_new_name(Default::default());
+    } else if !ui.get_open_contact_id().is_empty() {
+        ui.set_open_contact_id(Default::default());
+    } else if ui.get_scanning() {
+        ui.invoke_scan(false);
+    } else if ui.get_call_state() != CallState::Idle && !ui.get_call_folded() {
+        // A call is never ended by going back — it folds away, as it would from its own control.
+        ui.set_call_folded(true);
+    } else if ui.get_selecting() {
+        ui.invoke_clear_selection();
+    } else if ui.get_screen() != Screen::People {
+        ui.set_screen(Screen::People);
+    } else {
+        return false;
+    }
+    true
+}
+
+/// What the call screen calls the route. Empty until a path is known, which is what keeps the
+/// marker off the screen rather than showing a guess while the call is still being set up.
+const fn route_name(route: Route) -> &'static str {
+    match route {
+        Route::Unknown => "",
+        Route::Direct => "Direct",
+        Route::Relay => "Relayed",
+    }
+}
+
 /// Stored as a word rather than a number, so a row stays readable and reordering the enum cannot
 /// silently change what someone chose. Anything unrecognised means following the system.
 const fn appearance_name(appearance: Appearance) -> &'static str {
@@ -1202,6 +1240,18 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         tracing::warn!("system bar appearance: {e}");
     }
 
+    // Back is accepted in the markup, which is what stops Slint's own handler from finishing the
+    // activity; this decides what it meant.
+    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    ui.on_back(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if !went_back(&ui)
+            && let Err(e) = p.move_to_background()
+        {
+            tracing::warn!("stepping into the background: {e}");
+        }
+    });
+
     // The splash stays until the endpoint is bound, because until then no call could arrive.
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     slint::spawn_local(async move {
@@ -1413,8 +1463,10 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
             if ticks.is_multiple_of(STATS_LOG_EVERY) {
                 tracing::info!("{text}");
             }
+            let route = state.call.as_ref().map_or(Route::Unknown, |call| call.stats.route());
             if let Some(ui) = state.ui.upgrade() {
                 ui.set_call_timer(state.call_timer().into());
+                ui.set_call_route(route_name(route).into());
             }
         });
     });

@@ -130,6 +130,16 @@ slint::slint! {
         out property <length> self-view-height: 134px;
         out property <length> self-view-edge: 17px;
         out property <length> self-view-top: 67px;
+        // The call once it has been folded away: big enough to read a face, small enough that the
+        // screen underneath is still usable, which is the whole point of it.
+        out property <length> mini-width: 108px;
+        out property <length> mini-height: 158px;
+        out property <length> mini-edge: 12px;
+        // How far a finger may wander and still count as a tap. Android's own touch slop.
+        out property <length> drag-slop: 8px;
+        // The tab bar's own height, without the gesture inset it adds underneath. Named because
+        // the folded call has to stay off it.
+        out property <length> tab-height: 64px;
         out property <length> peer-avatar: 110px;
         // The Add-someone stack.
         out property <length> wide-height: 44px;
@@ -416,7 +426,7 @@ slint::slint! {
         in-out property <Screen> screen;
         // The gesture bar sits under the tabs, so the row clears it from the inside.
         in property <length> bottom-inset;
-        height: 64px + bottom-inset;
+        height: Theme.tab-height + bottom-inset;
         background: Theme.surface;
         HorizontalLayout {
             padding: 6px;
@@ -1328,6 +1338,97 @@ slint::slint! {
         }
     }
 
+    // A call folded into a corner, so the rest of the app is usable while it runs. Adding a
+    // contact or sending diagnostics mid-call should not mean hanging up, and picture-in-picture
+    // does not help here — the user has not left uplink, which is the common case.
+    //
+    // It keeps its own position so a drag survives being restored and folded away again, and it
+    // is clamped on every layout rather than only while dragging, so rotating cannot strand it
+    // off screen.
+    component MiniCall inherits Rectangle {
+        in property <image> frame;
+        in property <string> timer;
+        // What it has to stay clear of at each end: the system bars, and the tab bar it would
+        // otherwise sit on top of and make unreachable.
+        in property <length> top-clear;
+        in property <length> bottom-clear;
+        // The window, which a component cannot ask for: inside it, `parent` is itself.
+        in property <length> area-width;
+        in property <length> area-height;
+        in-out property <length> pos-x;
+        in-out property <length> pos-y;
+        in-out property <bool> placed;
+        callback restore();
+
+        width: Theme.mini-width;
+        height: Theme.mini-height;
+        // Clamped on every layout, not only while dragging, so a rotation cannot strand it off
+        // screen.
+        property <length> lowest: root.area-height - self.height - root.bottom-clear - Theme.mini-edge;
+        x: clamp(root.pos-x, Theme.mini-edge, root.area-width - self.width - Theme.mini-edge);
+        y: clamp(root.pos-y, root.top-clear + Theme.mini-edge, max(root.top-clear + Theme.mini-edge, lowest));
+        // First shown, it rests in the corner nearest where the call controls were.
+        init => {
+            if (!root.placed) {
+                root.pos-x = root.area-width - root.width - Theme.mini-edge;
+                root.pos-y = root.lowest;
+                root.placed = true;
+            }
+        }
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: #FFFFFF3D;
+        background: Theme.video;
+        clip: true;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: #00000080;
+
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.frame;
+            image-fit: cover;
+        }
+        // The timer says it is still running even when the face has not arrived yet.
+        Rectangle {
+            y: parent.height - self.height;
+            height: 22px;
+            background: @linear-gradient(0deg, #04080DCC 0%, #04080D00 100%);
+            Text {
+                text: root.timer;
+                color: Theme.on-video;
+                font-family: Theme.mono;
+                font-size: 0.6875rem;
+                vertical-alignment: center;
+            }
+        }
+        // `clicked` fires on release whether or not the finger travelled, so letting go of a drag
+        // would also unfold the call. A tap is a press that stayed put.
+        property <bool> dragged;
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    root.dragged = false;
+                }
+            }
+            moved => {
+                if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+                    || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+                    root.dragged = true;
+                }
+                if (root.dragged) {
+                    root.pos-x = root.x + self.mouse-x - self.pressed-x;
+                    root.pos-y = root.y + self.mouse-y - self.pressed-y;
+                }
+            }
+            clicked => {
+                if (!root.dragged) {
+                    root.restore();
+                }
+            }
+        }
+    }
+
     // The whole window while a call is up: video owns the frame, chrome sits on a scrim.
     component CallScreen inherits Rectangle {
         in property <image> frame;
@@ -1336,6 +1437,8 @@ slint::slint! {
         in property <string> peer-initial;
         in property <string> timer;
         in property <string> key-exchange;
+        // "Direct" or "Relayed", empty until a path is known.
+        in property <string> route;
         in property <string> status;
         // What the call is not managing to do, if anything: video that never started, say.
         in property <string> trouble;
@@ -1351,6 +1454,7 @@ slint::slint! {
         callback toggle-mic();
         callback toggle-speaker();
         callback flip-camera();
+        callback minimise();
         background: Theme.video;
 
         property <bool> connected: state == CallState.connected;
@@ -1362,9 +1466,12 @@ slint::slint! {
             image-fit: cover;
         }
 
-        // Self view: the whole frame until the call connects, then a corner card.
+        // The corner card: the whole frame until the call connects, then a card holding whichever
+        // of the two pictures is not filling the screen. It depends on `connected` alone — while
+        // it also depended on `swapped`, a tap grew the card back to full size and buried the
+        // other picture under it, which read as the self view vanishing rather than trading.
         self-view := Rectangle {
-            property <bool> inset: root.connected && !root.swapped;
+            property <bool> inset: root.connected;
             x: inset ? (Theme.rtl ? Theme.self-view-edge : parent.width - self.width - Theme.self-view-edge) : 0px;
             y: inset ? root.top-inset + Theme.self-view-top : 0px;
             width: inset ? Theme.self-view-width : parent.width;
@@ -1466,6 +1573,30 @@ slint::slint! {
                             overflow: elide;
                         }
                     }
+                    // How the call is set up, in the order it matters: the route first, because
+                    // a relayed call explains a bad one, then what it is encrypted with.
+                    if root.connected && root.route != "" : VerticalLayout {
+                        alignment: start;
+                        Rectangle {
+                            height: Theme.chip-height;
+                            border-radius: self.height / 2;
+                            background: #E9F0F71A;
+                            border-width: 1px;
+                            border-color: #E9F0F73D;
+                            HorizontalLayout {
+                                padding-left: Theme.chip-pad;
+                                padding-right: Theme.chip-pad;
+                                Text {
+                                    text: root.route;
+                                    color: Theme.on-video-muted;
+                                    font-family: Theme.mono;
+                                    font-size: 0.75rem;
+                                    letter-spacing: 0.34px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
                     if root.connected && root.key-exchange != "" : VerticalLayout {
                         alignment: start;
                         Rectangle {
@@ -1532,6 +1663,13 @@ slint::slint! {
                         label: "Switch camera";
                         clicked => { root.flip-camera(); }
                     }
+                    // Folds the call away rather than ending it, which is the difference between
+                    // looking something up mid-call and having to call back.
+                    if root.connected : Key {
+                        icon: @image-url("icons/minimise.svg");
+                        label: "Fold away";
+                        clicked => { root.minimise(); }
+                    }
                     if root.state != CallState.incoming : Key {
                         icon: @image-url("icons/call-end.svg");
                         label: "End call";
@@ -1553,6 +1691,13 @@ slint::slint! {
         in property <[string]> my-fingerprint-lines;
         in property <string> my-short-fingerprint;
         in property <string> call-status;
+        in property <string> call-route;
+        // A running call folded into a corner so the rest of the app can be used. Its position
+        // is kept here so a drag outlives being restored and folded away again.
+        in-out property <bool> call-folded: false;
+        in-out property <length> call-fold-x;
+        in-out property <length> call-fold-y;
+        in-out property <bool> call-fold-placed: false;
         // Cleared when a call starts; set if part of it never came up.
         in-out property <string> call-trouble;
         in property <string> peer-name;
@@ -1613,6 +1758,9 @@ slint::slint! {
         callback toggle-selected(string);
         callback clear-selection();
         callback remove-selected();
+        // The system back gesture, already accepted by `back-stop`. Whoever handles it closes the
+        // innermost thing on screen, or steps the app into the background.
+        callback back();
         // The window draws under the system bars, so what shows through them is our own ground.
         // Android paints their icons, and only we know which shade they have to read against.
         // A change callback is evaluated eagerly, so this fires even though nothing reads it.
@@ -1644,183 +1792,227 @@ slint::slint! {
         // mode, and writing it here would pin the app to one theme and make `Theme.system-dark`
         // read back whatever we just wrote.
 
-        // Pages and the tab bar share the window: the bar takes space, it does not cover content.
-        VerticalLayout {
-            Rectangle {
-                vertical-stretch: 1;
-                clip: true;
-                if root.screen == Screen.people : PeoplePage {
-                    top-inset: root.safe-area-insets.top;
-                    online: root.online;
-                    contacts: root.contacts;
-                    selecting: root.selecting;
-                    selected-count: root.selected-count;
-                    call(id) => { root.call(id); }
-                    open(id) => { root.open-contact(id); }
-                    connect => { root.screen = Screen.connect; }
-                    select(id) => { root.toggle-selected(id); }
-                    start-selecting => { root.selecting = true; }
-                    stop-selecting => { root.clear-selection(); }
-                    remove-selected => { root.confirming = Confirm.remove-selected; }
-                }
-                if root.screen == Screen.calls : CallsPage {
-                    top-inset: root.safe-area-insets.top;
-                    calls: root.calls;
-                    call(id) => { root.call(id); }
-                    clear => { root.confirming = Confirm.clear-calls; }
-                }
-                if root.screen == Screen.connect : KeyPage {
-                    top-inset: root.safe-area-insets.top;
-                    qr: root.qr;
-                    mark: root.qr-mark;
-                    frame: root.frame;
-                    fingerprint-lines: root.my-fingerprint-lines;
-                    scanning: root.scanning;
-                    pending-key: root.peer-key;
-                    new-name <=> root.new-name;
-                    scan(on) => { root.scan(on); }
-                    pick => { root.pick-key(); }
-                    share => { root.share-key(); }
-                    add(name, key) => { root.add-contact(name, key); }
-                }
-                if root.screen == Screen.settings : SettingsPage {
-                    top-inset: root.safe-area-insets.top;
-                    quality: root.quality;
-                    share-diagnostics => { root.share-diagnostics(); }
-                }
+        // A call that ends while folded unfolds, so the next one opens on the call screen. These
+        // sit outside the scope below because `changed` belongs to whatever declares it.
+        changed call-state => {
+            if (self.call-state == CallState.idle) {
+                self.call-folded = false;
             }
-            Tabs {
-                screen <=> root.screen;
-                bottom-inset: root.safe-area-insets.bottom;
-            }
-        }
-
-        // Overlays: declared last, so they cover the pages and the tab bar.
-        if root.call-state != CallState.idle : CallScreen {
-            frame: root.frame;
-            remote-frame: root.remote-frame;
-            peer-name: root.peer-name;
-            peer-initial: root.peer-initial;
-            timer: root.call-timer;
-            key-exchange: root.key-exchange;
-            status: root.call-status;
-            trouble: root.call-trouble;
-            state: root.call-state;
-            swapped <=> root.swapped;
-            mic-on: root.mic-on;
-            speaker-on: root.speaker-on;
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            accept => { root.accept(); }
-            reject => { root.reject(); }
-            hangup => { root.hangup(); }
-            toggle-mic => { root.toggle-mic(); }
-            toggle-speaker => { root.toggle-speaker(); }
-            flip-camera => { root.flip-camera(); }
-        }
-
-        // Something that went wrong and needs no decision — it says its piece and goes. Anything
-        // the user has to answer is a sheet, not this. Slint has no toast widget, but it has a
-        // Timer, so the dismissal lives here rather than in every caller.
-        toast-timer := Timer {
-            interval: Theme.toast-life;
-            running: root.toast != "";
-            triggered() => { root.toast = ""; }
         }
         // A second message restarts the clock instead of inheriting what is left of the first's.
         changed toast => {
-            if (root.toast != "") {
+            if (self.toast != "") {
                 toast-timer.restart();
             }
         }
-        if root.toast != "" : Rectangle {
-            y: parent.height - self.height - root.safe-area-insets.bottom - Theme.toast-bottom;
-            height: toast-body.preferred-height;
-            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
-            border-radius: Theme.wide-radius;
-            background: Theme.raised;
-            border-width: 1px;
-            border-color: Theme.hairline;
-            toast-body := HorizontalLayout {
-                padding: Theme.row-gap;
-                Text {
-                    text: root.toast;
-                    color: Theme.text;
-                    font-size: 0.875rem;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
+
+        // Everything lives inside this, so that Back reaches it. Slint's Android backend turns
+        // the system gesture into a `Key.Back` press, and if nothing *accepts* it, finishes the
+        // activity — which for this app means dropping the endpoint that incoming calls arrive
+        // at. Rejected keys travel up to the parent, so a scope wrapping the window sees Back
+        // even when a text field has focus and ignored it. Accepting it always is the point.
+        back-stop := FocusScope {
+            // Qualified: a bare `accept` would resolve to this window's own `accept` callback,
+            // the one that answers a ringing call.
+            key-pressed(event) => {
+                if (event.text == Key.Back) {
+                    root.back();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
+            // Nothing else takes focus on its own, so keys start here; anything that borrows it
+            // rejects Back anyway, and a rejected key travels back up to this scope.
+            init => { self.focus(); }
+
+            // Pages and the tab bar share the window: the bar takes space, not the content's.
+            VerticalLayout {
+                Rectangle {
+                    vertical-stretch: 1;
+                    clip: true;
+                    if root.screen == Screen.people : PeoplePage {
+                        top-inset: root.safe-area-insets.top;
+                        online: root.online;
+                        contacts: root.contacts;
+                        selecting: root.selecting;
+                        selected-count: root.selected-count;
+                        call(id) => { root.call(id); }
+                        open(id) => { root.open-contact(id); }
+                        connect => { root.screen = Screen.connect; }
+                        select(id) => { root.toggle-selected(id); }
+                        start-selecting => { root.selecting = true; }
+                        stop-selecting => { root.clear-selection(); }
+                        remove-selected => { root.confirming = Confirm.remove-selected; }
+                    }
+                    if root.screen == Screen.calls : CallsPage {
+                        top-inset: root.safe-area-insets.top;
+                        calls: root.calls;
+                        call(id) => { root.call(id); }
+                        clear => { root.confirming = Confirm.clear-calls; }
+                    }
+                    if root.screen == Screen.connect : KeyPage {
+                        top-inset: root.safe-area-insets.top;
+                        qr: root.qr;
+                        mark: root.qr-mark;
+                        frame: root.frame;
+                        fingerprint-lines: root.my-fingerprint-lines;
+                        scanning: root.scanning;
+                        pending-key: root.peer-key;
+                        new-name <=> root.new-name;
+                        scan(on) => { root.scan(on); }
+                        pick => { root.pick-key(); }
+                        share => { root.share-key(); }
+                        add(name, key) => { root.add-contact(name, key); }
+                    }
+                    if root.screen == Screen.settings : SettingsPage {
+                        top-inset: root.safe-area-insets.top;
+                        quality: root.quality;
+                        share-diagnostics => { root.share-diagnostics(); }
+                    }
+                }
+                Tabs {
+                    screen <=> root.screen;
+                    bottom-inset: root.safe-area-insets.bottom;
                 }
             }
-        }
 
-        // Nothing here happens on the tap that asked for it.
-        if root.confirming != Confirm.none : ConfirmSheet {
-            title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
-                : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
-                : "Remove " + root.open-contact-name + "?";
-            body: root.confirming == Confirm.clear-calls
-                ? "Every call is forgotten. It does not affect your contacts."
-                : "Their key goes with them. You would need it again to call them, and they can still call you.";
-            confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
-            confirm => {
-                if (root.confirming == Confirm.clear-calls) {
-                    root.clear-calls();
-                } else if (root.confirming == Confirm.remove-selected) {
-                    root.remove-selected();
-                } else {
-                    root.remove-contact(root.open-contact-id);
-                    root.open-contact-id = "";
+            // Overlays: declared last, so they cover the pages and the tab bar.
+            if root.call-state != CallState.idle && !root.call-folded : CallScreen {
+                frame: root.frame;
+                remote-frame: root.remote-frame;
+                peer-name: root.peer-name;
+                peer-initial: root.peer-initial;
+                timer: root.call-timer;
+                key-exchange: root.key-exchange;
+                route: root.call-route;
+                status: root.call-status;
+                trouble: root.call-trouble;
+                state: root.call-state;
+                swapped <=> root.swapped;
+                mic-on: root.mic-on;
+                speaker-on: root.speaker-on;
+                top-inset: root.safe-area-insets.top;
+                bottom-inset: root.safe-area-insets.bottom;
+                accept => { root.accept(); }
+                reject => { root.reject(); }
+                hangup => { root.hangup(); }
+                toggle-mic => { root.toggle-mic(); }
+                toggle-speaker => { root.toggle-speaker(); }
+                flip-camera => { root.flip-camera(); }
+                minimise => { root.call-folded = true; }
+            }
+
+            // The folded call, over the pages and the tab bar but under anything that wants an
+            // answer.
+            if root.call-state != CallState.idle && root.call-folded : MiniCall {
+                frame: root.swapped ? root.frame : root.remote-frame;
+                timer: root.call-timer;
+                top-clear: root.safe-area-insets.top;
+                bottom-clear: root.safe-area-insets.bottom + Theme.tab-height;
+                area-width: root.width;
+                area-height: root.height;
+                pos-x <=> root.call-fold-x;
+                pos-y <=> root.call-fold-y;
+                placed <=> root.call-fold-placed;
+                restore => { root.call-folded = false; }
+            }
+
+            // Something that went wrong and needs no decision — it says its piece and goes.
+            // Anything the user has to answer is a sheet, not this. Slint has no toast widget,
+            // but it has a Timer, so the dismissal lives here rather than in every caller.
+            toast-timer := Timer {
+                interval: Theme.toast-life;
+                running: root.toast != "";
+                triggered() => { root.toast = ""; }
+            }
+            if root.toast != "" : Rectangle {
+                y: parent.height - self.height - root.safe-area-insets.bottom - Theme.toast-bottom;
+                height: toast-body.preferred-height;
+                width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+                border-radius: Theme.wide-radius;
+                background: Theme.raised;
+                border-width: 1px;
+                border-color: Theme.hairline;
+                toast-body := HorizontalLayout {
+                    padding: Theme.row-gap;
+                    Text {
+                        text: root.toast;
+                        color: Theme.text;
+                        font-size: 0.875rem;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
                 }
-                root.confirming = Confirm.none;
             }
-            cancel => { root.confirming = Confirm.none; }
-        }
 
-        // A key that has arrived and has no name yet, over everything below it.
-        if root.peer-key != "" : NameSheet {
-            key: root.peer-key;
-            keyboard: root.virtual-keyboard-size.height;
-            name <=> root.new-name;
-            add(name) => { root.add-contact(name, root.peer-key); }
-            cancel => {
-                root.peer-key = "";
-                root.new-name = "";
+            // Nothing here happens on the tap that asked for it.
+            if root.confirming != Confirm.none : ConfirmSheet {
+                title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
+                    : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
+                    : "Remove " + root.open-contact-name + "?";
+                body: root.confirming == Confirm.clear-calls
+                    ? "Every call is forgotten. It does not affect your contacts."
+                    : "Their key goes with them. You would need it again to call them, and they can still call you.";
+                confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
+                confirm => {
+                    if (root.confirming == Confirm.clear-calls) {
+                        root.clear-calls();
+                    } else if (root.confirming == Confirm.remove-selected) {
+                        root.remove-selected();
+                    } else {
+                        root.remove-contact(root.open-contact-id);
+                        root.open-contact-id = "";
+                    }
+                    root.confirming = Confirm.none;
+                }
+                cancel => { root.confirming = Confirm.none; }
+            }
+
+            // A key that has arrived and has no name yet, over everything below it.
+            if root.peer-key != "" : NameSheet {
+                key: root.peer-key;
+                keyboard: root.virtual-keyboard-size.height;
+                name <=> root.new-name;
+                add(name) => { root.add-contact(name, root.peer-key); }
+                cancel => {
+                    root.peer-key = "";
+                    root.new-name = "";
+                }
+            }
+
+            // A contact takes the window, over the tabs, until it is dismissed.
+            if root.open-contact-id != "" : ContactPage {
+                top-inset: root.safe-area-insets.top;
+                bottom-inset: root.safe-area-insets.bottom;
+                name: root.open-contact-name;
+                advertised: root.open-contact-advertised;
+                initial: root.open-contact-initial;
+                favourite: root.open-contact-favourite;
+                fingerprint-lines: root.open-contact-fingerprint;
+                draft <=> root.new-name;
+                call => { root.call(root.open-contact-id); }
+                toggle-favourite => { root.set-favourite(root.open-contact-id, !root.open-contact-favourite); }
+                rename(name) => { root.rename-contact(root.open-contact-id, name); }
+                remove => { root.confirming = Confirm.remove-contact; }
+                close => { root.open-contact-id = ""; }
+            }
+
+            // Nothing behind this is reachable until all three are granted.
+            if root.gate : PermissionsPage {
+                top-inset: root.safe-area-insets.top;
+                permissions: root.permissions;
+                blocked: root.permissions-blocked;
+                grant => { root.grant-permissions(); }
+                settings => { root.open-settings(); }
+            }
+
+            // Over everything until the endpoint is up. It fades rather than being torn out: the
+            // ground does not change across the handover, so all that leaves is the mark.
+            splash := Splash {
+                opacity: root.booting ? 1.0 : 0.0;
+                visible: self.opacity > 0.0;
+                animate opacity { duration: 420ms; easing: ease-out; }
             }
         }
-
-        // A contact takes the window, over the tabs, until it is dismissed.
-        if root.open-contact-id != "" : ContactPage {
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            name: root.open-contact-name;
-            advertised: root.open-contact-advertised;
-            initial: root.open-contact-initial;
-            favourite: root.open-contact-favourite;
-            fingerprint-lines: root.open-contact-fingerprint;
-            draft <=> root.new-name;
-            call => { root.call(root.open-contact-id); }
-            toggle-favourite => { root.set-favourite(root.open-contact-id, !root.open-contact-favourite); }
-            rename(name) => { root.rename-contact(root.open-contact-id, name); }
-            remove => { root.confirming = Confirm.remove-contact; }
-            close => { root.open-contact-id = ""; }
-        }
-
-        // Nothing behind this is reachable until all three are granted.
-        if root.gate : PermissionsPage {
-            top-inset: root.safe-area-insets.top;
-            permissions: root.permissions;
-            blocked: root.permissions-blocked;
-            grant => { root.grant-permissions(); }
-            settings => { root.open-settings(); }
-        }
-
-        // Over everything until the endpoint is up. It fades rather than being torn out: the
-        // ground does not change across the handover, so all that leaves is the mark.
-        splash := Splash {
-            opacity: root.booting ? 1.0 : 0.0;
-            visible: self.opacity > 0.0;
-            animate opacity { duration: 420ms; easing: ease-out; }
-        }
-
     }
 }

@@ -225,6 +225,15 @@ impl Platform {
         })
     }
 
+    /// Steps the app behind whatever else is on screen, without tearing it down — the process has
+    /// to stay up, because an endpoint that is gone cannot be rung.
+    pub fn move_to_background(&self) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("moveToBackground"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
     /// Opens this app's own page in Settings, where a permission refused for good can be granted.
     pub fn open_app_settings(&self) -> Result<(), Error> {
         self.with_activity(|env, activity| {

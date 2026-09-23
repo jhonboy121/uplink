@@ -9,9 +9,11 @@ use std::time::Duration;
 use iroh::endpoint::Connection;
 use tokio::time::Instant;
 
-use crate::media::MediaStats;
+use crate::media::{MediaStats, Route};
 
 const INTERVAL: Duration = Duration::from_secs(5);
+/// The one spelling of it, shared by the log line and the route the UI shows.
+const RELAY: &str = "relay";
 const BITS_PER_BYTE: u64 = 8;
 const BYTES_PER_MB: u64 = 1_000_000;
 const PERCENT: f64 = 100.0;
@@ -103,7 +105,7 @@ fn selected_path(connection: &Connection) -> Option<SelectedPath> {
     let path = paths.iter().find(|path| path.is_selected())?;
     let stats = path.stats();
     Some(SelectedPath {
-        kind: if path.is_relay() { "relay" } else { "direct" },
+        kind: if path.is_relay() { RELAY } else { "direct" },
         remote: format!("{:?}", path.remote_addr()),
         rtt: stats.rtt,
         cwnd: stats.cwnd,
@@ -156,6 +158,7 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
         }
         path = current.or(path);
         let Some(p) = &path else { continue };
+        media.set_route(if p.kind == RELAY { Route::Relay } else { Route::Direct });
         let counters = Counters::sample(&connection, &media, p.congestion_events);
         let delta = counters.since(&last);
         let over = now.duration_since(last_at);

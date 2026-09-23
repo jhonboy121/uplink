@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
@@ -52,9 +52,41 @@ struct FrameHeader {
     turns: u8,
 }
 
+/// How a call is getting there. A relayed call and a direct one behave nothing alike — the same
+/// pair of phones has run at 113 ms direct and 618 ms relayed with twelve-second excursions — and
+/// nothing on screen says which you have.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Route {
+    #[default]
+    Unknown,
+    Direct,
+    Relay,
+}
+
+impl Route {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::Direct => 1,
+            Self::Relay => 2,
+        }
+    }
+
+    const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Direct,
+            2 => Self::Relay,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Media counters for one call; read by telemetry.
 #[derive(Debug, Default)]
 pub struct MediaStats {
+    /// The path QUIC currently sends on, as a [`Route`] code. Written by telemetry each interval
+    /// and read by the UI, which is the only way the call screen can say which one it has.
+    route: AtomicU8,
     pub frames_sent: AtomicU64,
     pub bytes_sent: AtomicU64,
     /// Not sent: too many frames already in flight.
@@ -84,6 +116,14 @@ pub struct MediaStats {
 impl MediaStats {
     pub(crate) fn count(counter: &AtomicU64, amount: u64) {
         counter.fetch_add(amount, Ordering::Relaxed);
+    }
+
+    pub fn route(&self) -> Route {
+        Route::from_code(self.route.load(Ordering::Relaxed))
+    }
+
+    pub(crate) fn set_route(&self, route: Route) {
+        self.route.store(route.code(), Ordering::Relaxed);
     }
 }
 

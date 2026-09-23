@@ -33,6 +33,7 @@ public class UplinkActivity extends NativeActivity {
     /** What the UI last asked the system bars to look like; see {@link #applySystemBars()}. */
     private volatile boolean lightSystemBars;
 
+
     private static native void nativePermissionsResult(
             long handle, int requestCode, String[] permissions, int[] grantResults);
 
@@ -125,6 +126,21 @@ public class UplinkActivity extends NativeActivity {
         int bars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
                 | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
         controller.setSystemBarsAppearance(lightSystemBars ? bars : 0, bars);
+    }
+
+    /**
+     * Back always goes to Rust, which knows what is on screen; it answers by closing something or
+     * by calling {@link #moveToBackground()}. Nothing here calls {@code super}, because finishing
+     * the activity would take the endpoint with it and there would be nothing left to ring.
+     */
+    /** Leaves the app running with its task behind everything else, rather than tearing it down. */
+    void moveToBackground() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                moveTaskToBack(true);
+            }
+        });
     }
 
     @Override
