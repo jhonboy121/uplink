@@ -264,6 +264,18 @@ default); keep disk usage lean. Avoid build scripts.
     for the icon and map entries for the splash theme. minSdk 30 means **adaptive icons are always available**, so
     `mipmap-anydpi-v26` alone is enough and no legacy PNG mipmaps are needed. Until it exists the launcher shows
     Android's placeholder; the in-app splash, the permission gate and the tab shell need none of it.
+- **2026-09-23**: **noted while designing the shell, all still to do.**
+  - **Your own identity must never become a contact.** Refuse it wherever a key is accepted — scan, image, paste — with
+    a plain message rather than a silent no-op. Calling yourself is not a feature.
+  - **Sharing an identity shares the code as an image**, the way a UPI app does, not a line of text. The picture is the
+    thing people actually send each other, and a scanned image is already a supported way in.
+  - **Errors belong inline** where the thing went wrong; a modal only when the user has to decide something. A toast
+    that disappears is not an error report.
+  - **Strings get translated with Slint's own scheme**, which is gettext (`@tr()` → `.pot` → `.po`), not FTL. Bionic has
+    no gettext, so use **bundled** translations: the compiler takes `SLINT_BUNDLE_TRANSLATIONS=<dir>` as an environment
+    variable, so the `slint!` macro can bundle without a build script, and `slint::select_bundled_translation` switches
+    at runtime — which is what makes the Settings "Language" row real. Extraction wants `slint-tr-extractor`
+    (`cargo install`), so ask before that step.
 - **2026-09-23**: **the resource table is done and the icon is on the phone.** `tools/axml` became
   `tools/android-res`, which compiles real XML under `android/` — manifest, `values.xml`, an adaptive icon — into
   binary XML and `resources.arsc`, and writes the APK zip itself. Method notes and the format's two hard rules are in

@@ -115,6 +115,10 @@ struct State {
     contacts: Contacts,
     connected_at: Option<Instant>,
     stats: Arc<FrameStats>,
+    /// Both are absent until the endpoint finishes binding, which happens on the runtime while
+    /// the window is already up. `node` owns the engine; `calls` is the non-owning handle.
+    node: Option<Node>,
+    calls: Option<NodeHandle>,
 }
 
 impl State {
@@ -640,8 +644,12 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let secret = runtime.block_on(identity::load_or_create(data_dir))?;
     let identity = secret.public();
     let contacts = runtime.block_on(Contacts::load(data_dir))?;
-    let (node, node_events) = runtime.block_on(Node::start(secret, Network::N0))?;
-    let calls = node.handle();
+    // Binding the endpoint reaches the network, so it happens on the runtime while the window is
+    // already up and the splash is showing, rather than in front of a blank screen.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    runtime.spawn(async move {
+        let _ = ready_tx.send(Node::start(secret, Network::N0).await);
+    });
 
     let state = Rc::new(RefCell::new(State {
         ui: slint::Weak::default(),
@@ -659,6 +667,8 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         contacts,
         connected_at: None,
         stats: Arc::default(),
+        node: None,
+        calls: None,
     }));
 
     let lifecycle = Rc::clone(&state);
@@ -686,13 +696,32 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
     show_contacts(&state, &ui);
-    slint::spawn_local(handle_node_events(node_events, ui.as_weak(), Rc::clone(&state), Rc::clone(&platform)))?;
     request_notifications(&platform);
 
-    let (c, weak, s) = (calls.clone(), ui.as_weak(), Rc::clone(&state));
+    // The splash stays until the endpoint is bound, because until then no call could arrive.
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
+    slint::spawn_local(async move {
+        let started = match ready_rx.await {
+            Ok(Ok(started)) => started,
+            Ok(Err(e)) => return set_call_status(&weak, format!("the network did not start: {e}")),
+            Err(_) => return set_call_status(&weak, "the network did not start".into()),
+        };
+        let (node, node_events) = started;
+        {
+            let mut state = s.borrow_mut();
+            state.calls = Some(node.handle());
+            state.node = Some(node);
+        }
+        if let Some(ui) = weak.upgrade() {
+            ui.set_booting(false);
+        }
+        handle_node_events(node_events, weak, s, p).await;
+    })?;
+
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
         Ok(peer) => {
-            if send_call_command(&c, Command::Call(peer), &weak)
+            if send_call_command(&s, Command::Call(peer), &weak)
                 && let Some(ui) = weak.upgrade()
             {
                 // Optimistic: the node confirms with Dialing, or reverts via Ended.
@@ -703,17 +732,17 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         }
         Err(e) => set_call_status(&weak, format!("that is not a key: {e}")),
     });
-    let (c, weak) = (calls.clone(), ui.as_weak());
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_accept(move || {
-        send_call_command(&c, Command::Answer(true), &weak);
+        send_call_command(&s, Command::Answer(true), &weak);
     });
-    let (c, weak) = (calls.clone(), ui.as_weak());
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_reject(move || {
-        send_call_command(&c, Command::Answer(false), &weak);
+        send_call_command(&s, Command::Answer(false), &weak);
     });
-    let (c, weak) = (calls, ui.as_weak());
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_hangup(move || {
-        send_call_command(&c, Command::Hangup, &weak);
+        send_call_command(&s, Command::Hangup, &weak);
     });
 
     let s = Rc::clone(&state);
@@ -862,22 +891,22 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         });
     });
 
-    // Everything the first screen needs is wired, so the splash has nothing left to cover. It is
-    // brief today because the endpoint starts before the window does; when that moves onto the
-    // runtime, this is what the splash will be waiting on.
-    ui.set_booting(false);
-
     let outcome = ui.run();
     if let Err(e) = platform.set_call_service(false) {
         tracing::warn!("stopping call service: {e}");
     }
-    {
+    let node = {
         let mut state = state.borrow_mut();
         state.session = None;
         state.audio = None;
         state.call = None;
+        state.calls = None;
+        state.node.take()
+    };
+    // Absent only if the endpoint never finished binding, in which case there is nothing to stop.
+    if let Some(node) = node {
+        runtime.block_on(node.shutdown());
     }
-    runtime.block_on(node.shutdown());
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     tracing::info!("exiting");
     Ok(outcome?)
@@ -890,8 +919,13 @@ fn set_call_status(ui: &slint::Weak<App>, status: String) {
     }
 }
 
-/// Returns whether the node accepted the command.
-fn send_call_command(calls: &NodeHandle, command: Command, ui: &slint::Weak<App>) -> bool {
+/// Returns whether the node accepted the command. The endpoint may not exist yet, since it binds
+/// while the window is already showing.
+fn send_call_command(state: &Rc<RefCell<State>>, command: Command, ui: &slint::Weak<App>) -> bool {
+    let Some(calls) = state.borrow().calls.clone() else {
+        set_call_status(ui, "still starting up".into());
+        return false;
+    };
     match calls.try_send(command) {
         Ok(()) => true,
         Err(e) => {
