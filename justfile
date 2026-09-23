@@ -158,6 +158,13 @@ Run the host CLI with its output (reports + logs) also kept in target/cli.log ($
 cli-log *args:
     set -o pipefail; nice cargo run -q -p uplink-cli -- {{args}} 2>&1 | tee {{cli_log}}
 
+[doc('''
+Render every screen of the UI to target/ui-preview with Slint's software renderer.
+Checks layout without flashing an APK; fonts and camera frames are the host's stand-ins.
+''')]
+preview:
+    nice cargo run -q -p ui-preview
+
 [doc("Unit + integration tests for uplink-core (host, loopback only)")]
 test *args:
     RUST_TEST_THREADS={{test_threads}} nice cargo test -p uplink-core {{args}}

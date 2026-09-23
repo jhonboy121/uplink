@@ -58,6 +58,20 @@ public class UplinkActivity extends NativeActivity {
         });
     }
 
+    /** Hands `text` to whatever the user wants to send it with. */
+    void shareText(final String text, final String subject) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_TEXT, text);
+                send.putExtra(Intent.EXTRA_SUBJECT, subject);
+                startActivity(Intent.createChooser(send, subject));
+            }
+        });
+    }
+
     /** Opens the system picker; the chosen image comes back through {@link #onActivityResult}. */
     void pickImageAsync(final int requestCode) {
         runOnUiThread(new Runnable() {

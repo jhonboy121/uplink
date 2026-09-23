@@ -71,3 +71,33 @@ long-press interval, `invoke_from_event_loop` / event-loop proxy.
 - [x] Video frames (spike 3 ✅, S24): Camera2 → AImageReader PRIVATE+GPU_SAMPLED_IMAGE → EGLImage → external-OES blit in `BeforeRendering` → `BorrowedOpenGLTextureBuilder` (default TopLeft origin, ping-pong 2 textures, `set_frame` inside the notifier). 30 fps camera + blit, process CPU 10–20% of one core (debug build). Must save/restore Skia GL state (FBOs, viewport, program, tex/sampler bindings on unit 0, VAO, PBO, color mask, scissor/blend/depth/stencil/cull).
 - [ ] APK size impact of Skia. Debug so far: clean build of ~520 crates 1m49s on the S24 (8 cores, nice 10);
       `.so` 85 MB → 46 MB after `strip --strip-debug`; APK 13 MB. A release measurement is still needed.
+
+## Layout rules we got wrong once ✅
+
+The official `slint` plugin (marketplace `slint-ui/ai-plugins`) ships a skill and a docs MCP
+server — use them before writing markup. What the first pass of our UI got wrong:
+
+- **Overlay vs. row.** A bottom bar placed as an absolutely positioned child *covers* content.
+  Put the bar in the root `VerticalLayout` so it takes space; declare true overlays (in-call
+  screen, log) after it, since later siblings draw on top.
+- **`VerticalBox`/`HorizontalBox`** over raw layouts with hand-set padding, on one spacing scale
+  (8px, halved to 4px). `padding`/`spacing` only do anything on *layout* elements: on a
+  `Rectangle` they compile to a deprecation warning and are ignored.
+- **Stretch is what creates voids.** A `ScrollView` or spacer with `vertical-stretch: 1` and
+  nothing in it leaves a black expanse; align content to `start` and let one stretched
+  `Rectangle {}` be the spacer.
+- **`rem` for font sizes** (`default-font-size` on the Window sets the base), not a different px
+  per label. `em` does not exist.
+- **`Palette.color-scheme`** decides how std-widgets paint themselves; set it (we force dark) or
+  stock buttons and line edits will fight the surfaces around them.
+- **Safe-area insets belong inside the component** that draws to the edge: pass the inset in and
+  add it to that element's own layout padding.
+- Outside a layout an element with implicit size is *centered*; set `x: 0; y: 0` for top-left.
+- **Fonts are vendored, not build-scripted.** `import "./Outfit-Regular.ttf";` at the top of the markup registers
+  the family for `font-family`; paths resolve relative to the file holding the `slint!` macro, as `@image-url` does.
+- **Icons are SVG assets** via `Image { source: @image-url("../icons/mic.svg"); colorize: <brush>; }` — Unicode
+  glyphs depend on font coverage and render blank. SVG needs `i-slint-core`'s `svg` feature; the `slint` facade
+  exposes no such feature, so depend on `i-slint-core` directly for it.
+- **Render before declaring UI done:** `just preview` draws every screen with the software renderer into
+  `target/ui-preview/`. It caught blank glyphs, a bar covering content, and buttons eating all the slack — none of
+  which the compiler sees.

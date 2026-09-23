@@ -211,6 +211,20 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
+    /// Offers `text` to the share sheet — how a key reaches someone who isn't in the room.
+    pub fn share_text(&self, text: &str, subject: &str) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            let (text, subject) = (env.new_string(text)?, env.new_string(subject)?);
+            env.call_method(
+                activity,
+                jni_str!("shareText"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                &[JValue::Object(&text), JValue::Object(&subject)],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Speaker or earpiece for the call audio.
     pub fn set_speaker(&self, on: bool) -> Result<(), Error> {
         self.with_activity(|env, activity| {

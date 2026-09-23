@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tools/axml", "tools/ndk-bindgen"]
+members = ["crates/*", "tools/axml", "tools/ndk-bindgen", "tools/ui-preview"]
 # Vendored upstream + generated bindings: built as path deps, not linted as ours.
 exclude = ["vendor", "sys"]
 
@@ -35,6 +35,8 @@ rtrb = "0.4"
 rustls = { version = "0.23.33", default-features = false, features = ["aws_lc_rs", "std"] }
 serde = { version = "1", features = ["derive"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
+# Our icons are SVG, and `slint` exposes no feature that turns SVG rendering on.
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["svg"] }
 symphonia = { version = "0.5", default-features = false, features = ["aac"] }
 tempfile = "3"
 tokio = { version = "1", default-features = false }

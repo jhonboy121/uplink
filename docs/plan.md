@@ -206,10 +206,10 @@ default); keep disk usage lean. Avoid build scripts.
     plus an https link carrying the key, with the activity registered for both (Android App Links), so a key sent
     over chat is one tap. Decided 2026-09-22; not scheduled yet.
 - **2026-09-22**: step 7a done: contacts, QR and the call screens, tested on the S24. The UI follows the locked
-  design (tabs: Call / People / Key / Settings), with the self-view animating into its corner on answer, tap to
-  swap, mute / speaker / flip and an mm:ss timer. **Display faces deferred:** Outfit/Public Sans/IBM Plex Mono need
-  font embedding, which needs a build script, so the system face carries the spec's sizes and weights and
-  `monospace` carries keys and the timer.
+  design, with the self-view animating into its corner on answer, tap to swap, mute / speaker / flip and an mm:ss
+  timer. **Display faces to do:** Outfit/Public Sans/IBM Plex Mono get vendored into the repo — Slint registers a
+  font from the markup (`import "./Outfit-Regular.ttf";`), so no build script is involved; until then the system
+  face carries the spec's sizes and weights and `monospace` carries keys and the timer.
   **QR:** `qrcode` encodes *and draws* (its `image` feature, `image` with default features off = buffer types, no
   codecs), `rqrr` decodes; the only pixel code of ours is widening greyscale to RGB for Slint. A hand-rolled blit
   cost a session: `Matrix::dark` indexed `y * size + x` without bounds-checking `x`, so the right quiet column

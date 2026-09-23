@@ -692,15 +692,6 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         send_call_command(&c, Command::Hangup, &weak);
     });
 
-    let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
-    ui.on_start_camera(move || {
-        let running = with_state_value(&s, |s| s.session.is_some()).unwrap_or_default();
-        if running {
-            with_state(&s, |s| s.session = None);
-        } else {
-            request_camera(&s, &p);
-        }
-    });
     let s = Rc::clone(&state);
     ui.on_flip_camera(move || {
         with_state(&s, |s| {
@@ -767,6 +758,14 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     });
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
+    let (p, weak) = (Rc::clone(&platform), ui.as_weak());
+    ui.on_share_key(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if let Err(e) = p.share_text(&ui.get_my_id(), "My uplink key") {
+            tracing::error!("sharing the key: {e}");
+            ui.set_call_status(format!("could not share: {e}").into());
+        }
+    });
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
     ui.on_scan(move |on| {
         with_state(&s, |s| s.scanning = on);
@@ -831,11 +830,10 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         last = now;
         with_state(&s, |state| {
             state.recover_audio();
-            let (text, timer, camera) = (stats_text(state, secs, cpu_percent), state.call_timer(), state.session.is_some());
+            let (text, timer) = (stats_text(state, secs, cpu_percent), state.call_timer());
             if let Some(ui) = state.ui.upgrade() {
                 ui.set_stats(text.into());
                 ui.set_call_timer(timer.into());
-                ui.set_camera_running(camera);
             }
         });
     });
