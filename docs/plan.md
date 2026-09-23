@@ -279,10 +279,42 @@ default); keep disk usage lean. Avoid build scripts.
     the locked transition — the self-view folding from full frame into its corner. A call that
     times out should **stay on the call screen** long enough to say it did not connect, the way
     every phone does, instead of vanishing back to the list. "Calling…" wants its dots animated.
+  - **Tapping the self-view hides it instead of swapping it.** It is meant to trade places with
+    the remote picture, which is what every other call app does with that tap.
+  - **A call should say what it is riding on.** A small marker on the call screen for direct
+    versus relayed, because the two behave nothing alike — a relayed call between two carrier
+    NATs has run at 618 ms average with 12-second excursions, while the same pair direct was
+    113 ms. The user cannot fix the route, but "relayed" explains what they are seeing.
+  - **Network telemetry, on the screen rather than only in the log.** Throughput each way, and a
+    banner when a call is struggling that says **whose side** it is: our own send rate collapsing
+    is a different sentence from frames not arriving. The counters already exist in
+    `uplink_core::telemetry`; what is missing is saying it to the person in the call.
+  - **Bitrate has to follow the path.** RTT climbing to seconds with no loss and no congestion
+    event is a queue filling somewhere, and the answer is to send less, not to keep filling it.
+    The encoder's bitrate should come down when RTT rises and recover when it falls; the frame
+    deadline and the in-flight window want revisiting at the same time, because at 12 s RTT every
+    frame ages out and the window jams.
   - **A call attempt needs a sound and an end.** Ringback while an outgoing call is ringing, a
     ringtone for an incoming one, and a **timeout on establishing an outgoing call** — dialing a
     key nobody is listening on currently waits until the user gives up. The tone routes through the
     existing AAudio path, and stops the moment the call connects or ends.
+  - **A call must survive leaving the call screen** — this is a stack decision, not a feature, and
+    is open. What is settled: a call already keeps running in the background on a foreground
+    service. What is not:
+    - **Picture-in-picture** is the platform's answer to "use the phone while calling". It needs
+      `supportsPictureInPicture`, `enterPictureInPictureMode`, and `RemoteAction`s for the
+      controls inside the small window. It costs nothing in permissions and works when the user
+      leaves uplink entirely, which an in-app floating frame cannot. The UI has to have a PiP
+      layout — the remote picture and nothing else — driven off the size Slint is given.
+    - **`Notification.CallStyle`** (API 31+) is what makes the ongoing-call notification look and
+      behave like a call, with hang up in the shade. Mic and speaker are extra actions on it. The
+      call service already posts a notification; this is a change of style, not of architecture.
+    - **A self-managed `ConnectionService`** is the real question. It is what makes Android treat
+      ours as a call: audio focus and routing handled by the system, Bluetooth headset buttons,
+      and the right behaviour when a cellular call arrives mid-call. It costs a `PhoneAccount`,
+      the `MANAGE_OWN_CALLS` permission and a meaningful amount of Java. Self-managed calls do
+      **not** appear in the system call log and do not use the system's in-call UI. Deciding this
+      also decides whether we keep driving `MODE_IN_COMMUNICATION` ourselves.
   - **Strings get translated with Slint's own scheme**, which is gettext (`@tr()` → `.pot` → `.po`), not FTL. Bionic has
     no gettext, so use **bundled** translations: the compiler takes `SLINT_BUNDLE_TRANSLATIONS=<dir>` as an environment
     variable, so the `slint!` macro can bundle without a build script, and `slint::select_bundled_translation` switches
@@ -332,3 +364,35 @@ default); keep disk usage lean. Avoid build scripts.
   The mark's art is **not centred in its own 48-unit viewBox** (it runs y 4.4–38.75), so the badge
   is a separate render from `mark.py` with the art's bounding box as the viewBox; a square crop of
   the viewBox would hang the mark high on its plate.
+- **2026-09-23**: **a second phone, and what it cost to find out why.** Everything below came out
+  of one device — an Android 12 Huawei on HiSilicon — and none of it reproduced on the Snapdragon
+  phone the app was written on.
+  - **Notifications**: `POST_NOTIFICATIONS` is Android 13. On 12 the name is not a field of
+    `Manifest.permission` at all, so looking it up **throws** rather than returning false, and the
+    app read its own notifications as refused for good however often they were granted. Below 13
+    there is nothing to ask: `NotificationManager.areNotificationsEnabled` is the whole answer.
+  - **`low-latency` is a hint, and optional.** `OMX.hisi.video.decoder.avc` refuses a format that
+    carries it; `c2.qti.avc.decoder` accepts it. It was also being set on the encoder, where it
+    means nothing. Now decoder-only, and a refusal retries without it.
+  - **The capture request template is not cosmetic.** It sets `CONTROL_CAPTURE_INTENT`, which is
+    how the camera HAL learns a stream feeds an encoder. Handed the encoder's surface under
+    `TEMPLATE_PREVIEW`, the HiSilicon device configured the session, delivered no frames at all,
+    and then faulted with `ERROR_CAMERA_DEVICE`. `TEMPLATE_RECORD` while a call is up.
+  - **A decoder's output is not all pictures.** Codec configuration and end-of-stream come back
+    as output buffers too, and either can carry no bytes; releasing one *with render* draws
+    nothing onto the surface, which on screen is a black frame. `OMX.hisi.*` emits them and
+    `c2.qti.*` does not, so it looked like a network fault on one phone only.
+  - **The method that found all of it** was making failures legible, and that is worth more than
+    the fixes. `MediaError`'s Display is `{:?}` of itself, so a bare `?` wrote "ErrorUnknown" and
+    nothing else; the variants now carry the call name, as `Camera` and `Egl` already did, and
+    dropping `#[from]` made the compiler point at all fifteen places that were discarding it.
+    `jni` reports every throw as the word "JavaException" and leaves the throwable pending, so
+    `with_activity` lifts its `toString()` across before clearing it. The log rolls by size
+    (ten files of ten megabytes) and Settings sends it as a `tar.gz` — a log a tester on another
+    continent cannot send is a log nobody reads.
+  - **Relay versus direct is the open performance question.** The same two phones ran direct at
+    113 ms and, an hour later, relayed at 618 ms average with 12-second excursions at zero loss
+    and zero congestion events. The peer's carrier NAT is symmetric (a different external port in every
+    sample), and on WiFi this side advertises no public IPv4 at all — so IPv4 punching cannot
+    work. Both ends have global IPv6, which should sidestep it and is not being used; a router's
+    inbound IPv6 filter is the first suspect.
