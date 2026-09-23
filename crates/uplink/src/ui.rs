@@ -26,7 +26,9 @@ slint::slint! {
 
     // No "call" screen: there is nothing to show when no call is running, and a call takes over
     // the whole window when there is one.
-    export enum Screen { people, identity, settings }
+    // People is who you can call, Connect is how anyone becomes one of them, Settings is the rest.
+    // Your own identity is not a contact, so it lives in Connect rather than in People.
+    export enum Screen { people, connect, settings }
     export enum CallState { idle, dialing, ringing, incoming, connected }
 
     export struct ContactItem {
@@ -104,6 +106,10 @@ slint::slint! {
         out property <length> stack-top: 17px;
         out property <length> qr-size: 171px;
         out property <length> qr-pad: 12px;
+        // The splash, scaled from the design's frame like everything else.
+        out property <length> splash-mark: 105px;
+        out property <length> splash-gap: 20px;
+        out property <length> splash-foot: 32px;
         // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text
         // gets the taller box explicitly and centres in it.
         out property <float> line-box: 1.6;
@@ -171,6 +177,44 @@ slint::slint! {
         animate opacity, background { duration: 160ms; easing: ease-out; }
     }
 
+    // The first thing a launch shows, over the endpoint coming up. Dark in either theme, like a
+    // call, and like the system splash Android composes from the same mark and ground.
+    component Splash inherits Rectangle {
+        background: Theme.under-video;
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.splash-gap;
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("icons/mark.svg");
+                    width: Theme.splash-mark;
+                    height: self.width;
+                }
+            }
+            Text {
+                text: "uplink";
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.90625rem;
+                font-weight: 600;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            y: parent.height - self.height - Theme.splash-foot;
+            width: parent.width;
+            text: "P2P · E2EE";
+            color: Theme.on-video-muted;
+            font-family: Theme.mono;
+            font-size: 0.8125rem;
+            letter-spacing: 1.8px;
+            horizontal-alignment: center;
+        }
+    }
+
     component Card inherits Rectangle {
         border-radius: Theme.radius;
         background: Theme.surface;
@@ -198,7 +242,7 @@ slint::slint! {
             spacing: 4px;
             for tab in [
                 { label: "People", screen: Screen.people },
-                { label: "Key", screen: Screen.identity },
+                { label: "Connect", screen: Screen.connect },
                 { label: "Settings", screen: Screen.settings },
             ] : Rectangle {
                 border-radius: 12px;
@@ -352,35 +396,21 @@ slint::slint! {
     component PeoplePage inherits Rectangle {
         in property <[ContactItem]> contacts;
         in property <length> top-inset;
-        in property <length> bottom-inset;
         in property <string> status;
-        in property <string> fingerprint;
         callback call(string);
-        callback add-someone();
-        callback show-key();
+        callback remove(string);
+        callback connect();
         background: Theme.ground;
 
         VerticalLayout {
-            // App bar: the screen's name, and its one action.
+            // Contacts and nothing else: adding happens in Connect, which is a tab away.
             HorizontalLayout {
                 vertical-stretch: 0;
                 padding-top: root.top-inset + Theme.bar-top;
                 padding-left: Theme.edge;
                 padding-right: Theme.edge;
                 padding-bottom: Theme.bar-bottom;
-                spacing: Theme.gap;
-                PageTitle {
-                    text: "People";
-                    horizontal-stretch: 1;
-                    vertical-alignment: center;
-                }
-                VerticalLayout {
-                    alignment: center;
-                    Pill {
-                        text: "+ Add";
-                        clicked => { root.add-someone(); }
-                    }
-                }
+                PageTitle { text: "People"; }
             }
             // Only ever set when something went wrong; the design has no room for it otherwise.
             if root.status != "" : Text {
@@ -404,11 +434,18 @@ slint::slint! {
                         horizontal-alignment: center;
                     }
                     Text {
-                        text: "Add someone from their code, and they appear here to call.";
+                        text: "Open Connect to scan a code, or send them yours.";
                         color: Theme.muted;
                         font-size: 0.875rem;
                         horizontal-alignment: center;
                         wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Pill {
+                            text: "Connect";
+                            clicked => { root.connect(); }
+                        }
                     }
                 }
             }
@@ -476,15 +513,6 @@ slint::slint! {
                 }
             }
 
-            // Your own key closes the screen, the way the design ends the list.
-            DetailRow {
-                title: "Your key";
-                detail: "Tap to show the QR";
-                value: root.fingerprint;
-                clicked => { root.show-key(); }
-            }
-            // The gesture bar sits below the last row rather than over it.
-            Rectangle { height: root.bottom-inset; }
         }
     }
 
@@ -499,7 +527,6 @@ slint::slint! {
         callback scan(bool);
         callback pick();
         callback share();
-        callback close();
         callback add(string, string);
         background: Theme.ground;
 
@@ -512,20 +539,14 @@ slint::slint! {
                 padding-bottom: Theme.bar-bottom;
                 spacing: Theme.gap;
                 PageTitle {
-                    text: root.scanning ? "Point at their code" : "Add someone";
+                    text: root.scanning ? "Point at their code" : "Connect";
                     horizontal-stretch: 1;
                 }
-                VerticalLayout {
+                if root.scanning : VerticalLayout {
                     alignment: center;
                     Pill {
-                        text: root.scanning ? "Stop" : "Close";
-                        clicked => {
-                            if (root.scanning) {
-                                root.scan(false);
-                            } else {
-                                root.close();
-                            }
-                        }
+                        text: "Stop";
+                        clicked => { root.scan(false); }
                     }
                 }
             }
@@ -888,6 +909,7 @@ slint::slint! {
         in property <[ContactItem]> contacts;
         in property <string> quality: "720p · 30";
 
+        in property <bool> booting: true;
         in-out property <Screen> screen: Screen.people;
         in-out property <bool> log-open: false;
         in-out property <bool> scanning: false;
@@ -929,15 +951,13 @@ slint::slint! {
                 clip: true;
                 if root.screen == Screen.people : PeoplePage {
                     top-inset: root.safe-area-insets.top;
-                    bottom-inset: root.safe-area-insets.bottom;
                     status: root.call-status;
                     contacts: root.contacts;
-                    fingerprint: root.my-short-fingerprint;
                     call(id) => { root.call(id); }
-                    add-someone => { root.screen = Screen.identity; }
-                    show-key => { root.screen = Screen.identity; }
+                    remove(id) => { root.remove-contact(id); }
+                    connect => { root.screen = Screen.connect; }
                 }
-                if root.screen == Screen.identity : KeyPage {
+                if root.screen == Screen.connect : KeyPage {
                     top-inset: root.safe-area-insets.top;
                     qr: root.qr;
                     frame: root.frame;
@@ -949,7 +969,6 @@ slint::slint! {
                     pick => { root.pick-key(); }
                     share => { root.share-key(); }
                     add(name, key) => { root.add-contact(name, key); }
-                    close => { root.screen = Screen.people; }
                 }
                 if root.screen == Screen.settings : SettingsPage {
                     top-inset: root.safe-area-insets.top;
@@ -957,9 +976,7 @@ slint::slint! {
                     open-log => { root.log-open = true; }
                 }
             }
-            // People ends with its own key row, as the design draws it, so the bar would be a
-            // second footer. It stays on the screens that are not aligned to the design yet.
-            if root.screen != Screen.people : Tabs {
+            Tabs {
                 screen <=> root.screen;
                 bottom-inset: root.safe-area-insets.bottom;
             }
@@ -987,6 +1004,9 @@ slint::slint! {
             toggle-speaker => { root.toggle-speaker(); }
             flip-camera => { root.flip-camera(); }
         }
+
+        // Over everything, until the endpoint is up and a call could actually arrive.
+        if root.booting : Splash { }
 
         if root.log-open : Rectangle {
             background: #000000F2;

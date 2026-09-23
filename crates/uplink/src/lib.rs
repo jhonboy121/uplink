@@ -862,6 +862,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         });
     });
 
+    // Everything the first screen needs is wired, so the splash has nothing left to cover. It is
+    // brief today because the endpoint starts before the window does; when that moves onto the
+    // runtime, this is what the splash will be waiting on.
+    ui.set_booting(false);
+
     let outcome = ui.run();
     if let Err(e) = platform.set_call_service(false) {
         tracing::warn!("stopping call service: {e}");

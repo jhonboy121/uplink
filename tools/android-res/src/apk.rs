@@ -46,7 +46,7 @@ fn deflate(data: &[u8]) -> Result<Vec<u8>> {
 /// Padding for this entry's extra field so its data begins on an `align` boundary. An extra
 /// field cannot be 1..3 bytes long — it needs its own four-byte header — so the next multiple up
 /// is taken instead.
-fn padding(base: usize, align: usize) -> usize {
+const fn padding(base: usize, align: usize) -> usize {
     if align <= 1 {
         return 0;
     }

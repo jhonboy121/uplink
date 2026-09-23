@@ -70,15 +70,19 @@ fn main() -> Result<()> {
     populate(&app)?;
     std::fs::create_dir_all(OUT_DIR)?;
 
+    // What a launch shows first, before anything else is reachable.
+    shoot(&window, &app, canvas, "splash")?;
+    app.set_booting(false);
+
     // Idle screens.
     app.set_call_state(CallState::Idle);
-    for (screen, name) in [(Screen::People, "people"), (Screen::Identity, "key"), (Screen::Settings, "settings")] {
+    for (screen, name) in [(Screen::People, "people"), (Screen::Connect, "connect"), (Screen::Settings, "settings")] {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
 
     // The Key screen once a code has been read: all that is left is naming them.
-    app.set_screen(Screen::Identity);
+    app.set_screen(Screen::Connect);
     app.set_peer_key("7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641".into());
     shoot(&window, &app, canvas, "key-pending")?;
     app.set_peer_key(Default::default());
@@ -90,7 +94,7 @@ fn main() -> Result<()> {
     populate(&app)?;
 
     // Scanning takes over the Key screen.
-    app.set_screen(Screen::Identity);
+    app.set_screen(Screen::Connect);
     app.set_scanning(true);
     shoot(&window, &app, canvas, "key-scanning")?;
     app.set_scanning(false);
@@ -118,7 +122,7 @@ fn main() -> Result<()> {
     // The same screens in light. A call is dark in either theme, so it is not repeated here.
     app.global::<Theme>().set_appearance(Appearance::Light);
     for (screen, name) in
-        [(Screen::People, "people-light"), (Screen::Identity, "key-light"), (Screen::Settings, "settings-light")]
+        [(Screen::People, "people-light"), (Screen::Connect, "connect-light"), (Screen::Settings, "settings-light")]
     {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
