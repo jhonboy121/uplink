@@ -325,9 +325,11 @@ default); keep disk usage lean. Avoid build scripts.
       published while the app was still in front — and there is **no API for leaving** PiP except
       finishing or returning to the front, so hanging up from the window steps the task behind
       everything instead of finishing the activity.
-    - **`Notification.CallStyle`** (API 31+) is what makes the ongoing-call notification look and
-      behave like a call, with hang up in the shade. Mic and speaker are extra actions on it. The
-      call service already posts a notification; this is a change of style, not of architecture.
+    - ~~**`Notification.CallStyle`**~~ **done**: the ongoing call names its peer and carries hang
+      up and mute, which send the same broadcast the shrunken window's buttons do. One trap worth
+      keeping: Android colorizes a call notification from the builder's colour and derives
+      readable text from it, so leaving the colour unset paints the buttons the colour of their
+      own background.
     - **A self-managed `ConnectionService`** is the real question. It is what makes Android treat
       ours as a call: audio focus and routing handled by the system, Bluetooth headset buttons,
       and the right behaviour when a cellular call arrives mid-call. It costs a `PhoneAccount`,
