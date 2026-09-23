@@ -319,11 +319,12 @@ default); keep disk usage lean. Avoid build scripts.
     to close, steps into the background rather than finishing the activity.
     What is settled: a call already keeps running in the background on a foreground service.
     What is not:
-    - **Picture-in-picture** is the platform's answer to "use the phone while calling". It needs
-      `supportsPictureInPicture`, `enterPictureInPictureMode`, and `RemoteAction`s for the
-      controls inside the small window. It costs nothing in permissions and works when the user
-      leaves uplink entirely, which an in-app floating frame cannot. The UI has to have a PiP
-      layout — the remote picture and nothing else — driven off the size Slint is given.
+    - ~~**Picture-in-picture**~~ **done**: leaving mid-call shrinks it, with Mute and End call on
+      the window. Two things worth keeping: `onUserLeaveHint` is not dependable under gesture
+      navigation — which is what `setAutoEnterEnabled` is for, and it only arms if the params were
+      published while the app was still in front — and there is **no API for leaving** PiP except
+      finishing or returning to the front, so hanging up from the window steps the task behind
+      everything instead of finishing the activity.
     - **`Notification.CallStyle`** (API 31+) is what makes the ongoing-call notification look and
       behave like a call, with hang up in the shade. Mic and speaker are extra actions on it. The
       call service already posts a notification; this is a change of style, not of architecture.
