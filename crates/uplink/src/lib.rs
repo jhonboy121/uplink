@@ -460,21 +460,23 @@ fn gate_icon(permission: Permission) -> slint::Image {
 /// Reads each permission's state and shows the gate while any is missing. `blocked` means Android
 /// will not ask again, so the only way on is Settings.
 fn refresh_gate(ui: &App, platform: &Platform) -> bool {
+    // Android stops explaining both before a permission has ever been asked for and after it has
+    // been refused for good, so "will not explain" only means blocked once we have asked.
+    let asked = ui.get_asked();
     let mut items = Vec::with_capacity(GATE.len());
     let mut blocked = false;
     let mut all = true;
     for (permission, name, why) in GATE {
         let granted = platform.has_permission(permission).unwrap_or(false);
-        // Android stops explaining once a refusal is final, so "will not explain and not granted"
-        // is what distinguishes blocked from merely not asked yet.
         let explains = platform.should_explain(permission).unwrap_or(false);
         let grant = if granted {
             Grant::Granted
-        } else if explains {
-            Grant::Needed
-        } else {
+        } else if asked && !explains {
             Grant::Blocked
+        } else {
+            Grant::Needed
         };
+        tracing::info!(?permission, granted, explains, asked, "gate");
         all &= granted;
         blocked |= grant == Grant::Blocked;
         items.push(PermissionItem {
@@ -484,12 +486,25 @@ fn refresh_gate(ui: &App, platform: &Platform) -> bool {
             icon: gate_icon(permission),
         });
     }
-    // Before anything has been asked, nothing explains and nothing is granted — which looks like
-    // blocked. Only treat it as blocked once a request has actually happened.
     ui.set_permissions(slint::ModelRc::new(slint::VecModel::from(items)));
-    ui.set_permissions_blocked(blocked && ui.get_asked());
+    ui.set_permissions_blocked(blocked);
     ui.set_gate(!all);
     all
+}
+
+/// Written once the explainer has been shown, so later launches go straight to Android's dialogs.
+/// A one-time grant lapses when the process dies, and re-reading the same screen every launch
+/// would be a wall between the user and the prompt they already understand.
+const GATE_EXPLAINED: &str = "gate-explained";
+
+fn gate_explained(data_dir: &Path) -> bool {
+    data_dir.join(GATE_EXPLAINED).exists()
+}
+
+fn mark_gate_explained(data_dir: &Path) {
+    if let Err(e) = std::fs::write(data_dir.join(GATE_EXPLAINED), []) {
+        tracing::warn!("recording that the gate was explained: {e}");
+    }
 }
 
 /// Asks for each missing permission in turn, then re-reads the gate.
@@ -761,11 +776,16 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
     show_contacts(&state, &ui);
-    refresh_gate(&ui, &platform);
+    // Anything missing on a launch that has already seen the explainer goes straight to Android's
+    // dialog: a lapsed one-time grant should not mean reading the same screen again.
+    if !refresh_gate(&ui, &platform) && gate_explained(data_dir) {
+        request_gate(&ui, &platform);
+    }
 
-    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    let (weak, p, dir) = (ui.as_weak(), Rc::clone(&platform), data_dir.to_path_buf());
     ui.on_grant_permissions(move || {
         if let Some(ui) = weak.upgrade() {
+            mark_gate_explained(&dir);
             request_gate(&ui, &p);
         }
     });
