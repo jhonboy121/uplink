@@ -310,6 +310,16 @@ impl Platform {
         }
     }
 
+    /// Keeps the process alive so the endpoint stays bound. Without it, swiping the app out of
+    /// recents takes the whole process, and with it anything a call could arrive at.
+    pub fn set_listening(&self, listening: bool) -> Result<(), Error> {
+        self.with_context(|env, context| {
+            env.call_method(context, jni_str!("setListening"), jni_sig!("(Z)V"), &[JValue::Bool(listening)])?;
+            tracing::info!(listening, "reachable in the background");
+            Ok(())
+        })
+    }
+
     /// The process-wide slot holding whatever outlives the screen. Zero when nothing has put
     /// anything there yet.
     pub fn core_handle(&self) -> Result<usize, Error> {

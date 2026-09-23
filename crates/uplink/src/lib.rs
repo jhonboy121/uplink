@@ -1058,6 +1058,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
             core
         }
     };
+    // Only once the endpoint is really up, so the notification never claims a readiness the app
+    // does not have.
+    if let Err(e) = platform.set_listening(true) {
+        tracing::warn!("staying reachable: {e}");
+    }
     let identity = *core.id();
     // Three views of the core's one connection; each creates its own table on top of it.
     let contacts = Contacts::open(core.db())?;

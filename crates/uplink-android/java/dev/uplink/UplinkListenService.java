@@ -1,0 +1,71 @@
+package dev.uplink;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.os.IBinder;
+import android.util.Log;
+
+/**
+ * Keeps the process alive so the endpoint stays bound and a call has somewhere to arrive.
+ *
+ * <p>This is not the call service. That one holds the camera and microphone and only runs during
+ * a call; this one holds nothing and runs always, because swiping the app out of recents kills a
+ * process that has no foreground service, and with the process goes the endpoint.
+ *
+ * <p>Its type is `specialUse` for two reasons: none of the others honestly describes waiting for
+ * a call, and it is the only type Android still lets a BOOT_COMPLETED receiver start — 14 blocks
+ * microphone that way and 15 adds camera and the rest.
+ */
+public class UplinkListenService extends Service {
+    private static final String CHANNEL = "ready";
+    private static final int NOTIFICATION_ID = 2;
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        createChannel();
+        startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        UplinkActivity.log(Log.INFO, "listening");
+        // Restarted if Android ever does kill us: being reachable is the whole point of it.
+        return START_STICKY;
+    }
+
+    /**
+     * Lowest importance there is: this notification says nothing is happening, and the user did
+     * not ask to be told that. Android insists a foreground service post something.
+     */
+    private void createChannel() {
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "Ready for calls", NotificationManager.IMPORTANCE_MIN);
+        channel.setShowBadge(false);
+        channel.setSound(null, null);
+        getSystemService(NotificationManager.class).createNotificationChannel(channel);
+    }
+
+    private Notification notification() {
+        Intent open = new Intent(this, UplinkActivity.class);
+        PendingIntent tap = PendingIntent.getActivity(
+                this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new Notification.Builder(this, CHANNEL)
+                .setSmallIcon(getResources().getIdentifier("notification", "drawable", getPackageName()))
+                .setContentTitle("Ready for calls")
+                .setContentText("uplink is reachable")
+                .setContentIntent(tap)
+                .setOngoing(true)
+                .build();
+    }
+
+    @Override
+    public void onDestroy() {
+        UplinkActivity.log(Log.INFO, "no longer listening");
+        super.onDestroy();
+    }
+}

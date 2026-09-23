@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Waiting for a call is not any of Android's named service types, and it is the only type
+         a BOOT_COMPLETED receiver may still start. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- Our own Application: it exists before any activity, service or receiver, which makes it
          the one thing the app can be driven through when nobody is looking at the screen. -->
@@ -61,6 +64,17 @@
             android:authorities="${package}.files"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <!-- foregroundServiceType 0x40000000 = specialUse. The property says what the special use
+             is, which is what the type asks of anyone who declares it. -->
+        <service
+            android:name="${listen_service}"
+            android:exported="false"
+            android:foregroundServiceType="0x40000000">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds the peer-to-peer endpoint open so incoming calls can arrive" />
+        </service>
 
         <!-- foregroundServiceType 0xc0 = camera | microphone. -->
         <service

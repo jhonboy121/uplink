@@ -92,6 +92,19 @@ public class UplinkApplication extends Application {
         startActivity(Intent.createChooser(send, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 
+    /**
+     * Keeps the process alive so the endpoint stays bound. Started once the endpoint is actually
+     * up, so the notification never claims readiness the app does not have.
+     */
+    void setListening(boolean listening) {
+        Intent intent = new Intent(this, UplinkListenService.class);
+        if (listening) {
+            startForegroundService(intent);
+        } else {
+            stopService(intent);
+        }
+    }
+
     /** Runs the foreground service that lets a call keep the camera and microphone in the background. */
     void setCall(boolean running, String who) {
         inCall = running;
