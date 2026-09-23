@@ -127,8 +127,12 @@ fn rate(count: u64, over: Duration) -> f64 {
     float(count) / over.as_secs_f64()
 }
 
+/// Lost as a share of sent. Clamped, because the two are not counted on the same basis: losses
+/// are QUIC packets aggregated over every path, while the denominator is UDP datagrams observed,
+/// and a call that migrates between the relay and a direct path has produced over 100%. The raw
+/// loss count is logged beside this so a nonsense ratio is visible rather than believed.
 fn loss_percent(lost: u64, sent: u64) -> f64 {
-    if sent == 0 { 0.0 } else { float(lost) / float(sent) * PERCENT }
+    if sent == 0 { 0.0 } else { (float(lost) / float(sent) * PERCENT).min(PERCENT) }
 }
 
 /// Logs stats until the connection closes, then a summary. Spawned with the call's media.
@@ -164,6 +168,7 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
             cwnd = p.cwnd,
             mtu = p.mtu,
             loss_pct = format!("{:.1}", loss_percent(delta.lost_packets, delta.datagrams_up)),
+            lost = delta.lost_packets,
             congestion_events = delta.congestion_events,
             up_kbps = kbps(delta.bytes_up, over),
             down_kbps = kbps(delta.bytes_down, over),
@@ -190,6 +195,7 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
         rtt_avg_ms = rtt_total.checked_div(samples).unwrap_or_default().as_millis(),
         rtt_max_ms = rtt_max.as_millis(),
         loss_pct = format!("{:.1}", loss_percent(total.lost_packets, total.datagrams_up)),
+        lost = total.lost_packets,
         mb_up = total.bytes_up / BYTES_PER_MB,
         mb_down = total.bytes_down / BYTES_PER_MB,
         frames_sent = total.frames_sent,

@@ -171,8 +171,10 @@ async fn decode(
             () = cancel.cancelled() => break,
             event = events.recv() => match event {
                 Some(Event::InputAvailable(index)) => free_inputs.push_back(index),
-                Some(Event::OutputAvailable(index, _)) => {
-                    if let Err(e) = decoder.render(index) {
+                Some(Event::OutputAvailable(index, info)) => {
+                    // Anything that is not a picture is released without being drawn; drawing it
+                    // blanks the surface.
+                    if let Err(e) = decoder.release(index, Decoder::is_picture(&info)) {
                         tracing::error!("decoder output: {e}");
                         break;
                     }

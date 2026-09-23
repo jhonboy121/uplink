@@ -24,6 +24,7 @@ const REQUEST: i32 = 0;
 const NO_FLAGS: u32 = 0;
 const KEYFRAME_FLAG: u32 = ffi::AMEDIACODEC_BUFFER_FLAG_KEY_FRAME;
 const CONFIG_FLAG: u32 = ffi::AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG;
+const END_OF_STREAM_FLAG: u32 = ffi::AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM;
 
 /// Codec constants the NDK headers lack; read from the Java SDK by [`crate::platform::Platform`].
 #[derive(Clone, Debug)]
@@ -253,8 +254,18 @@ impl Decoder {
             .at("AMediaCodec_queueInputBuffer")
     }
 
-    /// Renders the output reported by [`Event::OutputAvailable`] to the surface.
-    pub fn render(&self, index: usize) -> Result<(), Error> {
-        self.codec.0.release_output_buffer_by_index(index, true).at("AMediaCodec_releaseOutputBuffer (decoder)")
+    /// Whether an output buffer is a picture. A decoder also hands back codec configuration and
+    /// an end-of-stream marker, and either can carry no bytes at all — releasing one of those
+    /// *with* render draws nothing onto the surface, which on screen is a black frame. Some
+    /// decoders never emit them (`c2.qti.*`) and some do (`OMX.hisi.*`), which is why this looked
+    /// for a long time like a network fault on one phone only.
+    pub fn is_picture(info: &BufferInfo) -> bool {
+        info.size() > 0 && info.flags() & (CONFIG_FLAG | END_OF_STREAM_FLAG) == 0
+    }
+
+    /// Releases the output reported by [`Event::OutputAvailable`], drawing it to the surface only
+    /// if it is one.
+    pub fn release(&self, index: usize, show: bool) -> Result<(), Error> {
+        self.codec.0.release_output_buffer_by_index(index, show).at("AMediaCodec_releaseOutputBuffer (decoder)")
     }
 }
