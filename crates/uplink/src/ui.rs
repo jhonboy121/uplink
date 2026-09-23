@@ -139,6 +139,7 @@ slint::slint! {
         out property <length> splash-gap: 20px;
         out property <length> splash-foot: 32px;
         out property <length> group-head: 30px;
+        out property <length> sheet-width: 320px;
         // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text
         // gets the taller box explicitly and centres in it.
         out property <float> line-box: 1.6;
@@ -457,6 +458,10 @@ slint::slint! {
         in property <string> title;
         in property <string> detail;
         in property <string> value;
+        // Shown in place of `value`, because a glyph like a cross or a star is not in every face
+        // and a missing one renders as nothing at all.
+        in property <image> icon;
+        in property <bool> danger: false;
         in property <bool> tappable: true;
         callback clicked();
         height: Theme.detail-height;
@@ -491,7 +496,7 @@ slint::slint! {
                 horizontal-stretch: 1;
                 Text {
                     text: root.title;
-                    color: Theme.text;
+                    color: root.danger ? Theme.end : Theme.text;
                     font-size: 1rem;
                     font-weight: 700;
                     height: self.font-size * Theme.line-box;
@@ -509,9 +514,15 @@ slint::slint! {
             }
             VerticalLayout {
                 alignment: center;
-                Text {
+                if root.icon.width > 0 : Image {
+                    source: root.icon;
+                    width: Theme.key-icon;
+                    height: self.width;
+                    colorize: root.danger ? Theme.end : Theme.beacon;
+                }
+                if root.icon.width <= 0 : Text {
                     text: root.value;
-                    color: root.tappable ? Theme.beacon : Theme.muted;
+                    color: root.danger ? Theme.end : root.tappable ? Theme.beacon : Theme.muted;
                     font-size: 0.908rem;
                     font-family: Theme.mono;
                     height: self.font-size * Theme.line-box;
@@ -524,9 +535,9 @@ slint::slint! {
     component PeoplePage inherits Rectangle {
         in property <[ContactItem]> contacts;
         in property <length> top-inset;
-        in property <string> status;
+        in property <bool> online;
         callback call(string);
-        callback remove(string);
+        callback open(string);
         callback connect();
         background: Theme.ground;
 
@@ -538,14 +549,28 @@ slint::slint! {
                 padding-left: Theme.edge;
                 padding-right: Theme.edge;
                 padding-bottom: Theme.bar-bottom;
-                PageTitle { text: "People"; }
-            }
-            // Only ever set when something went wrong; the design has no room for it otherwise.
-            if root.status != "" : Text {
-                text: root.status;
-                color: Theme.beacon;
-                font-size: 0.8125rem;
-                wrap: word-wrap;
+                PageTitle {
+                    text: "People";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                // Reachability, not diagnostics: whether someone could call you right now.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: Theme.pill-height;
+                        width: reach.preferred-width + 28px;
+                        border-radius: self.height / 2;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: root.online ? Theme.answer.with-alpha(0.45) : Theme.muted.with-alpha(0.45);
+                        reach := Text {
+                            text: root.online ? "Online" : "Offline";
+                            color: root.online ? Theme.answer : Theme.muted;
+                            font-size: 0.8125rem;
+                        }
+                    }
+                }
             }
 
             if root.contacts.length == 0 : Rectangle {
@@ -604,6 +629,17 @@ slint::slint! {
                         }
                         Rectangle {
                             height: Theme.row-height;
+                            // The pill calls; the rest of the row opens them, because a contact
+                            // now has more to do to it than one button can carry.
+                            open-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.open(contact.id); }
+                            }
+                            background: open-touch.pressed ? Theme.surface : transparent;
+                            animate background { duration: 160ms; easing: ease-out; }
+                            accessible-role: button;
+                            accessible-label: contact.name;
+                            accessible-action-default => { root.open(contact.id); }
                             HorizontalLayout {
                                 padding-left: Theme.edge;
                                 padding-right: Theme.edge;
@@ -654,6 +690,195 @@ slint::slint! {
                 }
             }
 
+        }
+    }
+
+    // Naming a key that has just arrived — scanned, opened from an image, or pasted. A sheet over
+    // whatever screen you were on, because a key can arrive while you are anywhere and the one
+    // thing left to do should not be somewhere else.
+    component NameSheet inherits Rectangle {
+        in property <string> key;
+        in-out property <string> name;
+        callback add(string);
+        callback cancel();
+        background: #000000CC;
+
+        // Swallows taps on the dimmed area so nothing behind the sheet reacts.
+        TouchArea { }
+
+        Rectangle {
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+            height: body.preferred-height;
+            border-radius: Theme.wide-radius;
+            background: Theme.ground;
+            body := VerticalLayout {
+                padding: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: "Name this contact";
+                    color: Theme.text;
+                    font-family: Theme.display;
+                    font-size: 1.1875rem;
+                    font-weight: 600;
+                    height: self.font-size * Theme.line-box;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Only you see this name. They are saved by their key either way.";
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.key;
+                    color: Theme.muted;
+                    font-family: Theme.mono;
+                    font-size: 0.75rem;
+                    wrap: word-wrap;
+                }
+                LineEdit {
+                    placeholder-text: "Their name";
+                    text <=> root.name;
+                    accepted => {
+                        if (root.name != "") {
+                            root.add(root.name);
+                        }
+                    }
+                }
+                Wide {
+                    text: "Add";
+                    primary: true;
+                    enabled: root.name != "";
+                    clicked => { root.add(root.name); }
+                }
+                Wide {
+                    text: "Not now";
+                    clicked => { root.cancel(); }
+                }
+            }
+        }
+    }
+
+    // One contact: what you call them, what they call themselves, and the three things you can do
+    // to the row besides ring it.
+    component ContactPage inherits Rectangle {
+        in property <string> name;
+        in property <string> advertised;
+        in property <string> initial;
+        in property <bool> favourite;
+        in property <[string]> fingerprint-lines;
+        in property <length> top-inset;
+        in-out property <string> draft;
+        in-out property <bool> renaming;
+        callback call();
+        callback toggle-favourite();
+        callback rename(string);
+        callback remove();
+        callback close();
+        background: Theme.ground;
+
+        VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 0;
+                padding-top: root.top-inset + Theme.bar-top;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                padding-bottom: Theme.bar-bottom;
+                spacing: Theme.gap;
+                PageTitle {
+                    text: root.name;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Done";
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                vertical-stretch: 0;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                spacing: Theme.stack-gap;
+                HorizontalLayout {
+                    alignment: center;
+                    Avatar {
+                        initial: root.initial;
+                        tint: 0;
+                        size: Theme.peer-avatar;
+                    }
+                }
+                // Their claim sits under your name for them, in quotes, and never replaces it.
+                if root.advertised != "" : Text {
+                    text: "calls themselves “" + root.advertised + "”";
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    height: self.font-size * Theme.line-box;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    for line in root.fingerprint-lines : Text {
+                        text: line;
+                        color: Theme.muted;
+                        font-size: 0.9375rem;
+                        font-family: Theme.mono;
+                        letter-spacing: 0.6px;
+                        height: self.font-size * Theme.line-box;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if !root.renaming : Wide {
+                    text: "Call";
+                    primary: true;
+                    clicked => { root.call(); }
+                }
+                if root.renaming : LineEdit {
+                    placeholder-text: "Their name";
+                    text <=> root.draft;
+                }
+                if root.renaming : Wide {
+                    text: "Save";
+                    primary: true;
+                    enabled: root.draft != "" && root.draft != root.name;
+                    clicked => {
+                        root.rename(root.draft);
+                        root.renaming = false;
+                    }
+                }
+            }
+
+            // The actions sit clear of the Call button rather than butting against it.
+            Rectangle { height: Theme.stack-top; }
+            DetailRow {
+                title: "Favourite";
+                detail: root.favourite ? "Kept at the top of People" : "Keep them at the top of People";
+                icon: root.favourite ? @image-url("icons/star-filled.svg") : @image-url("icons/star.svg");
+                clicked => { root.toggle-favourite(); }
+            }
+            DetailRow {
+                title: "Rename";
+                detail: "What you call them, only on this phone";
+                value: root.renaming ? "Cancel" : "Edit";
+                clicked => {
+                    root.draft = root.name;
+                    root.renaming = !root.renaming;
+                }
+            }
+            DetailRow {
+                title: "Remove";
+                detail: "Their key goes; they can still call you";
+                icon: @image-url("icons/close.svg");
+                danger: true;
+                clicked => { root.remove(); }
+            }
+            Rectangle { vertical-stretch: 1; }
         }
     }
 
@@ -866,38 +1091,19 @@ slint::slint! {
                     }
                 }
 
-                // Once a key is in hand (scanned, read from an image, or pasted) this is all that
-                // is left to do: give them a name. The design has no state for it, so it borrows
-                // the stack's own shapes.
-                if root.pending-key != "" && !root.scanning : Text {
-                    text: root.pending-key;
-                    color: Theme.muted;
-                    font-size: 0.8125rem;
-                    font-family: Theme.mono;
-                    overflow: elide;
-                }
-                if root.pending-key != "" && !root.scanning : LineEdit {
-                    placeholder-text: "Their name";
-                    text <=> root.new-name;
-                }
-                if root.pending-key != "" && !root.scanning : Wide {
-                    text: "Add";
-                    primary: true;
-                    enabled: root.new-name != "";
-                    clicked => { root.add(root.new-name, root.pending-key); }
-                }
-
-                if root.pending-key == "" : Wide {
+                // Naming a scanned key happens in a sheet over whatever screen you are on, so
+                // this stays the two things that ever add someone.
+                Wide {
                     text: root.scanning ? "Stop scanning" : "Scan a code";
                     primary: !root.scanning;
                     clicked => { root.scan(!root.scanning); }
                 }
-                if root.pending-key == "" && !root.scanning : Wide {
+                if !root.scanning : Wide {
                     text: "Choose an image";
                     clicked => { root.pick(); }
                 }
-                if root.pending-key == "" && !root.scanning : Wide {
-                    text: "Share my key";
+                if !root.scanning : Wide {
+                    text: "Share my identity";
                     clicked => { root.share(); }
                 }
             }
@@ -1175,6 +1381,14 @@ slint::slint! {
         in property <string> key-exchange;
         in property <[ContactItem]> contacts;
         in property <[CallItem]> calls;
+        in property <bool> online: false;
+        // The contact being looked at. Empty means none, which is also how it is dismissed.
+        in-out property <string> open-contact-id;
+        in property <string> open-contact-name;
+        in property <string> open-contact-advertised;
+        in property <string> open-contact-initial;
+        in property <bool> open-contact-favourite;
+        in property <[string]> open-contact-fingerprint;
         in property <string> quality: "720p · 30";
 
         in property <bool> booting: true;
@@ -1210,6 +1424,8 @@ slint::slint! {
         callback grant-permissions();
         callback open-settings();
         callback clear-calls();
+        callback open-contact(string);
+        callback set-favourite(string, bool);
 
         title: "uplink";
         background: Theme.ground;
@@ -1229,10 +1445,10 @@ slint::slint! {
                 clip: true;
                 if root.screen == Screen.people : PeoplePage {
                     top-inset: root.safe-area-insets.top;
-                    status: root.call-status;
+                    online: root.online;
                     contacts: root.contacts;
                     call(id) => { root.call(id); }
-                    remove(id) => { root.remove-contact(id); }
+                    open(id) => { root.open-contact(id); }
                     connect => { root.screen = Screen.connect; }
                 }
                 if root.screen == Screen.calls : CallsPage {
@@ -1287,6 +1503,36 @@ slint::slint! {
             toggle-mic => { root.toggle-mic(); }
             toggle-speaker => { root.toggle-speaker(); }
             flip-camera => { root.flip-camera(); }
+        }
+
+        // A key that has arrived and has no name yet, over everything below it.
+        if root.peer-key != "" : NameSheet {
+            key: root.peer-key;
+            name <=> root.new-name;
+            add(name) => { root.add-contact(name, root.peer-key); }
+            cancel => {
+                root.peer-key = "";
+                root.new-name = "";
+            }
+        }
+
+        // A contact takes the window, over the tabs, until it is dismissed.
+        if root.open-contact-id != "" : ContactPage {
+            top-inset: root.safe-area-insets.top;
+            name: root.open-contact-name;
+            advertised: root.open-contact-advertised;
+            initial: root.open-contact-initial;
+            favourite: root.open-contact-favourite;
+            fingerprint-lines: root.open-contact-fingerprint;
+            draft <=> root.new-name;
+            call => { root.call(root.open-contact-id); }
+            toggle-favourite => { root.set-favourite(root.open-contact-id, !root.open-contact-favourite); }
+            rename(name) => { root.rename-contact(root.open-contact-id, name); }
+            remove => {
+                root.remove-contact(root.open-contact-id);
+                root.open-contact-id = "";
+            }
+            close => { root.open-contact-id = ""; }
         }
 
         // Nothing behind this is reachable until all three are granted.

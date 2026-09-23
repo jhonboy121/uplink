@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, Incoming, SendStream, presets};
 use iroh::address_lookup::MemoryLookup;
-use iroh::{Endpoint, EndpointAddr, SecretKey, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -40,8 +40,10 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Event {
     Ready { id: EndpointId },
-    /// Connected to the home relay; reachable by other peers.
+    /// Connected to a home relay, so other peers can reach us. Emitted again as `Offline` when
+    /// that stops being true, which is what the reachability chip reads.
     Online,
+    Offline,
     Dialing { peer: EndpointId },
     /// Our offer reached the peer; waiting for them to answer.
     Ringing { peer: EndpointId },
@@ -80,7 +82,7 @@ impl Node {
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
         emit(&events, Event::Ready { id: endpoint.id() }).await;
         match network {
-            Network::N0 => drop(tokio::spawn(announce_online(endpoint.clone(), events.clone()))),
+            Network::N0 => drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone()))),
             Network::Local(lookup) => lookup.add_endpoint_info(loopback_addr(&endpoint)),
         }
         let (finished, finished_rx) = mpsc::channel(CONTROL_QUEUE);
@@ -164,10 +166,23 @@ async fn emit(events: &mpsc::Sender<Event>, event: Event) {
     }
 }
 
-async fn announce_online(endpoint: Endpoint, events: mpsc::Sender<Event>) {
-    endpoint.online().await;
-    tracing::info!(addr = ?endpoint.addr(), "online");
-    emit(&events, Event::Online).await;
+/// Reachability, for as long as the endpoint lives. Being connected to a home relay is what makes
+/// us dialable, so it is a truer answer than whether the device has an interface up — a phone on
+/// a captive-portal wifi has a network and is not reachable.
+async fn watch_reachable(endpoint: Endpoint, events: mpsc::Sender<Event>) {
+    let mut status = endpoint.home_relay_status();
+    let mut online = false;
+    loop {
+        let reachable = status.get().into_iter().any(|relay| relay.is_connected());
+        if reachable != online {
+            online = reachable;
+            tracing::info!(online, addr = ?endpoint.addr(), "reachability");
+            emit(&events, if online { Event::Online } else { Event::Offline }).await;
+        }
+        if status.updated().await.is_err() {
+            break;
+        }
+    }
 }
 
 struct ActiveCall {

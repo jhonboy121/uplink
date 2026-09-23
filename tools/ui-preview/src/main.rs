@@ -98,10 +98,21 @@ fn main() -> Result<()> {
         shoot(&window, &app, canvas, name)?;
     }
 
-    // The Key screen once a code has been read: all that is left is naming them.
-    app.set_screen(Screen::Connect);
+    // One contact, opened from People.
+    app.set_screen(Screen::People);
+    app.set_open_contact_id(keys()[0].1.into());
+    app.set_open_contact_name("Noor".into());
+    app.set_open_contact_advertised("Noor A.".into());
+    app.set_open_contact_initial("N".into());
+    app.set_open_contact_favourite(true);
+    app.set_open_contact_fingerprint(fingerprint_lines(keys()[0].1));
+    shoot(&window, &app, canvas, "contact")?;
+    app.set_open_contact_id(Default::default());
+
+    // A key that has arrived and has no name yet, over whatever screen you were on.
+    app.set_screen(Screen::People);
     app.set_peer_key("7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641".into());
-    shoot(&window, &app, canvas, "key-pending")?;
+    shoot(&window, &app, canvas, "name-sheet")?;
     app.set_peer_key(Default::default());
 
     // People with nobody in it is the first thing a new user sees.
@@ -150,13 +161,18 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Realistic content: a short name and a long one, a real QR, stats that wrap.
-fn populate(app: &App) -> Result<()> {
-    let keys = [
+/// A short name and a long one, so both the common case and eliding are on screen.
+const fn keys() -> [(&'static str, &'static str); 3] {
+    [
         ("Noor", "0e62c81291e383bbc63b305338200d8562904d24a46cd6412f9bae0c7ae111f4"),
         ("Ammar", "7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641"),
         ("Laptop in the other room", "e90241d7ba3816fe0e62c81291e383bbc63b305338200d8562904d24a46cd641"),
-    ];
+    ]
+}
+
+/// Realistic content: a real QR, stats that wrap, one of every row state.
+fn populate(app: &App) -> Result<()> {
+    let keys = keys();
     // One favourite, one called recently, one never — the three states a row can be in.
     let rows = [("FAVOURITES", "Called 20 minutes ago", true), ("ALL", "Called Tuesday", false), ("", "Never called", false)];
     let contacts: Vec<ContactItem> = keys

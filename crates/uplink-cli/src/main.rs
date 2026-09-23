@@ -200,7 +200,8 @@ fn name(contacts: &Contacts, id: &EndpointId) -> String {
 fn describe(event: &Event, contacts: &Contacts) -> String {
     match event {
         Event::Ready { id } => format!("ready as {id}"),
-        Event::Online => "online".to_owned(),
+        Event::Online => "reachable".to_owned(),
+        Event::Offline => "not reachable".to_owned(),
         Event::Dialing { peer } => format!("dialing {}", name(contacts, peer)),
         Event::Ringing { peer } => format!("ringing {}", name(contacts, peer)),
         Event::Incoming { peer } => format!("incoming call from {} (a accept, r reject)", name(contacts, peer)),

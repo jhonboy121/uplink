@@ -406,6 +406,28 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     }
 }
 
+/// Fills the contact sheet, and closes it if that key is no longer a contact. Refreshing one that
+/// is not open would open it, so a change made elsewhere leaves it alone.
+fn refresh_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
+    if ui.get_open_contact_id() == peer.to_string().as_str() {
+        show_open_contact(state, ui, peer);
+    }
+}
+
+fn show_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
+    let found = with_contacts(state, |contacts| contacts.get(&peer).cloned()).flatten();
+    let Some(contact) = found else {
+        ui.set_open_contact_id(Default::default());
+        return;
+    };
+    ui.set_open_contact_id(contact.id.to_string().into());
+    ui.set_open_contact_initial(contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into());
+    ui.set_open_contact_name(contact.name.into());
+    ui.set_open_contact_advertised(contact.advertised.unwrap_or_default().into());
+    ui.set_open_contact_favourite(contact.favourite);
+    ui.set_open_contact_fingerprint(fingerprint_lines(&peer));
+}
+
 /// How many the Calls screen shows; the store keeps more than a screen can use.
 const CALLS_SHOWN: i64 = 100;
 
@@ -928,6 +950,27 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     show_calls(&state, &ui);
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_open_contact(move |id| {
+        let Some(ui) = weak.upgrade() else { return };
+        let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
+        show_open_contact(&s, &ui, peer);
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_set_favourite(move |id, favourite| {
+        let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
+        let outcome = save_contact(&s, |contacts| contacts.set_favourite(peer, favourite));
+        if let Some(ui) = weak.upgrade() {
+            match outcome {
+                Ok(()) => {
+                    show_contacts(&s, &ui);
+                    refresh_open_contact(&s, &ui, peer);
+                }
+                Err(e) => set_call_status(&ui.as_weak(), e),
+            }
+        }
+    });
+
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_clear_calls(move || {
         with_state(&s, |state| {
             if let Err(e) = state.log.clear() {
@@ -1053,7 +1096,12 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         if let Ok(id) = EndpointId::from_str(key.trim()) {
             let outcome = save_contact(&s, |contacts| contacts.rename(id, name.trim()));
             match (outcome, weak.upgrade()) {
-                (Ok(()), Some(ui)) => show_contacts(&s, &ui),
+                (Ok(()), Some(ui)) => {
+                    show_contacts(&s, &ui);
+                    // The sheet is still open on this contact, so it re-reads too — otherwise it
+                    // keeps showing the old name until it is closed and opened again.
+                    refresh_open_contact(&s, &ui, id);
+                }
                 (Err(e), _) => set_call_status(&weak, e),
                 _ => {}
             }
@@ -1203,14 +1251,14 @@ const fn peer_of(event: &Event) -> Option<EndpointId> {
         Event::Dialing { peer } | Event::Ringing { peer } | Event::Incoming { peer } | Event::Connected { peer, .. } => {
             Some(*peer)
         }
-        Event::Ready { .. } | Event::Online | Event::Ended { .. } => None,
+        Event::Ready { .. } | Event::Online | Event::Offline | Event::Ended { .. } => None,
     }
 }
 
 /// UI call state implied by an event; `None` leaves it unchanged.
 const fn call_state(event: &Event) -> Option<CallState> {
     match event {
-        Event::Ready { .. } | Event::Online => None,
+        Event::Ready { .. } | Event::Online | Event::Offline => None,
         Event::Dialing { .. } => Some(CallState::Dialing),
         Event::Ringing { .. } => Some(CallState::Ringing),
         Event::Incoming { .. } => Some(CallState::Incoming),
@@ -1222,7 +1270,8 @@ const fn call_state(event: &Event) -> Option<CallState> {
 fn describe(event: &Event) -> String {
     match event {
         Event::Ready { id } => format!("ready as {}", id.fmt_short()),
-        Event::Online => "online".to_owned(),
+        Event::Online => "reachable".to_owned(),
+        Event::Offline => "not reachable".to_owned(),
         Event::Dialing { peer } => format!("dialing {}", peer.fmt_short()),
         Event::Ringing { peer } => format!("ringing {}", peer.fmt_short()),
         Event::Incoming { peer } => format!("incoming call from {}", peer.fmt_short()),
@@ -1303,6 +1352,8 @@ async fn handle_node_events(
         }
         match event {
             Event::Ready { id } => ui.set_my_id(id.to_string().into()),
+            Event::Online => ui.set_online(true),
+            Event::Offline => ui.set_online(false),
             Event::Connected { media, key_exchange, .. } => {
                 ui.set_key_exchange(format!("{key_exchange:?}").into());
                 with_state(&state, |s| s.connected_at = Some(Instant::now()));
