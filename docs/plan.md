@@ -39,8 +39,21 @@ This is the source of truth for decisions. Changes go in as dated entries in [Re
 
 ## Identity, contacts, infrastructure
 
-- Identity is an iroh keypair per device. Contacts are **iroh keys only**; names are local nicknames. Contacts are added
-  by QR scan or pasted key. No accounts, phone numbers or servers of our own.
+- Identity is an iroh keypair per device, plus a **profile**: a display name and an optional picture. No accounts,
+  phone numbers or servers of our own.
+- **An identity is the key and the display name**, shared as a code or a link and saved as a contact outright. The
+  picture does not fit — a QR holds ~2.9 KB and a 256px picture is an order of magnitude more — so it arrives over the
+  connection instead, on first contact and whenever it changes.
+- **A name is a claim.** Contacts keep a **local nickname** that always wins; a scanned name only pre-fills it. A caller
+  whose key is not saved is shown as a quoted claim with the fingerprint under it and **no picture**, because a
+  photograph is the most convincing of the three lies.
+- Storage is **SQLite via `rusqlite`** (bundled, built with our clang wrapper like libopus). A contact is key, nickname,
+  advertised name, picture hash, favourite and last-called. **Pictures are files in the app-private directory named by
+  their hash**, never BLOBs and never external storage; the row holds only the hash, so one file serves every contact
+  that sends it and a change is a new file rather than an overwrite mid-read.
+- **Privacy switches:** *share my profile* (off ⇒ the code is key-only and calls advertise nothing) and *reject unknown
+  callers* (a key not in contacts never rings; refused at signalling and logged). Every call advertises the profile when
+  sharing is on, which is what lets an unknown caller say who they are.
 - Relays and discovery: n0 public infrastructure for now, kept configurable. Before real users, measure the share of
   relayed calls, then self-host `iroh-relay` / `iroh-dns-server` or use n0's paid hosting (public relays are best-effort
   with no SLA; check n0's terms).
@@ -86,9 +99,13 @@ default); keep disk usage lean. Avoid build scripts.
 4. **Video**: camera → MediaCodec encoder (input surface) → iroh → MediaCodec decoder → ImageReader → preview.
 5. **Audio**: AAudio voice-communication + Opus on its own stream.
 6. **Call service**: foreground service so calls survive backgrounding.
-7. **Product UI** (design locked, see Revisions): 7a contacts + QR + call screens, 7b PiP, lock-screen calls,
-   settings, diagnostics, 7c verification, identity rotation, history.
-8. Security to-dos above; then iOS (CI) and web.
+7. **Product UI** (design locked, see Revisions): 7a contacts + QR + call screens **done**, matched to the design and
+   themed; 7b the shell (three tabs, contacts with favourites and last-called, Connect, Settings), first run (splash,
+   permission gate, profile), profile over the wire + `rusqlite` contacts, privacy switches; 7c PiP, lock-screen calls,
+   diagnostics report; 7d verification, identity rotation, history.
+8. **Resource table**: our own `resources.arsc` writer beside `axml`, which buys the launcher icon, the monochrome
+   themed icon and the Android 12+ system splash. Blocked on nothing but the work; `aapt2` is x86-64 only.
+9. Security to-dos above; then iOS (CI) and web.
 
 ## Revisions
 
@@ -219,3 +236,31 @@ default); keep disk usage lean. Avoid build scripts.
   callback copies the frame and hands it to `spawn_blocking`, one decode at a time; decoding *in* the callback
   deadlocked teardown. Keys can also be read from a saved image: Android's `BitmapFactory` decodes any format
   (subsampled to 1600px) and returns ARGB, which we reduce to luma.
+- **2026-09-23**: the build was matched to the locked design by measurement, not by eye, and the method is written up in
+  [docs/ref/design-fidelity.md](ref/design-fidelity.md) — read it before editing `ui.rs`. The mockup is vendored at
+  `docs/design/uplink-call-ui.html`; `just design-measure` / `design-shot` measure and screenshot it in headless
+  Chromium, `just preview` dumps Slint's item tree beside each render, `just ui-diff` compares the two by bands of ink.
+  The mockup's 248px frame stands for a **360dp** phone (×1.4516). Nine divergences an earlier session had marked
+  "closed" with reasons were withdrawn: the design is the specification. Outfit, Public Sans and IBM Plex Mono are
+  vendored in `assets/` (with `assets/icons/`), reached by one `#[include_path]`; `font-family: "monospace"` never
+  resolved, and the design's font sizes are fractional. The app has **light and dark**, following the system unless
+  forced from Settings; a call stays dark in either.
+- **2026-09-23**: **shell, profile and privacy designed**.
+  This **supersedes** "contacts are iroh keys only", "avatars: initials on a generated colour, no image pipeline, no
+  storage", and the People screen's "Your key" footer row.
+  - **Three permanent tabs: People, Connect, Settings.** People is contacts only — favourites first, last-called as the
+    second line, the row opens the contact (favourite, rename, remove) and a trailing pill calls. Connect is your code
+    plus scan/choose-an-image, and is the only place a person is added. Your identity is not a contact and leaves People.
+  - **The mark is the "u-link":** a lowercase *u* whose two ends are the peers it joins. Two colours, no gradient, a
+    handful of SVG paths, and it survives the adaptive-icon mask.
+  - **First run:** splash (dark in either theme, `P2P · E2EE`) → permissions → *Who are you?* (name, optional picture) →
+    *This is your identity* → People. **Camera, microphone and notifications are all required**; the gate explains why
+    before Android's dialogs, and a blocked state lists what is missing with a button to this app's own settings page
+    (`ACTION_APPLICATION_DETAILS_SETTINGS`), re-checking on resume. `POST_NOTIFICATIONS` is only a runtime permission
+    from API 33, so on API 30–32 the gate counts it granted and shows two rows.
+  - **To do — a resource table.** `android:icon` and the Android 12+ system splash are resource references, and the
+    SDK's `aapt2` is an x86-64 binary that cannot run on this arm64 host. So `resources.arsc` has to be written the way
+    `axml` writes binary XML: string pools we already have, a package chunk, type-spec and type chunks, simple entries
+    for the icon and map entries for the splash theme. minSdk 30 means **adaptive icons are always available**, so
+    `mipmap-anydpi-v26` alone is enough and no legacy PNG mipmaps are needed. Until it exists the launcher shows
+    Android's placeholder; the in-app splash, the permission gate and the tab shell need none of it.
