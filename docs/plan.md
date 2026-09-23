@@ -298,9 +298,34 @@ default); keep disk usage lean. Avoid build scripts.
     ringtone for an incoming one, and a **timeout on establishing an outgoing call** — dialing a
     key nobody is listening on currently waits until the user gives up. The tone routes through the
     existing AAudio path, and stops the moment the call connects or ends.
-  - **A call must survive leaving the call screen** — this is a stack decision, not a feature, and
-    is open. What is settled: a call already keeps running in the background on a foreground
-    service. What is not:
+  - **A call cannot arrive unless the app is already running, and that is the biggest hole in the
+    product.** The foreground service starts on `Connected` and stops on `Ended`, so outside a
+    call uplink is an ordinary process that Android may reclaim whenever it likes. Once it does,
+    the endpoint is gone and there is nothing to ring. Everything below about notifications and
+    PiP is decoration until this is answered.
+    - How the others do it: they do **not** hold a connection open. A high-priority **FCM** push
+      pierces Doze, wakes the app, and only then does it connect and post a full-screen-intent
+      notification or hand the call to Telecom. Signal does exactly this and offers a persistent
+      websocket as an option for phones without Google services, because it costs battery.
+    - **FCM is not open to us**: the phone that most needs to receive calls is a Huawei, which
+      has no Google services at all. Huawei Push Kit would be a second push stack, and any push
+      at all means running a server, which this project does not have.
+    - So the realistic path is a **persistent foreground service** holding the endpoint bound,
+      plus a battery-optimisation exemption the user grants. Sideloading helps here. Two costs to
+      go in with eyes open: from API 34 a foreground service must declare a type and none of them
+      honestly means "waiting for a call" (`specialUse` is the closest), and EMUI kills background
+      apps aggressively unless the app is added to its own protected list by hand.
+    - Worth measuring before committing: what an idle bound endpoint actually costs in battery
+      over a night, because that number decides whether this is acceptable or whether uplink ends
+      up needing a push server after all.
+  - **A call must survive leaving the call screen**, and must not stop the rest of the app being
+    usable. Adding a contact or sending diagnostics mid-call should not mean hanging up.
+    - **Minimised in-app frame while uplink is foreground.** PiP does nothing here, because the
+      user has not left the app — this is the common case and needs its own answer: the call
+      shrinks to a draggable frame and the tabs underneath stay usable.
+    - **PiP once the user leaves the app**, which is the other half of the same feature.
+    What is settled: a call already keeps running in the background on a foreground service.
+    What is not:
     - **Picture-in-picture** is the platform's answer to "use the phone while calling". It needs
       `supportsPictureInPicture`, `enterPictureInPictureMode`, and `RemoteAction`s for the
       controls inside the small window. It costs nothing in permissions and works when the user
@@ -312,9 +337,15 @@ default); keep disk usage lean. Avoid build scripts.
     - **A self-managed `ConnectionService`** is the real question. It is what makes Android treat
       ours as a call: audio focus and routing handled by the system, Bluetooth headset buttons,
       and the right behaviour when a cellular call arrives mid-call. It costs a `PhoneAccount`,
-      the `MANAGE_OWN_CALLS` permission and a meaningful amount of Java. Self-managed calls do
-      **not** appear in the system call log and do not use the system's in-call UI. Deciding this
-      also decides whether we keep driving `MODE_IN_COMMUNICATION` ourselves.
+      the `MANAGE_OWN_CALLS` permission and a meaningful amount of Java. Deciding this also
+      decides whether we keep driving `MODE_IN_COMMUNICATION` ourselves — and we currently do,
+      by hand, on a call whose logs already show 3329 late and 4144 concealed audio packets and a
+      stream that had to be reopened mid-call.
+      Note that **"it is not in the phone's call log" says nothing about whether an app uses
+      this**: a self-managed service deliberately writes no call-log entry and draws its own
+      in-call UI. That is why WhatsApp calls do not show up there, and it is no
+      evidence either way. Signal, whose source can be read, does register a self-managed
+      `PhoneAccount`; Telegram does too.
   - **Strings get translated with Slint's own scheme**, which is gettext (`@tr()` → `.pot` → `.po`), not FTL. Bionic has
     no gettext, so use **bundled** translations: the compiler takes `SLINT_BUNDLE_TRANSLATIONS=<dir>` as an environment
     variable, so the `slint!` macro can bundle without a build script, and `slint::select_bundled_translation` switches
