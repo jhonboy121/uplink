@@ -1,0 +1,865 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Uplink Call UI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    /* Page (light). App screens keep their own palette below. */
+    --ground: #F5F7FA;
+    --panel: #FFFFFF;
+    --panel-2: #EDF1F6;
+    --line: #DBE2EB;
+    --text: #0E151E;
+    --muted: #5B6B7D;
+    --beacon: #0A6FC2;
+    --answer: #10894C;
+    --end: #C62B2B;
+    --shadow: 0 1px 2px rgba(14, 21, 30, .08), 0 8px 24px rgba(14, 21, 30, .06);
+
+    /* App tokens — fixed, these are the product's own palette in dark. */
+    --app-ink: #070A0F;
+    --app-surface: #101720;
+    --app-raised: #18212C;
+    --app-line: #263140;
+    --app-text: #E9F0F7;
+    --app-muted: #93A3B5;
+    --app-beacon: #58B6FF;
+    --app-answer: #32C97A;
+    --app-end: #FF5252;
+
+    --step: 8px;
+    --radius-s: 8px;
+    --radius-m: 14px;
+    --radius-l: 24px;
+    --ease: cubic-bezier(.2, .8, .3, 1);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0A0E14;
+      --panel: #111924;
+      --panel-2: #172231;
+      --line: #24303F;
+      --text: #E9F0F7;
+      --muted: #93A3B5;
+      --beacon: #58B6FF;
+      --answer: #32C97A;
+      --end: #FF5252;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0A0E14;
+    --panel: #111924;
+    --panel-2: #172231;
+    --line: #24303F;
+    --text: #E9F0F7;
+    --muted: #93A3B5;
+    --beacon: #58B6FF;
+    --answer: #32C97A;
+    --end: #FF5252;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: "Public Sans", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 0 72px;
+  }
+
+  h1, h2, h3, h4 { font-family: Outfit, system-ui, sans-serif; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(30px, 5vw, 46px); font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  h2 { font-size: clamp(21px, 3vw, 27px); font-weight: 600; letter-spacing: -.01em; }
+  h3 { font-size: 17px; font-weight: 600; }
+  p { margin: 0; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  header.top {
+    padding-block: 56px 40px;
+    display: grid;
+    gap: 18px;
+    max-width: 760px;
+  }
+  header.top p.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+
+  nav.jump {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 20;
+    background: color-mix(in srgb, var(--ground) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-block: 1px solid var(--line);
+    margin-bottom: 44px;
+  }
+  nav.jump ul {
+    display: flex; flex-wrap: wrap; gap: 4px 18px;
+    list-style: none; margin: 0 auto; padding: 11px 20px; max-width: 1140px;
+  }
+  nav.jump a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  nav.jump a:hover { color: var(--text); }
+
+  section { margin-bottom: 68px; scroll-margin-top: 80px; }
+  .section-head { display: grid; gap: 8px; margin-bottom: 26px; max-width: 70ch; }
+  .section-head p { color: var(--muted); }
+
+  /* ---------- phone frames ---------- */
+  .screens {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+    gap: 30px 24px;
+  }
+  figure.frame { margin: 0; display: grid; gap: 12px; justify-items: center; }
+  figure.frame figcaption { font-size: 13px; color: var(--muted); text-align: center; max-width: 30ch; }
+  figure.frame figcaption b { color: var(--text); font-weight: 600; display: block; font-family: Outfit, sans-serif; }
+
+  .phone {
+    width: 100%;
+    max-width: 264px;
+    aspect-ratio: 9 / 19.3;
+    background: var(--app-ink);
+    border: 1px solid var(--app-line);
+    border-radius: 28px;
+    padding: 7px;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .screen {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    border-radius: 22px;
+    overflow: hidden;
+    background: var(--app-surface);
+    color: var(--app-text);
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+  }
+  .screen.light { background: #FFFFFF; color: #0E151E; }
+
+  .statusbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 14px 3px; font-size: 9px; color: var(--app-muted);
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .screen.light .statusbar { color: #6B7C8F; }
+
+  /* remote video stage */
+  .stage { position: relative; flex: 1; overflow: hidden; }
+  .video {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(120% 80% at 70% 15%, #2B4B6B 0%, #16222F 55%, #0C121A 100%);
+    display: grid; place-items: center;
+  }
+  .video.self {
+    background: radial-gradient(110% 80% at 30% 20%, #3A3350 0%, #241F33 55%, #14111C 100%);
+  }
+  .face {
+    width: 54px; height: 54px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 19px;
+    color: #06121C; background: linear-gradient(140deg, #7FCBFF, #3E8FD0);
+  }
+  .face.rose { background: linear-gradient(140deg, #FFC2D1, #E2789A); color: #2B0D18; }
+
+  .callbar {
+    position: absolute; inset-inline: 0; top: 0;
+    padding: 10px 13px;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+    background: linear-gradient(to bottom, rgba(4, 8, 13, .72), transparent);
+  }
+  .peer { display: grid; gap: 2px; }
+  .peer .name { font-family: Outfit, sans-serif; font-weight: 600; font-size: 13px; }
+  .timer {
+    font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums;
+    font-size: 11px; color: var(--app-muted);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 7px; border-radius: 999px;
+    font-size: 8.5px; letter-spacing: .04em; text-transform: uppercase;
+    background: rgba(88, 182, 255, .16); color: #A9D9FF;
+    border: 1px solid rgba(88, 182, 255, .3);
+    font-family: "IBM Plex Mono", monospace;
+  }
+
+  /* self view: full screen before answer, corner box after */
+  .selfview {
+    position: absolute;
+    inset: 0;
+    border-radius: 0;
+    overflow: hidden;
+    border: 0 solid rgba(255, 255, 255, .18);
+    transition: inset .62s var(--ease), border-radius .62s var(--ease), border-width .62s var(--ease);
+    z-index: 3;
+  }
+  .screen.connected .selfview {
+    inset: 46px 12px auto auto;
+    width: 62px; height: 92px;
+    border-radius: 12px;
+    border-width: 1px;
+  }
+  .screen.connected.swapped .selfview { inset: 0; width: auto; height: auto; border-radius: 0; border-width: 0; z-index: 1; }
+  .selfview .label {
+    position: absolute; inset-inline: 0; bottom: 0; padding: 3px 5px;
+    font-size: 7.5px; color: #E9F0F7; background: linear-gradient(to top, rgba(0, 0, 0, .55), transparent);
+    opacity: 0; transition: opacity .3s var(--ease);
+  }
+  .screen.connected .selfview .label { opacity: 1; }
+  .screen.connected.swapped .selfview .label { opacity: 0; }
+
+  .controls {
+    position: absolute; inset-inline: 0; bottom: 0; z-index: 4;
+    padding: 12px 12px 16px;
+    display: flex; justify-content: center; gap: 9px;
+    background: linear-gradient(to top, rgba(4, 8, 13, .8), transparent);
+  }
+  .key {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(233, 240, 247, .16);
+    background: rgba(233, 240, 247, .1);
+    color: var(--app-text);
+    display: grid; place-items: center;
+    cursor: pointer; padding: 0;
+    transition: transform .16s var(--ease), background .16s var(--ease);
+  }
+  .key:hover { background: rgba(233, 240, 247, .18); }
+  .key:active { transform: scale(.92); }
+  .key svg { width: 15px; height: 15px; }
+  .key.on { background: var(--app-text); color: var(--app-ink); border-color: transparent; }
+  .key.end { background: var(--app-end); border-color: transparent; color: #fff; width: 44px; border-radius: 22px; }
+  .key.answer { background: var(--app-answer); border-color: transparent; color: #03301B; width: 44px; border-radius: 22px; }
+  .key:focus-visible { outline: 2px solid var(--app-beacon); outline-offset: 2px; }
+
+  /* incoming */
+  .incoming { flex: 1; display: grid; align-content: center; justify-items: center; gap: 10px; padding: 20px; text-align: center; }
+  .incoming .face { width: 76px; height: 76px; font-size: 26px; }
+  .pulse { position: relative; }
+  .pulse::after {
+    content: ""; position: absolute; inset: -8px; border-radius: 50%;
+    border: 1px solid rgba(50, 201, 122, .5);
+    animation: pulse 2.4s var(--ease) infinite;
+  }
+  @keyframes pulse {
+    0% { transform: scale(.94); opacity: .9; }
+    70% { transform: scale(1.22); opacity: 0; }
+    100% { opacity: 0; }
+  }
+
+  /* lists (contacts / settings) */
+  .appbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px 10px; gap: 8px;
+  }
+  .appbar h4 { font-size: 16px; font-weight: 600; }
+  .list { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .row {
+    display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 9px;
+    padding: 8px 14px;
+  }
+  .row + .row { border-top: 1px solid rgba(38, 49, 64, .55); }
+  .screen.light .row + .row { border-top-color: #E7ECF2; }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 12px;
+    background: #D8E7F5; color: #123A5C;
+  }
+  .avatar.b { background: #F6DDE6; color: #62243C; }
+  .avatar.c { background: #DCEEDF; color: #1D4A2C; }
+  .row .who { display: grid; gap: 1px; min-width: 0; }
+  .row .who b { font-size: 12px; font-weight: 600; font-family: Outfit, sans-serif; }
+  .row .who span {
+    font-family: "IBM Plex Mono", monospace; font-size: 8.5px; color: var(--app-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .screen.light .row .who span { color: #6B7C8F; }
+  .mini {
+    border: 1px solid rgba(88, 182, 255, .35); color: var(--app-beacon);
+    background: transparent; border-radius: 999px; padding: 3px 9px; font-size: 9px; cursor: pointer;
+    font-family: "Public Sans", sans-serif;
+  }
+  .screen.light .mini { border-color: rgba(10, 111, 194, .35); color: #0A6FC2; }
+
+  .settings-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 14px; border-top: 1px solid rgba(38, 49, 64, .55);
+  }
+  .screen.light .settings-row { border-top-color: #E7ECF2; }
+  .settings-row small { display: block; color: var(--app-muted); font-size: 9px; }
+  .screen.light .settings-row small { color: #6B7C8F; }
+  .value { font-size: 10px; color: var(--app-beacon); font-family: "IBM Plex Mono", monospace; }
+  .screen.light .value { color: #0A6FC2; }
+  .danger { color: var(--app-end); }
+
+  .qr {
+    width: 118px; height: 118px; margin-inline: auto; border-radius: 10px;
+    background: #fff; padding: 8px; display: block;
+  }
+  .qr canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+
+  .fingerprint {
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em;
+    text-align: center; color: var(--app-muted); word-spacing: .3em;
+  }
+
+  .stack { display: grid; gap: 8px; padding: 12px 14px; }
+  .wide {
+    width: 100%; border-radius: 10px; padding: 8px; font-size: 11px; cursor: pointer;
+    font-family: "Public Sans", sans-serif;
+    border: 1px solid rgba(88, 182, 255, .3); background: rgba(88, 182, 255, .12); color: #A9D9FF;
+  }
+  .wide.primary { background: var(--app-beacon); color: #04121F; border-color: transparent; font-weight: 600; }
+
+  /* ---------- tokens ---------- */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; }
+  .swatch { border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; background: var(--panel); }
+  .swatch .chipfill { height: 62px; }
+  .swatch .meta { padding: 9px 11px; display: grid; gap: 2px; }
+  .swatch .meta b { font-family: Outfit, sans-serif; font-size: 13px; }
+  .swatch .meta code, .swatch .meta span {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--muted);
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel); }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code, td .mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+  td b { font-family: Outfit, sans-serif; }
+
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .pill.ok { color: var(--answer); border-color: color-mix(in srgb, var(--answer) 40%, transparent); }
+  .pill.risk { color: #B4761B; border-color: rgba(180, 118, 27, .4); }
+  .pill.new { color: var(--beacon); border-color: color-mix(in srgb, var(--beacon) 40%, transparent); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 16px; background: var(--panel); display: grid; gap: 7px; align-content: start; }
+  .card h3 { font-size: 15px; }
+  .card p { font-size: 13.5px; color: var(--muted); }
+  .card ul { margin: 0; padding-inline-start: 18px; color: var(--muted); font-size: 13.5px; }
+  .card li { margin-block: 3px; }
+
+  .phase { display: grid; gap: 10px; }
+  .phase-head { display: flex; align-items: baseline; gap: 10px; }
+  .phase-head b { font-family: Outfit, sans-serif; font-size: 16px; }
+
+  .typerow { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .typerow + .typerow { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+  .typerow .spec { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  .demo-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .btn {
+    font-family: "Public Sans", sans-serif; font-size: 13px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    padding: 7px 13px; border-radius: 999px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--beacon); color: var(--beacon); }
+  .btn:focus-visible { outline: 2px solid var(--beacon); outline-offset: 2px; }
+
+  footer { border-top: 1px solid var(--line); padding-top: 22px; color: var(--muted); font-size: 13px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Step 7 · product UI</span>
+    <h1>Uplink Call UI</h1>
+    <p class="lede">
+      The screens for a two-person, peer-to-peer video call: no accounts, no servers, keys instead of phone
+      numbers. Everything below is drawn to the tokens it specifies, and the in-call frame is live — press
+      answer to watch the self-view fold into its corner.
+    </p>
+  </header>
+
+  <nav class="jump">
+    <ul>
+      <li><a href="#screens">Screens</a></li>
+      <li><a href="#color">Color</a></li>
+      <li><a href="#type">Type</a></li>
+      <li><a href="#motion">Motion</a></li>
+      <li><a href="#slint">Slint feasibility</a></li>
+      <li><a href="#phases">Phases</a></li>
+      <li><a href="#rtl">Arabic &amp; access</a></li>
+    </ul>
+  </nav>
+
+  <section id="screens">
+    <div class="section-head">
+      <h2>Screens</h2>
+      <p>
+        Dark is the call's home: video owns the frame and the chrome gets out of the way. Lists and settings
+        follow the system theme. Tap the controls — they work.
+      </p>
+    </div>
+
+    <div class="demo-controls">
+      <button class="btn" id="replay" type="button">Replay answer transition</button>
+      <button class="btn" id="swap" type="button">Swap previews</button>
+    </div>
+
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected" id="call">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview" id="selfview" role="button" tabindex="0" aria-label="Swap previews">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="peer">
+                  <span class="name">Noor</span>
+                  <span class="timer" id="timer">04:12</span>
+                </div>
+                <span class="chip">quantum-safe</span>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" data-toggle="mic" aria-pressed="false" aria-label="Mute microphone">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key on" type="button" data-toggle="speaker" aria-pressed="true" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg>
+                </button>
+                <button class="key" type="button" data-toggle="camera" aria-pressed="false" aria-label="Flip camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
+                </button>
+                <button class="key end" type="button" id="hangup" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 14c4-4 12-4 16 0l-2.5 2.2-3.2-1.6V12a12 12 0 0 0-4.6 0v2.6l-3.2 1.6z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>In a call</b>Peer, timer and the key-exchange badge on top; controls fade with a tap.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:03</span><span>5G ▚ 85%</span></div>
+            <div class="stage">
+              <div class="video"></div>
+              <div class="incoming">
+                <div class="pulse"><div class="face rose">N</div></div>
+                <div>
+                  <div style="font-family: Outfit, sans-serif; font-size: 16px; font-weight: 600;">Noor</div>
+                  <div style="color: var(--app-muted); font-size: 10.5px;">Incoming video call</div>
+                </div>
+                <span class="chip">verified key</span>
+              </div>
+              <div class="controls">
+                <button class="key end" type="button" aria-label="Decline">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+                <button class="key answer" type="button" id="answer" aria-label="Answer">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7c3 8 9 14 17 13l-1-4-4-1-2 2a15 15 0 0 1-5-5l2-2-1-4z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Incoming</b>Answer drives the transition in the first frame. Over the lock screen this becomes a full-screen notification.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar">
+              <h4>People</h4>
+              <button class="mini" type="button">+ Add</button>
+            </div>
+            <div class="list">
+              <div class="row">
+                <div class="avatar b">N</div>
+                <div class="who"><b>Noor</b><span>k4f2 · 9c81 · 77ab · e300</span></div>
+                <button class="mini" type="button">Call</button>
+              </div>
+              <div class="row">
+                <div class="avatar">A</div>
+                <div class="who"><b>Ammar</b><span>7d19 · 2bb4 · 0af6 · 55c2</span></div>
+                <button class="mini" type="button">Call</button>
+              </div>
+              <div class="row">
+                <div class="avatar c">L</div>
+                <div class="who"><b>Laptop</b><span>e902 · 41d7 · ba38 · 16fe</span></div>
+                <button class="mini" type="button">Call</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div><b style="font-size: 11px;">Your key</b><small>Tap to show the QR</small></div>
+              <span class="value">0e62 · c812 · 91e3</span>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>People</b>Nicknames are local. The four-group fingerprint is what you compare out loud.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:05</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>Add someone</h4><button class="mini" type="button">Close</button></div>
+            <div class="stack">
+              <div class="qr"><canvas id="qr" width="29" height="29" aria-label="Your identity as a QR code"></canvas></div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <button class="wide primary" type="button">Scan a code</button>
+              <button class="wide" type="button">Choose an image</button>
+              <button class="wide" type="button">Share my key</button>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Add someone</b>Scan in person when you can; the image path covers a key sent over chat.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:06</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>Settings</h4></div>
+            <div class="list">
+              <div class="settings-row"><div><b style="font-size: 11px;">Appearance</b><small>Follows the system</small></div><span class="value">System</span></div>
+              <div class="settings-row"><div><b style="font-size: 11px;">Language</b><small>App text and layout</small></div><span class="value">English</span></div>
+              <div class="settings-row"><div><b style="font-size: 11px;">Call quality</b><small>Caps what the camera sends</small></div><span class="value">720p · 30</span></div>
+              <div class="settings-row"><div><b style="font-size: 11px;">Diagnostics</b><small>Last 5 calls, sharable</small></div><span class="value">Report</span></div>
+              <div class="settings-row"><div><b style="font-size: 11px;" class="danger">New identity</b><small>Contacts must re-add you</small></div><span class="value danger">Rotate</span></div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Settings</b>Rotating the identity is destructive, so it says what breaks before it asks.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light" dir="rtl" lang="ar" style="font-family: 'Public Sans', 'Noto Sans Arabic', system-ui, sans-serif;">
+            <div class="statusbar"><span>٨٣٪ ▚ 5G</span><span>٢٣:٠٧</span></div>
+            <div class="appbar"><h4>الأشخاص</h4><button class="mini" type="button">إضافة +</button></div>
+            <div class="list">
+              <div class="row" style="grid-template-columns: 30px 1fr auto;">
+                <div class="avatar b">ن</div>
+                <div class="who"><b>نور</b><span dir="ltr">k4f2 · 9c81 · 77ab</span></div>
+                <button class="mini" type="button">اتصال</button>
+              </div>
+              <div class="row">
+                <div class="avatar">ع</div>
+                <div class="who"><b>عمار</b><span dir="ltr">7d19 · 2bb4 · 0af6</span></div>
+                <button class="mini" type="button">اتصال</button>
+              </div>
+            </div>
+            <div class="settings-row"><div><b style="font-size: 11px;">مفتاحك</b><small>اضغط لعرض الرمز</small></div><span class="value" dir="ltr">0e62 · c812</span></div>
+          </div>
+        </div>
+        <figcaption><b>العربية</b>Mirrored layout, Arabic numerals in the status bar, keys stay left-to-right.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="color">
+    <div class="section-head">
+      <h2>Color</h2>
+      <p>
+        One accent, and green and red spent only on answer and end — so the two buttons that matter are never
+        competing with decoration. Neutrals carry a blue bias, which keeps them sitting under video without
+        looking muddy. The right column maps each one to its Material 3 role, so M3 naming works if you want it.
+      </p>
+    </div>
+    <div class="swatches">
+      <div class="swatch"><div class="chipfill" style="background: #070A0F;"></div><div class="meta"><b>Ink</b><code>#070A0F</code><span>surface-dim · call ground</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #101720;"></div><div class="meta"><b>Surface</b><code>#101720</code><span>surface</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #18212C;"></div><div class="meta"><b>Raised</b><code>#18212C</code><span>surface-container</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #58B6FF;"></div><div class="meta"><b>Beacon</b><code>#58B6FF</code><span>primary</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #32C97A;"></div><div class="meta"><b>Answer</b><code>#32C97A</code><span>semantic only</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #FF5252;"></div><div class="meta"><b>End</b><code>#FF5252</code><span>error · semantic only</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #E9F0F7;"></div><div class="meta"><b>Text</b><code>#E9F0F7</code><span>on-surface</span></div></div>
+      <div class="swatch"><div class="chipfill" style="background: #93A3B5;"></div><div class="meta"><b>Muted</b><code>#93A3B5</code><span>on-surface-variant</span></div></div>
+    </div>
+    <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
+      Over video, chrome never uses a flat panel: text sits on a top-to-transparent scrim so it stays legible on a
+      bright frame without boxing the picture in.
+    </p>
+  </section>
+
+  <section id="type">
+    <div class="section-head">
+      <h2>Type</h2>
+      <p>
+        Outfit for names and headings, Public Sans for everything read in sentences, IBM Plex Mono wherever
+        digits must line up — the call timer and key fingerprints, both of which people read character by
+        character. Sizes follow the Material 3 roles.
+      </p>
+    </div>
+    <div class="card" style="gap: 0;">
+      <div class="typerow"><span style="font-family: Outfit, sans-serif; font-size: 28px; font-weight: 600;">Noor</span><span class="spec">headline-small · Outfit 600 · 24/32</span></div>
+      <div class="typerow"><span style="font-family: Outfit, sans-serif; font-size: 20px; font-weight: 600;">Incoming video call</span><span class="spec">title-medium · Outfit 600 · 16/24</span></div>
+      <div class="typerow"><span style="font-size: 16px;">Nicknames are local to this phone.</span><span class="spec">body-medium · Public Sans 400 · 14/20</span></div>
+      <div class="typerow"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 18px; font-variant-numeric: tabular-nums;">04:12</span><span class="spec">call timer · Plex Mono 500 · 16 · tabular</span></div>
+      <div class="typerow"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: .06em;">0e62 c812 91e3 83bb</span><span class="spec">fingerprint · Plex Mono 400 · 13 · grouped by 4</span></div>
+      <div class="typerow"><span class="eyebrow">quantum-safe</span><span class="spec">label-small · Plex Mono 500 · 11 · .14em</span></div>
+    </div>
+  </section>
+
+  <section id="motion">
+    <div class="section-head">
+      <h2>Motion</h2>
+      <p>Four movements, and nothing else moves. Each one explains a change of state rather than decorating it.</p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Moment</th><th>What moves</th><th>Timing</th></tr></thead>
+        <tbody>
+          <tr><td><b>Answer</b></td><td>Self-view shrinks from full frame into the top corner as the peer fades up behind it</td><td><span class="mono">620ms · cubic-bezier(.2,.8,.3,1)</span></td></tr>
+          <tr><td><b>Swap</b></td><td>The two previews trade places along the same path</td><td><span class="mono">420ms · same easing</span></td></tr>
+          <tr><td><b>Ringing</b></td><td>One ring expands out of the avatar and fades</td><td><span class="mono">2.4s loop · stops on answer</span></td></tr>
+          <tr><td><b>Controls</b></td><td>Fade out after 4s idle, back on any tap</td><td><span class="mono">200ms opacity</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
+      Reduced-motion turns the answer transition into a straight cut and stops the ring pulse; nothing else depends on movement.
+    </p>
+  </section>
+
+  <section id="slint">
+    <div class="section-head">
+      <h2>Slint feasibility</h2>
+      <p>
+        What each piece costs in the stack we already have. The two unknowns are worth spiking before the
+        phase they belong to.
+      </p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Feature</th><th>How</th><th>Confidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Self-view → corner</b></td>
+            <td>Slint animates geometry directly: <code>animate x, y, width, height { duration: 620ms; easing: ease-out-quint; }</code> on the preview element, driven by the call state.</td>
+            <td><span class="pill ok">known</span></td>
+          </tr>
+          <tr>
+            <td><b>Swappable previews</b></td>
+            <td>One boolean in the model; both surfaces already exist as borrowed GL textures, so swapping is which texture each element samples.</td>
+            <td><span class="pill ok">known</span></td>
+          </tr>
+          <tr>
+            <td><b>Picture-in-picture</b></td>
+            <td>Android's own PiP: JNI call to <code>enterPictureInPictureMode</code> with an aspect ratio, then Slint just redraws into a smaller surface. The UI hides everything but the remote video while <code>onPictureInPictureModeChanged</code> says it's active.</td>
+            <td><span class="pill risk">spike</span></td>
+          </tr>
+          <tr>
+            <td><b>QR display</b></td>
+            <td>Generate the matrix in Rust, draw it into an image, hand it to Slint as an <code>Image</code>. No new UI machinery.</td>
+            <td><span class="pill ok">known</span></td>
+          </tr>
+          <tr>
+            <td><b>QR scan &amp; from image</b></td>
+            <td>The camera already gives us frames; decode in Rust off the UI thread. Reading a saved photo needs a file picker through the activity.</td>
+            <td><span class="pill risk">spike</span></td>
+          </tr>
+          <tr>
+            <td><b>Avatars</b></td>
+            <td>Initials on a generated color by default — no image pipeline, no storage. A photo can come later.</td>
+            <td><span class="pill ok">known</span></td>
+          </tr>
+          <tr>
+            <td><b>Incoming call on lock screen</b></td>
+            <td>Full-screen-intent notification from the Java side; the service starts when the call is answered, which is also what Android's background rules require.</td>
+            <td><span class="pill new">step 6 follow-up</span></td>
+          </tr>
+          <tr>
+            <td><b>Theme &amp; language</b></td>
+            <td>Colors come from one global in Slint; strings from a lookup keyed by language, chosen at runtime rather than by the system locale.</td>
+            <td><span class="pill ok">known</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="phases">
+    <div class="section-head">
+      <h2>Phases</h2>
+      <p>First the calls you'd actually place, then the things that make it pleasant, then the rest.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="phase-head"><b>Phase 1</b><span class="pill new">essential</span></div>
+        <p>A call you can place without reading a 64-character key aloud.</p>
+        <ul>
+          <li>Contacts: add, rename, remove, with initials avatars</li>
+          <li>Your QR and scanning theirs</li>
+          <li>Incoming, outgoing and in-call screens</li>
+          <li>Mic, speaker, camera flip, end</li>
+          <li>The answer transition and preview swap</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="phase-head"><b>Phase 2</b><span class="pill">comfort</span></div>
+        <p>What a call needs once it's used daily.</p>
+        <ul>
+          <li>Picture-in-picture</li>
+          <li>Lock-screen incoming call</li>
+          <li>Settings: theme, language, quality</li>
+          <li>Diagnostics report you can send</li>
+          <li>Key from a saved image</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="phase-head"><b>Phase 3</b><span class="pill">later</span></div>
+        <p>Trust and polish.</p>
+        <ul>
+          <li>Safety-code verification, and a warning when a key changes</li>
+          <li>Identity rotation</li>
+          <li>Photo avatars</li>
+          <li>Call history</li>
+          <li>Identity key held in the Keystore</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="rtl">
+    <div class="section-head">
+      <h2>Arabic &amp; accessibility</h2>
+      <p>Arabic is a first-class language here, not a translation pass at the end.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <h3>What's free</h3>
+        <p>
+          Slint on Android draws through Skia, which shapes Arabic properly: joined forms and mixed
+          Arabic/Latin runs in a paragraph come out right without us doing anything.
+        </p>
+      </div>
+      <div class="card">
+        <h3>What we build</h3>
+        <p>
+          Layout mirroring isn't automatic. Rows, icons and alignment flip from one global direction flag, so
+          every screen is laid out in terms of start and end rather than left and right from the first line of UI code.
+        </p>
+      </div>
+      <div class="card">
+        <h3>What stays put</h3>
+        <p>
+          Keys, fingerprints and the call timer are left-to-right even in Arabic — they're codes, not prose.
+          Numerals follow the language.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Reachable</h3>
+        <ul>
+          <li>Call controls at least 48dp, with real labels for TalkBack</li>
+          <li>Text contrast 4.5:1, chrome over video always on a scrim</li>
+          <li>State never carried by color alone — the mute button changes fill, not just hue</li>
+          <li>Respects the system text size and reduced motion</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Drawn for uplink — peer-to-peer, end-to-end encrypted calling. Screens are live HTML at the tokens above,
+    not images, so anything here can be measured.
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var call = document.getElementById('call');
+    var timerEl = document.getElementById('timer');
+
+    // Call timer, from four minutes in so the frame looks mid-call.
+    var seconds = 252;
+    setInterval(function () {
+      seconds += 1;
+      var m = Math.floor(seconds / 60), s = seconds % 60;
+      timerEl.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }, 1000);
+
+    document.querySelectorAll('[data-toggle]').forEach(function (key) {
+      key.addEventListener('click', function () {
+        var on = key.classList.toggle('on');
+        key.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+
+    function swap() { call.classList.toggle('swapped'); }
+    document.getElementById('swap').addEventListener('click', swap);
+    var selfview = document.getElementById('selfview');
+    selfview.addEventListener('click', swap);
+    selfview.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); swap(); }
+    });
+
+    function replay() {
+      call.classList.remove('swapped');
+      call.classList.remove('connected');
+      window.setTimeout(function () { call.classList.add('connected'); }, 420);
+    }
+    document.getElementById('replay').addEventListener('click', replay);
+    document.getElementById('answer').addEventListener('click', replay);
+    document.getElementById('hangup').addEventListener('click', replay);
+
+    // A deterministic QR-like matrix: real finder patterns, stable payload fill.
+    var canvas = document.getElementById('qr');
+    if (canvas && canvas.getContext) {
+      var size = 29, ctx = canvas.getContext('2d'), seed = 0x0e62c812;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = '#0E151E';
+      function rand() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; }
+      function finder(x, y) {
+        ctx.fillRect(x, y, 7, 1); ctx.fillRect(x, y + 6, 7, 1);
+        ctx.fillRect(x, y, 1, 7); ctx.fillRect(x + 6, y, 1, 7);
+        ctx.fillRect(x + 2, y + 2, 3, 3);
+      }
+      for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+          var inFinder = (x < 8 && y < 8) || (x > size - 9 && y < 8) || (x < 8 && y > size - 9);
+          if (!inFinder && rand() > 0.52) { ctx.fillRect(x, y, 1, 1); }
+        }
+      }
+      finder(0, 0); finder(size - 7, 0); finder(0, size - 7);
+      ctx.fillRect(size - 9, size - 9, 5, 5);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(size - 8, size - 8, 3, 3);
+      ctx.fillStyle = '#0E151E';
+      ctx.fillRect(size - 7, size - 7, 1, 1);
+    }
+  })();
+</script>
+
+</body></html>

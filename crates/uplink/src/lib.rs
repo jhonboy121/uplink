@@ -59,6 +59,9 @@ const READER_MAX_IMAGES: i32 = 4;
 /// Groups of four, the way the key is read aloud.
 const FINGERPRINT_GROUP: usize = 4;
 const FINGERPRINT_GROUPS: usize = 8;
+/// A contact row and the "Your key" row show only the leading groups.
+const FINGERPRINT_ROW_GROUPS: usize = 4;
+const FINGERPRINT_SELF_GROUPS: usize = 3;
 const QR_PIXELS: u32 = 512;
 // Scanning: CPU-readable frames, big enough to read a code held up to the camera.
 const SCAN_WIDTH: i32 = 960;
@@ -323,16 +326,36 @@ fn set_peer(ui: &App, name: &str) {
     ui.set_peer_initial(initial.into());
 }
 
-/// Key as groups of four, matching what the peer reads out.
-fn fingerprint(id: &EndpointId) -> String {
-    id.to_string()
+/// Key as groups of four over two even lines, matching what the peer reads out. Lines rather than
+/// one wrapping string, because Slint has no line-height and the design's leading matters.
+fn fingerprint_lines(id: &EndpointId) -> slint::ModelRc<slint::SharedString> {
+    let key = id.to_string();
+    let lines: Vec<slint::SharedString> = key
         .chars()
         .take(FINGERPRINT_GROUP * FINGERPRINT_GROUPS)
+        .collect::<Vec<_>>()
+        .chunks(FINGERPRINT_GROUP * FINGERPRINT_ROW_GROUPS)
+        .map(|line| {
+            line.chunks(FINGERPRINT_GROUP).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join(" ").into()
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(lines))
+}
+
+/// The same key abbreviated for a list row, where only enough to tell two contacts apart fits.
+fn short_fingerprint(id: &EndpointId) -> String {
+    groups(id, FINGERPRINT_ROW_GROUPS, " · ")
+}
+
+fn groups(id: &EndpointId, count: usize, separator: &str) -> String {
+    id.to_string()
+        .chars()
+        .take(FINGERPRINT_GROUP * count)
         .collect::<Vec<_>>()
         .chunks(FINGERPRINT_GROUP)
         .map(|group| group.iter().collect::<String>())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(separator)
 }
 
 fn short(id: &EndpointId) -> String {
@@ -357,7 +380,7 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
             .map(|contact| ContactItem {
                 name: contact.name.clone().into(),
                 id: contact.id.to_string().into(),
-                fingerprint: fingerprint(&contact.id).into(),
+                fingerprint: short_fingerprint(&contact.id).into(),
                 initial: contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
                 tint: 0,
             })
@@ -656,7 +679,8 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     state.borrow_mut().ui = ui.as_weak();
     ui.set_log(report.into());
     ui.set_my_id(identity.to_string().into());
-    ui.set_my_fingerprint(fingerprint(&identity).into());
+    ui.set_my_fingerprint_lines(fingerprint_lines(&identity));
+    ui.set_my_short_fingerprint(groups(&identity, FINGERPRINT_SELF_GROUPS, " · ").into());
     match qr_image(&identity) {
         Ok(image) => ui.set_qr(image),
         Err(e) => tracing::error!("identity qr: {e:#}"),

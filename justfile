@@ -22,6 +22,8 @@ permissions := "android.permission.CAMERA android.permission.RECORD_AUDIO androi
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
+# The design's frame in dp: 360 wide at the mockup's 9/19.3, which is what `just ui-diff` renders.
+design_size := "360x772"
 cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
 # proot emulates setsockopt via ptrace and returns EOPNOTSUPP under concurrent UDP binds (iroh/noq
 # IP_PKTINFO); run tests serially here. Raise on real Linux/CI.
@@ -55,7 +57,7 @@ d8_mode := if profile == "release" { "--release" } else { "--debug" }
 java_src := "crates/uplink-android/java"
 dex_dir := "target" / "dex" / profile
 android_crates := "-p uplink -p uplink-android -p uplink-core"
-host_crates := "-p axml -p ndk-bindgen -p uplink-core -p uplink-cli"
+host_crates := "-p axml -p ndk-bindgen -p uplink-core -p uplink-cli -p ui-preview"
 
 [doc("List recipes")]
 default:
@@ -161,9 +163,42 @@ cli-log *args:
 [doc('''
 Render every screen of the UI to target/ui-preview with Slint's software renderer.
 Checks layout without flashing an APK; fonts and camera frames are the host's stand-ins.
+Each screen gets a .png and a .txt table of every element's position, size and paint;
+the debug-info variable is what puts the markup's own element names in that table.
 ''')]
 preview:
-    nice cargo run -q -p ui-preview
+    SLINT_EMIT_DEBUG_INFO=1 nice cargo run -q -p ui-preview
+
+[doc('''
+Measure the locked design (docs/design/uplink-call-ui.html) in headless Chromium.
+The page reports its own geometry once the webfonts have loaded, to target/design/geometry.json —
+what the CSS resolves to, which reading the stylesheet cannot tell you.
+''')]
+design-measure:
+    nice python3 tools/design-probe/probe.py
+
+[doc('''
+Print one measured design screen as a table, scaled to a 360dp phone, in the same shape as the
+element tables `just preview` writes — e.g. `just design-table People`. Run design-measure first.
+''')]
+design-table screen="People":
+    python3 tools/design-probe/table.py {{screen}}
+
+[doc('''
+Screenshot one design screen to target/design/<screen>.png at 360dp, with the mockup's drawn
+status bar removed — Android draws that, not the app — so it lines up with our own render.
+''')]
+design-shot screen="People":
+    nice python3 tools/design-probe/probe.py {{screen}}
+
+[doc('''
+Render the build at the design's own frame and compare the two by bands of content: every row of
+each image is background or ink, which is comparable even while the design is light and the build
+dark. Prints each band's position and size, and the difference. e.g. `just ui-diff people People`.
+''')]
+ui-diff name="people" screen="People": (design-shot screen)
+    UPLINK_PREVIEW_SIZE={{design_size}} nice cargo run -q -p ui-preview
+    nice cargo run -q -p ui-preview -- target/design/{{lowercase(replace(screen, " ", "-"))}}.png target/ui-preview/{{name}}.png
 
 [doc("Unit + integration tests for uplink-core (host, loopback only)")]
 test *args:

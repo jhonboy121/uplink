@@ -8,20 +8,31 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use slint::ComponentHandle as _;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+
+mod compare;
+mod dump;
 
 #[path = "../../../crates/uplink/src/ui.rs"]
 mod ui;
 
-use ui::{App, CallState, ContactItem, Screen};
+use ui::{App, Appearance, CallState, ContactItem, Screen, Theme};
 
-/// Logical pixels: an S24 Ultra is 1440x3120 at 3x.
+/// Logical pixels.
+/// The S24 Ultra is 1440x3120 at 3x. `UPLINK_PREVIEW_SIZE=360x799` renders at the design's own
+/// frame instead, so its screenshot and this one can be laid over each other.
 const WIDTH: u32 = 480;
 const HEIGHT: u32 = 1040;
 const FRAME_STEP: Duration = Duration::from_millis(16);
 /// Long enough for the answer transition (620ms) to finish.
 const SETTLE_FRAMES: u32 = 48;
 const OUT_DIR: &str = "target/ui-preview";
+/// Fingerprint grouping, as the app formats it.
+const GROUP: usize = 4;
+const FULL_GROUPS: usize = 8;
+const ROW_GROUPS: usize = 4;
+const SELF_GROUPS: usize = 3;
 
 struct Headless {
     window: Rc<MinimalSoftwareWindow>,
@@ -33,11 +44,27 @@ impl slint::platform::Platform for Headless {
     }
 }
 
+/// The canvas to render on, `WIDTHxHEIGHT` from the environment or the device's own.
+fn size() -> (u32, u32) {
+    let Ok(value) = std::env::var("UPLINK_PREVIEW_SIZE") else {
+        return (WIDTH, HEIGHT);
+    };
+    let parsed = value.split_once('x').and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)));
+    parsed.unwrap_or((WIDTH, HEIGHT))
+}
+
 fn main() -> Result<()> {
+    // `ui-preview <design.png> <build.png>` compares two renders instead of making them.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [left, right] = args.as_slice() {
+        return compare::run(left, right);
+    }
+
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless { window: window.clone() }))
         .map_err(|e| anyhow::anyhow!("setting the headless platform: {e}"))?;
-    window.set_size(slint::PhysicalSize::new(WIDTH, HEIGHT));
+    let canvas = size();
+    window.set_size(slint::PhysicalSize::new(canvas.0, canvas.1));
 
     let app = App::new()?;
     populate(&app)?;
@@ -47,25 +74,25 @@ fn main() -> Result<()> {
     app.set_call_state(CallState::Idle);
     for (screen, name) in [(Screen::People, "people"), (Screen::Identity, "key"), (Screen::Settings, "settings")] {
         app.set_screen(screen);
-        shoot(&window, name)?;
+        shoot(&window, &app, canvas, name)?;
     }
 
     // The Key screen once a code has been read: all that is left is naming them.
     app.set_screen(Screen::Identity);
     app.set_peer_key("7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641".into());
-    shoot(&window, "key-pending")?;
+    shoot(&window, &app, canvas, "key-pending")?;
     app.set_peer_key(Default::default());
 
     // People with nobody in it is the first thing a new user sees.
     app.set_screen(Screen::People);
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(Vec::<ContactItem>::new())));
-    shoot(&window, "people-empty")?;
+    shoot(&window, &app, canvas, "people-empty")?;
     populate(&app)?;
 
     // Scanning takes over the Key screen.
     app.set_screen(Screen::Identity);
     app.set_scanning(true);
-    shoot(&window, "key-scanning")?;
+    shoot(&window, &app, canvas, "key-scanning")?;
     app.set_scanning(false);
 
     // Call states.
@@ -75,17 +102,28 @@ fn main() -> Result<()> {
         (CallState::Connected, "call-connected"),
     ] {
         app.set_call_state(state);
-        shoot(&window, name)?;
+        shoot(&window, &app, canvas, name)?;
     }
     app.set_swapped(true);
-    shoot(&window, "call-connected-swapped")?;
+    shoot(&window, &app, canvas, "call-connected-swapped")?;
     app.set_swapped(false);
     app.set_mic_on(false);
-    shoot(&window, "call-connected-muted")?;
+    shoot(&window, &app, canvas, "call-connected-muted")?;
 
     app.set_call_state(CallState::Idle);
     app.set_log_open(true);
-    shoot(&window, "log")?;
+    shoot(&window, &app, canvas, "log")?;
+    app.set_log_open(false);
+
+    // The same screens in light. A call is dark in either theme, so it is not repeated here.
+    app.global::<Theme>().set_appearance(Appearance::Light);
+    for (screen, name) in
+        [(Screen::People, "people-light"), (Screen::Identity, "key-light"), (Screen::Settings, "settings-light")]
+    {
+        app.set_screen(screen);
+        shoot(&window, &app, canvas, name)?;
+    }
+    app.global::<Theme>().set_appearance(Appearance::System);
 
     println!("rendered to {OUT_DIR}/");
     Ok(())
@@ -103,14 +141,15 @@ fn populate(app: &App) -> Result<()> {
         .map(|(name, key)| ContactItem {
             name: (*name).into(),
             id: (*key).into(),
-            fingerprint: fingerprint(key).into(),
+            fingerprint: groups(key, ROW_GROUPS, " · ").into(),
             initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
             tint: 0,
         })
         .collect();
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(contacts)));
     app.set_my_id(keys[0].1.into());
-    app.set_my_fingerprint(fingerprint(keys[0].1).into());
+    app.set_my_fingerprint_lines(fingerprint_lines(keys[0].1));
+    app.set_my_short_fingerprint(groups(keys[0].1, SELF_GROUPS, " · ").into());
     app.set_qr(qr_image(keys[0].1)?);
     app.set_peer_name("Noor".into());
     app.set_peer_initial("N".into());
@@ -129,8 +168,28 @@ fn populate(app: &App) -> Result<()> {
     Ok(())
 }
 
-fn fingerprint(key: &str) -> String {
-    key.chars().take(32).collect::<Vec<_>>().chunks(4).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join(" ")
+/// Mirrors the app's own fingerprint formatting; the app keeps its copy next to its contacts.
+fn fingerprint_lines(key: &str) -> slint::ModelRc<slint::SharedString> {
+    let lines: Vec<slint::SharedString> = key
+        .chars()
+        .take(GROUP * FULL_GROUPS)
+        .collect::<Vec<_>>()
+        .chunks(GROUP * ROW_GROUPS)
+        .map(|line| {
+            line.chunks(GROUP).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join(" ").into()
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(lines))
+}
+
+fn groups(key: &str, count: usize, separator: &str) -> String {
+    key.chars()
+        .take(GROUP * count)
+        .collect::<Vec<_>>()
+        .chunks(GROUP)
+        .map(|group| group.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
 fn qr_image(key: &str) -> Result<slint::Image> {
@@ -159,10 +218,11 @@ fn stand_in(r: u8, g: u8, b: u8) -> slint::Image {
     slint::Image::from_rgb8(buffer)
 }
 
-/// Lets animations and timers settle, then writes one PNG.
-fn shoot(window: &Rc<MinimalSoftwareWindow>, name: &str) -> Result<()> {
-    let mut buffer = vec![slint::Rgb8Pixel { r: 0, g: 0, b: 0 }; usize::try_from(WIDTH * HEIGHT)?];
-    let stride = usize::try_from(WIDTH)?;
+/// Lets animations and timers settle, then writes one PNG and the element table beside it.
+fn shoot(window: &Rc<MinimalSoftwareWindow>, app: &App, canvas: (u32, u32), name: &str) -> Result<()> {
+    let (width, height) = canvas;
+    let mut buffer = vec![slint::Rgb8Pixel { r: 0, g: 0, b: 0 }; usize::try_from(width * height)?];
+    let stride = usize::try_from(width)?;
     for _ in 0..SETTLE_FRAMES {
         slint::platform::update_timers_and_animations();
         window.request_redraw();
@@ -172,9 +232,10 @@ fn shoot(window: &Rc<MinimalSoftwareWindow>, name: &str) -> Result<()> {
         std::thread::sleep(FRAME_STEP);
     }
     let raw = buffer.iter().flat_map(|pixel| [pixel.r, pixel.g, pixel.b]).collect();
-    let image = image::RgbImage::from_raw(WIDTH, HEIGHT, raw).context("frame buffer size")?;
+    let image = image::RgbImage::from_raw(width, height, raw).context("frame buffer size")?;
     let path = format!("{OUT_DIR}/{name}.png");
     image.save(&path)?;
+    std::fs::write(format!("{OUT_DIR}/{name}.txt"), dump::tree(app.window()))?;
     println!("{path}");
     Ok(())
 }
