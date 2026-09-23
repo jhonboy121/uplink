@@ -1491,7 +1491,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     });
 
     let outcome = ui.run();
-    if let Err(e) = platform.set_call_service(false) {
+    if let Err(e) = platform.set_call_service(false, "") {
         tracing::warn!("stopping call service: {e}");
     }
     let node = {
@@ -1665,7 +1665,8 @@ async fn handle_node_events(
                 let parts =
                     VideoParts { sender: video, incoming: incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
                 with_state(&state, |s| s.start_video(parts));
-                if let Err(e) = platform.set_call_service(true) {
+                // The peer is already named on the window; the notification names them too.
+                if let Err(e) = platform.set_call_service(true, &ui.get_peer_name()) {
                     tracing::warn!("call service: {e}");
                 }
                 // (Re)starts the camera with the encoder as a second output.
@@ -1677,7 +1678,7 @@ async fn handle_node_events(
                     s.connected_at = None;
                     s.end_call();
                 });
-                if let Err(e) = platform.set_call_service(false) {
+                if let Err(e) = platform.set_call_service(false, "") {
                     tracing::warn!("stopping call service: {e}");
                 }
                 if let Err(e) = platform.set_in_call(false) {

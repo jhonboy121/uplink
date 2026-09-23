@@ -40,11 +40,15 @@ public class UplinkActivity extends NativeActivity {
     /** The picture-in-picture window's shape: upright, like the phones on both ends of a call. */
     private static final int PIP_WIDTH = 9;
     private static final int PIP_HEIGHT = 16;
-    /** Our own broadcast, sent only to ourselves; the codes match `platform::CallAction` in Rust. */
-    private static final String ACTION_CALL = "dev.uplink.CALL_ACTION";
-    private static final String EXTRA_ACTION = "action";
-    private static final int ACTION_HANGUP = 0;
-    private static final int ACTION_MIC = 1;
+    /**
+     * Our own broadcast, sent only to ourselves; the codes match `PlatformEvent::action` in Rust.
+     * Shared with {@link UplinkCallService}, whose notification carries the same two buttons, so
+     * a tap means the same thing wherever it came from.
+     */
+    static final String ACTION_CALL = "dev.uplink.CALL_ACTION";
+    static final String EXTRA_ACTION = "action";
+    static final int ACTION_HANGUP = 0;
+    static final int ACTION_MIC = 1;
 
     /**
      * Static so {@link #log} works from anywhere in the app (the call service has no activity).
@@ -59,6 +63,8 @@ public class UplinkActivity extends NativeActivity {
     private volatile boolean inCall;
     /** Mirrors the UI, so the window's own mute button shows the state it would move to. */
     private volatile boolean micOn = true;
+    /** Who the call is with, for the notification to name. */
+    private volatile String callPeer = "";
 
     /** Taps on the picture-in-picture buttons arrive here; nothing outside the app may send them. */
     private final BroadcastReceiver callActions = new BroadcastReceiver() {
@@ -130,10 +136,24 @@ public class UplinkActivity extends NativeActivity {
         return shouldShowRequestPermissionRationale(permission);
     }
 
-    /** Told by the UI, so the window's mute button offers the move the user has not made yet. */
+    /**
+     * Told by the UI, so the buttons offer the move the user has not made yet — in the shrunken
+     * window and in the notification alike, which are the two places a call can be driven from
+     * without the app in front.
+     */
     void setMicOn(boolean on) {
         micOn = on;
         refreshPictureInPicture();
+        if (inCall) {
+            // Starting it again re-posts the notification under the same id.
+            startForegroundService(callIntent());
+        }
+    }
+
+    private Intent callIntent() {
+        return new Intent(this, UplinkCallService.class)
+                .putExtra(UplinkCallService.EXTRA_PEER, callPeer)
+                .putExtra(UplinkCallService.EXTRA_MIC_ON, micOn);
     }
 
     /**
@@ -398,14 +418,15 @@ public class UplinkActivity extends NativeActivity {
     }
 
     /** Starts or stops the foreground service that keeps a call alive in the background. */
-    void setCallService(boolean running) {
+    void setCallService(boolean running, String peer) {
         inCall = running;
+        callPeer = peer;
         // Arms the shrink now, while the app is still in front; too late once the user has left.
         refreshPictureInPicture();
         if (!running) {
             leavePictureInPicture();
         }
-        Intent intent = new Intent(this, UplinkCallService.class);
+        Intent intent = callIntent();
         if (running) {
             startForegroundService(intent);
         } else {

@@ -26,6 +26,9 @@ MARK = 240
 # The badge is small on screen (a fifth of a code) but is also drawn into a shared image at a
 # size we do not control, so it is rendered well above either.
 BADGE = 256
+# A notification's small icon is 24dp, drawn flat in one colour from the alpha alone — so it is
+# the mark cropped to its own bounds, filling the box rather than sitting in an icon's safe zone.
+NOTIFICATION = 96
 # The mark's own bounds inside the viewBox: the circles' outer edges and the arc's stroke.
 ART = "8.4 4.4 31.2 34.35"
 
@@ -75,3 +78,5 @@ render(DRAWABLE / "mark.png", "#58B6FF", "#E9F0F7")
 render(DRAWABLE / "mark_mono.png", "#FFFFFF", "#FFFFFF")
 # On a white plate, so the mark takes the light theme's colours.
 render(ICONS / "mark-badge.png", "#0A6FC2", "#0E151E", canvas=BADGE, mark=BADGE, box=ART)
+# The status bar's own: only the alpha survives, so the colour is whatever is opaque.
+render(DRAWABLE / "notification.png", "#FFFFFF", "#FFFFFF", canvas=NOTIFICATION, mark=NOTIFICATION, box=ART)
