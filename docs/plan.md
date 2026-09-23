@@ -304,11 +304,40 @@ default); keep disk usage lean. Avoid build scripts.
     - **FCM is not open to us**: the phone that most needs to receive calls is a Huawei, which
       has no Google services at all. Huawei Push Kit would be a second push stack, and any push
       at all means running a server, which this project does not have.
-    - So the realistic path is a **persistent foreground service** holding the endpoint bound,
-      plus a battery-optimisation exemption the user grants. Sideloading helps here. Two costs to
-      go in with eyes open: from API 34 a foreground service must declare a type and none of them
-      honestly means "waiting for a call" (`specialUse` is the closest), and EMUI kills background
-      apps aggressively unless the app is added to its own protected list by hand.
+    - **Decided: a persistent foreground service of our own**, holding the endpoint bound, plus a
+      battery-optimisation exemption the user grants. The alternatives were checked and none of
+      them removes the problem:
+      - **UnifiedPush** is alive and maintained (F-Droid marked five years of it in January 2026),
+        but a *distributor* app holds the connection and the user must battery-exempt **it**. That
+        relocates the problem into someone else's app. Its real win is sharing one connection
+        across many apps, which is worth nothing when there is one app. **ntfy** and **NextPush**
+        are distributors, self-hostable, same constraint.
+      - **OpenPush** was announced in 2020 and what happened in the five years since is
+        UnifiedPush. Dead.
+      - **FCM** needs Google services, which the phone that most needs to receive calls does not
+        have. **HMS Push Kit** needs a Huawei developer account *with identity verification*, an
+        app in AppGallery Connect, `agconnect-services.json` and an SHA-256 fingerprint — two push
+        stacks and two consoles, for two users.
+      Every option ends with something on the device holding a connection and exempted from
+      battery optimisation. FCM and HMS only get away with it because that something is the
+      vendor's own always-running service, which we cannot be. So ours is strictly fewer moving
+      parts than a distributor plus a server, with the same failure mode on an OEM that kills
+      background apps.
+    - **Asking for the exemption splits in two, and only half of it can be verified.**
+      - The **standard Doze exemption** has real APIs: `PowerManager.isIgnoringBatteryOptimizations`
+        to read it, `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` for the one-tap dialog (it needs
+        the permission of the same name; fine when sideloading), and
+        `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` to open the list without it. Check, prompt,
+        and check again — the UI can state this one truthfully.
+      - **OEM lists have no query API at all.** EMUI's protected apps, MIUI's autostart and the
+        rest are vendor-private. All that exists is hardcoded component names to *open* the screen
+        (for EMUI, `com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity` on P and
+        later), which differ per OEM *and per OEM version*, may not exist (`ActivityNotFound`) and
+        may not be exported (`SecurityException`). So: wrap every one, fall back to our own
+        settings page, and **never claim it worked** — the screen can be offered, not confirmed.
+    - Two more costs to go in with eyes open: from API 34 a foreground service must declare a type
+      and none of them honestly means "waiting for a call" (`specialUse` is the closest), and a
+      factory reset or a system update can quietly undo whatever the user granted.
     - Worth measuring before committing: what an idle bound endpoint actually costs in battery
       over a night, because that number decides whether this is acceptable or whether uplink ends
       up needing a push server after all.
