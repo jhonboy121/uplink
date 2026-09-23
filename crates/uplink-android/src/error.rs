@@ -49,6 +49,10 @@ pub enum Error {
     LogFilter(#[from] tracing_subscriber::filter::ParseError),
     #[error("a value does not fit the Java type it crosses as")]
     TooBig(#[from] std::num::TryFromIntError),
+    /// Asked for something only a visible app can do — the window, the task, a permission prompt
+    /// — while there is no activity. Not a failure of the call so much as of its timing.
+    #[error("no activity: the app is not on screen")]
+    NoActivity,
     #[error(transparent)]
     Core(#[from] uplink_core::Error),
 }

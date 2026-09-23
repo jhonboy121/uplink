@@ -16,7 +16,7 @@ use jni::refs::Global;
 use jni::strings::JNIStr;
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JavaVM, NativeMethod, Outcome, jni_sig, jni_str};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 
@@ -102,7 +102,18 @@ impl Inner {
 
 pub struct Platform {
     vm: JavaVM,
-    activity: Global<JObject<'static>>,
+    /// Always here: the `Application`, which exists before any activity, service or receiver.
+    /// Permissions can be read through it, audio routed, services started and notifications
+    /// posted — everything a call needs before anyone is looking at it.
+    context: Arc<Global<JObject<'static>>>,
+    /// Only while an activity is. Requesting a permission, picking an image, the window's system
+    /// bars, picture-in-picture and stepping into the background all need one, and none of them
+    /// can happen without someone looking at the screen anyway.
+    ///
+    /// An `RwLock` rather than a mutex: this is read on nearly every call and written twice in an
+    /// activity's life. The global ref is refcounted, so a reader clones it out and lets go of
+    /// the lock rather than holding it across a call into Java.
+    activity: RwLock<Option<Arc<Global<JObject<'static>>>>>,
     inner: Arc<Inner>,
     /// `Build.VERSION.SDK_INT`. What the app was built against says nothing about what it is
     /// running on, and the two disagree by three years on a phone that cannot take Google's
@@ -173,13 +184,31 @@ impl Platform {
         // At info, and once per process: which Android this is decides what the app may ask for,
         // and it is the first thing worth knowing about a device that behaves oddly.
         tracing::info!(sdk, "platform bridge attached");
-        Ok((Self { vm, activity, inner, sdk }, incoming))
+        // Both slots are the activity for now: it is the only entry point that exists. Once a
+        // service can bring the app up on its own, `context` becomes the Application and the
+        // activity comes and goes underneath it. `Global` cannot be cloned without an `Env` —
+        // a new global ref is a JNI call — so the refcount is ours rather than JNI's.
+        let activity = Arc::new(activity);
+        let context = Arc::clone(&activity);
+        Ok((Self { vm, context, activity: RwLock::new(Some(activity)), inner, sdk }, incoming))
     }
 
     /// Every call into the activity goes through here, which is also the one place that can see a
     /// throw while the throwable is still pending — so it is where Java's own message is read.
+    /// Anything that only needs a `Context`, which is everything the app does when nobody is
+    /// looking at it.
+    fn with_context<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
+        self.vm.attach_current_thread(|env| match f(env, self.context.as_obj()) {
+            Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
+            outcome => outcome,
+        })
+    }
+
+    /// Anything that needs the window or the task. Fails plainly when there is no activity rather
+    /// than pretending, because the caller is asking for something only a visible app can do.
     fn with_activity<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
-        self.vm.attach_current_thread(|env| match f(env, self.activity.as_obj()) {
+        let activity = self.activity.read().clone().ok_or(Error::NoActivity)?;
+        self.vm.attach_current_thread(|env| match f(env, activity.as_obj()) {
             Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
             outcome => outcome,
         })
@@ -207,11 +236,11 @@ impl Platform {
             return self.notifications_enabled();
         }
         let granted = self.inner.permission_granted;
-        self.with_activity(|env, activity| {
+        self.with_context(|env, context| {
             let name = permission_string(env, permission)?;
             let state = env
                 .call_method(
-                    activity,
+                    context,
                     jni_str!("checkSelfPermission"),
                     jni_sig!("(Ljava/lang/String;)I"),
                     &[JValue::Object(&name)],
@@ -315,9 +344,9 @@ impl Platform {
     /// Puts the device in (or out of) a voice call: routes to the call stream and enables the
     /// platform's echo cancellation, with the speaker on for video calls.
     pub fn set_in_call(&self, in_call: bool) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
+        self.with_context(|env, context| {
             let mode = audio_mode(env, if in_call { jni_str!("MODE_IN_COMMUNICATION") } else { jni_str!("MODE_NORMAL") })?;
-            let manager = audio_manager(env, activity)?;
+            let manager = audio_manager(env, context)?;
             env.call_method(&manager, jni_str!("setMode"), jni_sig!("(I)V"), &[JValue::Int(mode)])?;
             env.call_method(
                 &manager,
@@ -369,8 +398,8 @@ impl Platform {
 
     /// Speaker or earpiece for the call audio.
     pub fn set_speaker(&self, on: bool) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
-            let manager = audio_manager(env, activity)?;
+        self.with_context(|env, context| {
+            let manager = audio_manager(env, context)?;
             env.call_method(&manager, jni_str!("setSpeakerphoneOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
             tracing::debug!(on, "speakerphone");
             Ok(())
@@ -395,7 +424,7 @@ impl Platform {
 
     /// H.264 codec constants from the SDK (the NDK headers don't carry them).
     pub fn avc(&self) -> Result<Avc, Error> {
-        self.with_activity(|env, _| {
+        self.with_context(|env, _| {
             let mime = env
                 .get_static_field(
                     jni_str!("android/media/MediaFormat"),
@@ -417,7 +446,7 @@ impl Platform {
     /// Recent `ApplicationExitInfo` records, with printable excerpts of crash/ANR traces
     /// (native crashes carry a tombstone protobuf).
     pub fn previous_exits(&self) -> Result<String, Error> {
-        self.with_activity(|env, activity| {
+        self.with_context(|env, context| {
             let traced = [
                 exit_reason(env, jni_str!("REASON_CRASH"))?,
                 exit_reason(env, jni_str!("REASON_CRASH_NATIVE"))?,
@@ -432,14 +461,14 @@ impl Platform {
                 .l()?;
             let am = env
                 .call_method(
-                    activity,
+                    context,
                     jni_str!("getSystemService"),
                     jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
                     &[JValue::Object(&service)],
                 )?
                 .l()?;
             let package =
-                env.call_method(activity, jni_str!("getPackageName"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+                env.call_method(context, jni_str!("getPackageName"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
             let list = env
                 .call_method(
                     &am,
