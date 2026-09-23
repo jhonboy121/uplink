@@ -81,11 +81,23 @@ pub struct Camera {
     id: String,
     sensor_orientation: i32,
     facing: Facing,
+    intent: Intent,
+}
+
+/// What a session is for. The request template sets `CONTROL_CAPTURE_INTENT`, which is how the
+/// camera HAL learns that one of these streams feeds a video encoder rather than a viewfinder.
+/// Getting it wrong is not cosmetic: a HiSilicon device handed an encoder surface under the
+/// preview intent configured the session, delivered no frames at all, and then faulted with
+/// `ERROR_CAMERA_DEVICE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Intent {
+    Preview,
+    Record,
 }
 
 impl Camera {
     /// Opens the first camera facing `facing` and repeats a capture request into every window.
-    pub fn open(facing: Facing, windows: &[&NativeWindow], fps: i32) -> Result<Self, Error> {
+    pub fn open(facing: Facing, windows: &[&NativeWindow], fps: i32, intent: Intent) -> Result<Self, Error> {
         let error = Arc::<DeviceError>::default();
         let ctx = Arc::as_ptr(&error).cast_mut().cast::<c_void>();
         // SAFETY: plain C constructor.
@@ -114,6 +126,7 @@ impl Camera {
             id: String::new(),
             sensor_orientation: 0,
             facing,
+            intent,
         };
         let (id, orientation) = find(mgr, facing)?;
         cam.id = id.to_string_lossy().into_owned();
@@ -155,7 +168,10 @@ impl Camera {
                 "createCaptureRequest",
                 ffi::ACameraDevice_createCaptureRequest(
                     cam.device,
-                    ffi::ACameraDevice_request_template::TEMPLATE_PREVIEW,
+                    match intent {
+                        Intent::Preview => ffi::ACameraDevice_request_template::TEMPLATE_PREVIEW,
+                        Intent::Record => ffi::ACameraDevice_request_template::TEMPLATE_RECORD,
+                    },
                     &raw mut cam.request,
                 ),
             )?;
@@ -197,6 +213,10 @@ impl Camera {
 
     pub const fn facing(&self) -> Facing {
         self.facing
+    }
+
+    pub const fn intent(&self) -> Intent {
+        self.intent
     }
 
     pub const fn sensor_orientation(&self) -> i32 {

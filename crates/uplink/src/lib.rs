@@ -26,7 +26,7 @@ use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
-use uplink_android::camera::{Camera, Facing};
+use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
 use uplink_android::platform::{Permission, Platform};
 use uplink_android::preview::{Frame, Preview};
@@ -155,7 +155,13 @@ impl State {
         match self.open_session() {
             Ok(session) => {
                 let camera = &session.camera;
-                tracing::info!(id = camera.id(), facing = ?camera.facing(), orientation = camera.sensor_orientation(), "camera started");
+                tracing::info!(
+                    id = camera.id(),
+                    facing = ?camera.facing(),
+                    orientation = camera.sensor_orientation(),
+                    intent = ?camera.intent(),
+                    "camera started"
+                );
                 self.status(format!(
                     "camera {} ({:?}) sensor {}° · {CAPTURE_WIDTH}x{CAPTURE_HEIGHT}",
                     camera.id(),
@@ -196,7 +202,9 @@ impl State {
             .collect();
         // Codes are held up in front of you: that is the back camera's job.
         let facing = if self.scanning { Facing::Back } else { self.facing };
-        let camera = Camera::open(facing, &windows, CAPTURE_FPS)?;
+        // The encoder's surface is one of the targets during a call, and the HAL has to be told.
+        let intent = if self.call.is_some() { Intent::Record } else { Intent::Preview };
+        let camera = Camera::open(facing, &windows, CAPTURE_FPS, intent)?;
         Ok(Session { shown: None, camera, reader, _scanner: scanner })
     }
 
