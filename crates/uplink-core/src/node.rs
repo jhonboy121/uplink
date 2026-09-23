@@ -29,6 +29,11 @@ const SIGNAL_QUEUE: usize = 4;
 const CLOSE_GRACE: Duration = Duration::from_secs(1);
 /// Time an active call gets to hang up cleanly when the node shuts down.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// How long to keep trying to reach a peer before giving up on the key entirely.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long their phone rings before we stop waiting. Longer than dialling, because this one is
+/// a person deciding rather than a network failing.
+const RING_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
@@ -62,6 +67,10 @@ pub enum EndReason {
     /// We declined their call.
     Declined,
     Busy,
+    /// Never reached them: no listener on that key, or no route to it.
+    DialTimeout,
+    /// Reached them and rang, but nobody picked up.
+    NoAnswer,
     Failed(String),
 }
 
@@ -324,8 +333,13 @@ async fn dial(
     events: mpsc::Sender<Event>,
 ) -> Result<EndReason, Error> {
     emit(&events, Event::Dialing { peer }).await;
+    // Dialling a key nobody is listening on has no natural end: iroh keeps trying relays and
+    // holepunching for as long as it is asked to, so the deadline has to come from here.
     let connection = tokio::select! {
-        connection = endpoint.connect(peer, ALPN) => connection?,
+        connection = tokio::time::timeout(DIAL_TIMEOUT, endpoint.connect(peer, ALPN)) => match connection {
+            Ok(connection) => connection?,
+            Err(_) => return Ok(EndReason::DialTimeout),
+        },
         Some(Control::Hangup) = control.recv() => return Ok(EndReason::LocalHangup),
     };
     let key_exchange = secure(&connection)?;
@@ -333,8 +347,16 @@ async fn dial(
     protocol::send(&mut send, Signal::Offer).await?;
     let mut signals = spawn_reader(recv);
     emit(&events, Event::Ringing { peer }).await;
+    // Reached them, so now it is a question of whether anyone picks up. Hanging up properly on
+    // the way out stops their phone ringing too.
+    let unanswered = tokio::time::sleep(RING_TIMEOUT);
+    tokio::pin!(unanswered);
     loop {
         tokio::select! {
+            () = &mut unanswered => {
+                finish(&connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
+                return Ok(EndReason::NoAnswer);
+            }
             signal = signals.recv() => return match signal {
                 Some(Ok(Signal::Accept)) => {
                     active(&connection, peer, key_exchange, send, signals, &mut control, &events).await

@@ -26,7 +26,11 @@ pub enum Outcome {
     Rejected,
     /// We hung up before they picked up.
     Cancelled,
-    /// Never reached them, or the network gave out.
+    /// Rang out: we reached them and nobody answered.
+    NoAnswer,
+    /// Never reached them at all — nothing listening on that key, or no route to it.
+    Unreachable,
+    /// The network gave out, or the call failed for a reason worth reporting.
     Failed,
 }
 
@@ -38,6 +42,8 @@ impl Outcome {
             Self::Declined => "declined",
             Self::Rejected => "rejected",
             Self::Cancelled => "cancelled",
+            Self::NoAnswer => "no-answer",
+            Self::Unreachable => "unreachable",
             Self::Failed => "failed",
         }
     }
@@ -51,6 +57,8 @@ impl Outcome {
             "declined" => Self::Declined,
             "rejected" => Self::Rejected,
             "cancelled" => Self::Cancelled,
+            "no-answer" => Self::NoAnswer,
+            "unreachable" => Self::Unreachable,
             _ => Self::Failed,
         }
     }

@@ -140,6 +140,9 @@ slint::slint! {
         out property <length> splash-foot: 32px;
         out property <length> group-head: 30px;
         out property <length> sheet-width: 320px;
+        out property <length> toast-bottom: 88px;
+        // Long enough to read a sentence, short enough not to sit in the way.
+        out property <duration> toast-life: 4s;
         // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text
         // gets the taller box explicitly and centres in it.
         out property <float> line-box: 1.6;
@@ -1382,6 +1385,7 @@ slint::slint! {
         in property <[ContactItem]> contacts;
         in property <[CallItem]> calls;
         in property <bool> online: false;
+        in-out property <string> toast;
         // The contact being looked at. Empty means none, which is also how it is dismissed.
         in-out property <string> open-contact-id;
         in property <string> open-contact-name;
@@ -1503,6 +1507,40 @@ slint::slint! {
             toggle-mic => { root.toggle-mic(); }
             toggle-speaker => { root.toggle-speaker(); }
             flip-camera => { root.flip-camera(); }
+        }
+
+        // Something that went wrong and needs no decision — it says its piece and goes. Anything
+        // the user has to answer is a sheet, not this. Slint has no toast widget, but it has a
+        // Timer, so the dismissal lives here rather than in every caller.
+        toast-timer := Timer {
+            interval: Theme.toast-life;
+            running: root.toast != "";
+            triggered() => { root.toast = ""; }
+        }
+        // A second message restarts the clock instead of inheriting what is left of the first's.
+        changed toast => {
+            if (root.toast != "") {
+                toast-timer.restart();
+            }
+        }
+        if root.toast != "" : Rectangle {
+            y: parent.height - self.height - root.safe-area-insets.bottom - Theme.toast-bottom;
+            height: toast-body.preferred-height;
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+            border-radius: Theme.wide-radius;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.hairline;
+            toast-body := HorizontalLayout {
+                padding: Theme.row-gap;
+                Text {
+                    text: root.toast;
+                    color: Theme.text;
+                    font-size: 0.875rem;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
         }
 
         // A key that has arrived and has no name yet, over everything below it.

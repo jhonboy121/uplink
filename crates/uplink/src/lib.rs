@@ -39,7 +39,7 @@ use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::audio::CallAudio;
-use crate::ui::{App, CallItem, CallState, ContactItem, Grant, PermissionItem, Screen};
+use crate::ui::{App, CallItem, CallState, ContactItem, Grant, PermissionItem};
 use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
@@ -200,13 +200,23 @@ impl State {
                     runtime.spawn_blocking(move || {
                         let found = qr::decode_luma(&frame.luma, frame.width, frame.height, frame.stride);
                         busy.store(false, Ordering::Relaxed);
-                        let Some(key) = found else { return };
+                        // Nothing found is the normal case while the camera hunts, so it is
+                        // silent; a code that is not ours is worth saying, once, and scanning
+                        // carries on so the next code still gets a chance.
+                        let Some(text) = found else { return };
+                        let Some(key) = peer_key(&text) else {
+                            let _ = ui.upgrade_in_event_loop(|ui| {
+                                if ui.get_toast().is_empty() {
+                                    toast(&ui, "That code is not an uplink key");
+                                }
+                            });
+                            return;
+                        };
                         tracing::info!("scanned a key");
                         // `invoke_scan` runs the same handler the button does, so the camera
                         // rebuilds without this reader.
                         let _ = ui.upgrade_in_event_loop(move |ui| {
-                            ui.set_peer_key(key.into());
-                            ui.set_screen(Screen::People);
+                            ui.set_peer_key(key.to_string().into());
                             ui.invoke_scan(false);
                         });
                     });
@@ -308,17 +318,16 @@ fn pick_key(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
         let Some(ui) = state.try_borrow().ok().and_then(|s| s.ui.upgrade()) else { return };
         match picked {
             Ok(Some(image)) => match qr::decode_luma(&image.pixels, image.width, image.height, image.width) {
-                Some(key) => {
-                    ui.set_peer_key(key.into());
-                    ui.set_screen(Screen::People);
-                    ui.set_call_status("Key read — give them a name".into());
-                }
-                None => ui.set_call_status("No code in that image".into()),
+                Some(text) => match peer_key(&text) {
+                    Some(key) => ui.set_peer_key(key.to_string().into()),
+                    None => toast(&ui, "That code is not an uplink key"),
+                },
+                None => toast(&ui, "No code in that image"),
             },
             Ok(None) => {}
             Err(e) => {
                 tracing::error!("picking an image: {e}");
-                ui.set_call_status(format!("could not open that image: {e}").into());
+                toast(&ui, format!("Could not open that image: {e}"));
             }
         }
     });
@@ -483,6 +492,8 @@ fn describe_call(record: &CallRecord) -> String {
         Outcome::Declined => "Declined".to_owned(),
         Outcome::Rejected => "They declined".to_owned(),
         Outcome::Cancelled => "Cancelled".to_owned(),
+        Outcome::NoAnswer => "No answer".to_owned(),
+        Outcome::Unreachable => "Couldn't reach them".to_owned(),
         Outcome::Failed => "Did not connect".to_owned(),
     };
     format!("{what} · {}", clock_of(record.at))
@@ -522,6 +533,8 @@ struct PendingCall {
 const fn outcome_of(reason: &EndReason, call: &PendingCall) -> Outcome {
     match reason {
         EndReason::Busy | EndReason::Failed(_) => Outcome::Failed,
+        EndReason::DialTimeout => Outcome::Unreachable,
+        EndReason::NoAnswer => Outcome::NoAnswer,
         EndReason::Declined => Outcome::Declined,
         EndReason::Rejected => Outcome::Rejected,
         EndReason::LocalHangup | EndReason::RemoteHangup => {
@@ -1219,6 +1232,19 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     tracing::info!("exiting");
     Ok(outcome?)
+}
+
+/// Says something went wrong and gets out of the way; the markup's own Timer dismisses it.
+fn toast(ui: &App, message: impl Into<String>) {
+    let message = message.into();
+    append_log(ui, &message);
+    ui.set_toast(message.into());
+}
+
+/// A scanned or opened code only counts if it is actually one of our keys; anything else is some
+/// other app's QR and saying so beats silently filling the field with it.
+fn peer_key(text: &str) -> Option<EndpointId> {
+    EndpointId::from_str(text.trim()).ok()
 }
 
 fn set_call_status(ui: &slint::Weak<App>, status: String) {
