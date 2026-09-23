@@ -13,6 +13,7 @@ anyhow.workspace = true
 i-slint-core.workspace = true
 ndk.workspace = true
 rtrb.workspace = true
+parking_lot.workspace = true
 rustc-hash.workspace = true
 slint.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }

@@ -1,33 +1,27 @@
 package dev.uplink;
 
 import android.app.NativeActivity;
-import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
 import android.app.RemoteAction;
 import android.content.BroadcastReceiver;
-import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Configuration;
-import android.graphics.drawable.Icon;
-import android.os.Build;
-import android.os.Bundle;
-import android.util.Rational;
-
-import java.util.ArrayList;
-import java.util.List;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.Icon;
 import android.net.Uri;
-import android.provider.Settings;
+import android.os.Build;
+import android.os.Bundle;
 import android.util.Log;
+import android.util.Rational;
 import android.view.WindowInsetsController;
 
-import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * NativeActivity plus the callbacks it drops. Rust hands over an opaque handle via
@@ -58,13 +52,6 @@ public class UplinkActivity extends NativeActivity {
 
     /** What the UI last asked the system bars to look like; see {@link #applySystemBars()}. */
     private volatile boolean lightSystemBars;
-
-    /** A call is running, so leaving the app should shrink it rather than hide it. */
-    private volatile boolean inCall;
-    /** Mirrors the UI, so the window's own mute button shows the state it would move to. */
-    private volatile boolean micOn = true;
-    /** Who the call is with, for the notification to name. */
-    private volatile String callPeer = "";
 
     /** Taps on the picture-in-picture buttons arrive here; nothing outside the app may send them. */
     private final BroadcastReceiver callActions = new BroadcastReceiver() {
@@ -136,46 +123,9 @@ public class UplinkActivity extends NativeActivity {
         return shouldShowRequestPermissionRationale(permission);
     }
 
-    /**
-     * Told by the UI, so the buttons offer the move the user has not made yet — in the shrunken
-     * window and in the notification alike, which are the two places a call can be driven from
-     * without the app in front.
-     */
-    void setMicOn(boolean on) {
-        micOn = on;
-        refreshPictureInPicture();
-        if (inCall) {
-            // Starting it again re-posts the notification under the same id.
-            startForegroundService(callIntent());
-        }
-    }
-
-    private Intent callIntent() {
-        return new Intent(this, UplinkCallService.class)
-                .putExtra(UplinkCallService.EXTRA_PEER, callPeer)
-                .putExtra(UplinkCallService.EXTRA_MIC_ON, micOn);
-    }
-
-    /**
-     * Whether the app may post notifications. Before Android 13 this is the only answer there is,
-     * since there is no permission to hold; from 13 on it agrees with the permission.
-     */
-    boolean notificationsEnabled() {
-        NotificationManager notifications = getSystemService(NotificationManager.class);
-        return notifications != null && notifications.areNotificationsEnabled();
-    }
-
-    /** Opens this app's own page in Settings, not the top of Settings. */
-    void openAppSettings() {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                settings.setData(Uri.fromParts("package", getPackageName(), null));
-                settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(settings);
-            }
-        });
+    /** The process-wide half of the platform, which outlives this activity. */
+    private UplinkApplication app() {
+        return (UplinkApplication) getApplication();
     }
 
     /**
@@ -209,11 +159,9 @@ public class UplinkActivity extends NativeActivity {
     }
 
     /**
-     * Back always goes to Rust, which knows what is on screen; it answers by closing something or
-     * by calling {@link #moveToBackground()}. Nothing here calls {@code super}, because finishing
-     * the activity would take the endpoint with it and there would be nothing left to ring.
+     * Leaves the app running with its task behind everything else, rather than tearing it down —
+     * a finished activity would take the endpoint with it and leave nothing to ring.
      */
-    /** Leaves the app running with its task behind everything else, rather than tearing it down. */
     void moveToBackground() {
         runOnUiThread(new Runnable() {
             @Override
@@ -236,24 +184,6 @@ public class UplinkActivity extends NativeActivity {
      * sheet. Nothing is composed here — the identity card is drawn in `uplink_core::card`, where
      * the one thing that matters about it, that it still scans, can be tested.
      */
-    void shareFile(String name, final String title) throws IOException {
-        final Uri uri = UplinkFiles.uriFor(this, name);
-        final String type = UplinkFiles.typeOf(name);
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Intent send = new Intent(Intent.ACTION_SEND);
-                send.setType(type);
-                send.putExtra(Intent.EXTRA_STREAM, uri);
-                // The chooser reads the grant off the clip data, so a target that never looks at
-                // EXTRA_STREAM still gets permission for the file.
-                send.setClipData(ClipData.newUri(getContentResolver(), title, uri));
-                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(send, title));
-            }
-        });
-    }
-
     /** Opens the system picker; the chosen image comes back through {@link #onActivityResult}. */
     void pickImageAsync(final int requestCode) {
         runOnUiThread(new Runnable() {
@@ -321,8 +251,8 @@ public class UplinkActivity extends NativeActivity {
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        log(Log.INFO, "user leaving, call " + inCall + ", already small " + isInPictureInPictureMode());
-        if (inCall && !isInPictureInPictureMode()) {
+        log(Log.INFO, "user leaving, call " + app().inCall() + ", already small " + isInPictureInPictureMode());
+        if (app().inCall() && !isInPictureInPictureMode()) {
             try {
                 enterPictureInPictureMode(pictureInPictureParams());
             } catch (RuntimeException e) {
@@ -368,7 +298,7 @@ public class UplinkActivity extends NativeActivity {
             @Override
             public void run() {
                 try {
-                    setPictureInPictureParams(inCall ? pictureInPictureParams() : idleParams());
+                    setPictureInPictureParams(app().inCall() ? pictureInPictureParams() : idleParams());
                 } catch (RuntimeException e) {
                     log(Log.WARN, "picture-in-picture params: " + e);
                 }
@@ -404,6 +334,7 @@ public class UplinkActivity extends NativeActivity {
 
     private List<RemoteAction> callActions() {
         List<RemoteAction> actions = new ArrayList<>();
+        boolean micOn = app().micOn();
         actions.add(action(micOn ? "mic" : "mic_off", micOn ? "Mute" : "Unmute", ACTION_MIC));
         actions.add(action("call_end", "End call", ACTION_HANGUP));
         return actions;
@@ -417,20 +348,15 @@ public class UplinkActivity extends NativeActivity {
         return new RemoteAction(Icon.createWithResource(this, id), title, title, pending);
     }
 
-    /** Starts or stops the foreground service that keeps a call alive in the background. */
-    void setCallService(boolean running, String peer) {
-        inCall = running;
-        callPeer = peer;
-        // Arms the shrink now, while the app is still in front; too late once the user has left.
+    /**
+     * A call started or ended. The service and the notification are the Application's; what is
+     * left here is the window: arming the shrink while the app is still in front, and dismissing
+     * it when there is nothing to watch.
+     */
+    void setInCall(boolean running) {
         refreshPictureInPicture();
         if (!running) {
             leavePictureInPicture();
-        }
-        Intent intent = callIntent();
-        if (running) {
-            startForegroundService(intent);
-        } else {
-            stopService(intent);
         }
     }
 

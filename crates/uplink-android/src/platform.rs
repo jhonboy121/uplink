@@ -147,7 +147,7 @@ impl Platform {
         // SAFETY: android-activity guarantees a valid JavaVM pointer for the process lifetime.
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
         let (events, incoming) = mpsc::unbounded_channel();
-        let (activity, inner, sdk) = vm.attach_current_thread(|env| -> Result<_, Error> {
+        let (activity, context, inner, sdk) = vm.attach_current_thread(|env| -> Result<_, Error> {
             // SAFETY: a global ref to the activity owned by android-activity; not deleted here.
             let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
             let class = env.get_object_class(&activity)?;
@@ -179,18 +179,22 @@ impl Platform {
             let sdk = env
                 .get_static_field(jni_str!("android/os/Build$VERSION"), jni_str!("SDK_INT"), jni_sig!("I"))?
                 .i()?;
-            Ok((env.new_global_ref(&activity)?, inner, sdk))
+            // The Application outlives this activity and is what everything headless runs on.
+            // Asking the activity for it avoids `FindClass`, which on a thread attached from
+            // native code searches the system classloader and has never heard of us.
+            let application = env
+                .call_method(&activity, jni_str!("getApplication"), jni_sig!("()Landroid/app/Application;"), &[])?
+                .l()?;
+            Ok((env.new_global_ref(&activity)?, env.new_global_ref(&application)?, inner, sdk))
         })?;
         // At info, and once per process: which Android this is decides what the app may ask for,
         // and it is the first thing worth knowing about a device that behaves oddly.
         tracing::info!(sdk, "platform bridge attached");
-        // Both slots are the activity for now: it is the only entry point that exists. Once a
-        // service can bring the app up on its own, `context` becomes the Application and the
-        // activity comes and goes underneath it. `Global` cannot be cloned without an `Env` —
-        // a new global ref is a JNI call — so the refcount is ours rather than JNI's.
-        let activity = Arc::new(activity);
-        let context = Arc::clone(&activity);
-        Ok((Self { vm, context, activity: RwLock::new(Some(activity)), inner, sdk }, incoming))
+        // `Global` cannot be cloned without an `Env` — a new global ref is a JNI call — so the
+        // refcount that lets a reader let go of the lock is ours rather than JNI's.
+        let platform =
+            Self { vm, context: Arc::new(context), activity: RwLock::new(Some(Arc::new(activity))), inner, sdk };
+        Ok((platform, incoming))
     }
 
     /// Every call into the activity goes through here, which is also the one place that can see a
@@ -226,8 +230,8 @@ impl Platform {
     /// Whether the app may post notifications, which is the whole of the answer before 13 and
     /// agrees with the permission after it.
     fn notifications_enabled(&self) -> Result<bool, Error> {
-        self.with_activity(|env, activity| {
-            Ok(env.call_method(activity, jni_str!("notificationsEnabled"), jni_sig!("()Z"), &[])?.z()?)
+        self.with_context(|env, context| {
+            Ok(env.call_method(context, jni_str!("notificationsEnabled"), jni_sig!("()Z"), &[])?.z()?)
         })
     }
 
@@ -284,11 +288,43 @@ impl Platform {
         })
     }
 
-    /// Tells the activity what the mic is doing, so the picture-in-picture window's own button
-    /// offers the move the user has not made yet.
+    /// What the mic is doing, so the buttons that can reach it offer the move the user has not
+    /// made yet: the notification always, and the shrunken window when there is one.
     pub fn set_mic_on(&self, on: bool) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
-            env.call_method(activity, jni_str!("setMicOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
+        self.with_context(|env, context| {
+            env.call_method(context, jni_str!("setMicOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
+            Ok(())
+        })?;
+        self.on_screen(|env, activity| {
+            env.call_method(activity, jni_str!("refreshPictureInPicture"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
+    /// For the half of a change that only matters while the app is visible: a missing activity is
+    /// the answer, not a failure.
+    fn on_screen(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<(), Error>) -> Result<(), Error> {
+        match self.with_activity(f) {
+            Err(Error::NoActivity) => Ok(()),
+            outcome => outcome,
+        }
+    }
+
+    /// The process-wide slot holding whatever outlives the screen. Zero when nothing has put
+    /// anything there yet.
+    pub fn core_handle(&self) -> Result<usize, Error> {
+        self.with_context(|env, context| {
+            let handle = env.call_method(context, jni_str!("core"), jni_sig!("()J"), &[])?.j()?;
+            Ok(address_from_handle(handle).unwrap_or_default())
+        })
+    }
+
+    pub fn set_core_handle(&self, handle: usize) -> Result<(), Error> {
+        // Bits, not value: Android tags heap pointers on arm64, so an address can have its top
+        // bit set and a value-preserving conversion to a signed `jlong` would refuse it.
+        let handle = handle_from_address(handle)?;
+        self.with_context(|env, context| {
+            env.call_method(context, jni_str!("setCore"), jni_sig!("(J)V"), &[JValue::Long(handle)])?;
             Ok(())
         })
     }
@@ -304,8 +340,8 @@ impl Platform {
 
     /// Opens this app's own page in Settings, where a permission refused for good can be granted.
     pub fn open_app_settings(&self) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
-            env.call_method(activity, jni_str!("openAppSettings"), jni_sig!("()V"), &[])?;
+        self.with_context(|env, context| {
+            env.call_method(context, jni_str!("openAppSettings"), jni_sig!("()V"), &[])?;
             Ok(())
         })
     }
@@ -378,10 +414,10 @@ impl Platform {
 
     /// Offers a file already written into [`Self::share_dir`] to the share sheet.
     pub fn share_file(&self, name: &str, title: &str) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
+        self.with_context(|env, context| {
             let (name, title) = (env.new_string(name)?, env.new_string(title)?);
             env.call_method(
-                activity,
+                context,
                 jni_str!("shareFile"),
                 jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
                 &[JValue::Object(&name), JValue::Object(&title)],
@@ -409,15 +445,20 @@ impl Platform {
     /// Runs the foreground service that lets a call keep the camera and microphone while the app
     /// is in the background. `peer` is who the call's notification names.
     pub fn set_call_service(&self, running: bool, peer: &str) -> Result<(), Error> {
-        self.with_activity(|env, activity| {
+        self.with_context(|env, context| {
             let peer = env.new_string(peer)?;
             env.call_method(
-                activity,
-                jni_str!("setCallService"),
+                context,
+                jni_str!("setCall"),
                 jni_sig!("(ZLjava/lang/String;)V"),
                 &[JValue::Bool(running), JValue::Object(&peer)],
             )?;
             tracing::debug!(running, "call service");
+            Ok(())
+        })?;
+        // The window's half: arming the shrink, and dismissing it when there is nothing to watch.
+        self.on_screen(|env, activity| {
+            env.call_method(activity, jni_str!("setInCall"), jni_sig!("(Z)V"), &[JValue::Bool(running)])?;
             Ok(())
         })
     }

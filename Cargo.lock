@@ -7051,6 +7051,7 @@ dependencies = [
  "anyhow",
  "i-slint-core",
  "ndk 0.9.0",
+ "parking_lot",
  "rtrb",
  "rustc-hash 2.1.3",
  "slint",

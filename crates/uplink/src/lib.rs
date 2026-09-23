@@ -2,6 +2,7 @@
 //! in-app diagnostics (previous exits + previous log) since there is no adb.
 
 mod audio;
+mod core;
 mod tasks;
 mod ui;
 mod video;
@@ -35,13 +36,14 @@ use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{CallLog, CallRecord, Outcome};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
-use uplink_core::db::Db;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
 use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
-use uplink_core::{EndpointId, identity};
+use uplink_core::node::{Command, EndReason, Event, NodeHandle};
+use uplink_core::EndpointId;
+
+use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
@@ -95,7 +97,6 @@ const VIDEO: VideoConfig = VideoConfig {
 };
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 const PERCENT: f64 = 100.0;
-const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct FrameStats {
@@ -138,9 +139,8 @@ struct State {
     pending: Option<PendingCall>,
     connected_at: Option<Instant>,
     stats: Arc<FrameStats>,
-    /// Both are absent until the endpoint finishes binding, which happens on the runtime while
-    /// the window is already up. `node` owns the engine; `calls` is the non-owning handle.
-    node: Option<Node>,
+    /// Commands to the endpoint, which this window borrows rather than owns — the endpoint
+    /// belongs to the process and outlives every window it is shown in.
     calls: Option<NodeHandle>,
 }
 
@@ -1047,20 +1047,23 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     log_previous_exits(&platform);
     let avc = platform.avc()?;
 
-    let runtime = uplink_core::runtime::build(dispatch)?;
-    let secret = runtime.block_on(identity::load_or_create(data_dir))?;
-    let identity = secret.public();
-    // One connection for all three stores; each creates its own table on top of it.
-    let db = Db::open(data_dir)?;
-    let contacts = Contacts::open(db.clone())?;
-    let log = CallLog::open(db.clone())?;
-    let settings = Settings::open(db)?;
-    // Binding the endpoint reaches the network, so it happens on the runtime while the window is
-    // already up and the splash is showing, rather than in front of a blank screen.
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-    runtime.spawn(async move {
-        let _ = ready_tx.send(Node::start(secret, Network::N0).await);
-    });
+    // The endpoint belongs to the process, not to this window. A second launch of the activity
+    // finds the one already bound rather than binding another.
+    // SAFETY: the handle is one this process leaked below and Java has held ever since.
+    let core = match unsafe { Core::from_handle(platform.core_handle()?) } {
+        Some(core) => core,
+        None => {
+            let core = Arc::new(Core::start(uplink_core::runtime::build(dispatch)?, data_dir)?);
+            platform.set_core_handle(Arc::clone(&core).into_handle())?;
+            core
+        }
+    };
+    let identity = *core.id();
+    // Three views of the core's one connection; each creates its own table on top of it.
+    let contacts = Contacts::open(core.db())?;
+    let log = CallLog::open(core.db())?;
+    let settings = Settings::open(core.db())?;
+    let runtime = core.runtime().handle().clone();
 
     let state = Rc::new(RefCell::new(State {
         ui: slint::Weak::default(),
@@ -1068,7 +1071,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         audio: None,
         call: None,
         avc,
-        runtime: runtime.handle().clone(),
+        runtime: runtime.clone(),
         facing: Facing::Front,
         extra_turns: 0,
         mirror: false,
@@ -1081,7 +1084,6 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         pending: None,
         connected_at: None,
         stats: Arc::default(),
-        node: None,
         calls: None,
     }));
 
@@ -1267,25 +1269,21 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         }
     });
 
-    // The splash stays until the endpoint is bound, because until then no call could arrive.
-    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
-    slint::spawn_local(async move {
-        let started = match ready_rx.await {
-            Ok(Ok(started)) => started,
-            Ok(Err(e)) => return set_call_status(&weak, format!("the network did not start: {e}")),
-            Err(_) => return set_call_status(&weak, "the network did not start".into()),
+    // The endpoint is already bound by the time the window exists, so the splash only has to last
+    // as long as the first frame.
+    state.borrow_mut().calls = Some(core.calls().clone());
+    ui.set_booting(false);
+    // While this window is up it answers for the app; handing the stream back on the way out is
+    // what lets anything else take over.
+    let (s, weak, p, c) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform), Arc::clone(&core));
+    spawn_ui(async move {
+        let Some(events) = c.take_events() else {
+            tracing::warn!("something else is already answering for this endpoint");
+            return;
         };
-        let (node, node_events) = started;
-        {
-            let mut state = s.borrow_mut();
-            state.calls = Some(node.handle());
-            state.node = Some(node);
-        }
-        if let Some(ui) = weak.upgrade() {
-            ui.set_booting(false);
-        }
-        handle_node_events(node_events, weak, s, p).await;
-    })?;
+        let events = handle_node_events(events, weak, s, p).await;
+        c.return_events(events);
+    });
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
@@ -1390,7 +1388,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
     let (p, weak, dir) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf());
-    let handle = runtime.handle().clone();
+    let handle = runtime.clone();
     ui.on_share_key(move || {
         let Some(ui) = weak.upgrade() else { return };
         // The picture, not the key: a code is what someone points a camera at, and it is what
@@ -1399,7 +1397,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         let card = write_identity_card(dir.clone(), ui.get_my_id().to_string());
         share_when_written(&handle, &p, &weak, SHARE_FILE, SHARE_TITLE, "Could not share your code", card);
     });
-    let (p, weak, dir, handle) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf(), runtime.handle().clone());
+    let (p, weak, dir, handle) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf(), runtime.clone());
     ui.on_share_diagnostics(move || {
         // The set can be a hundred megabytes before it compresses; packing it is the runtime's.
         let packing = pack_diagnostics(dir.clone());
@@ -1494,20 +1492,16 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     if let Err(e) = platform.set_call_service(false, "") {
         tracing::warn!("stopping call service: {e}");
     }
-    let node = {
+    // Only what this window owned. The endpoint and the runtime stay: they belong to the process,
+    // and tearing them down here is exactly what used to make a swiped-away app unreachable.
+    {
         let mut state = state.borrow_mut();
         state.session = None;
         state.audio = None;
         state.call = None;
         state.calls = None;
-        state.node.take()
-    };
-    // Absent only if the endpoint never finished binding, in which case there is nothing to stop.
-    if let Some(node) = node {
-        runtime.block_on(node.shutdown());
     }
-    runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
-    tracing::info!("exiting");
+    tracing::info!("window closed, endpoint still bound");
     Ok(outcome?)
 }
 
@@ -1587,13 +1581,14 @@ fn describe(event: &Event) -> String {
 }
 
 /// Runs on the UI thread (tokio channels work on any executor); applies node events to the UI
-/// and starts or stops call video.
+/// and starts or stops call video. Returns the stream when this window stops answering for the
+/// app, so whatever comes next can pick it up.
 async fn handle_node_events(
     mut events: mpsc::Receiver<Event>,
     ui: slint::Weak<App>,
     state: Rc<RefCell<State>>,
     platform: Rc<Platform>,
-) {
+) -> mpsc::Receiver<Event> {
     while let Some(event) = events.recv().await {
         let status = describe(&event);
         tracing::info!("{status}");
@@ -1688,6 +1683,7 @@ async fn handle_node_events(
             _ => {}
         }
     }
+    events
 }
 
 /// May run several times per process (Android reuses processes), so nothing here is global:

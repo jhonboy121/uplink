@@ -21,7 +21,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- Our own Application: it exists before any activity, service or receiver, which makes it
+         the one thing the app can be driven through when nobody is looking at the screen. -->
     <application
+        android:name="${application}"
         android:label="${label}"
         android:icon="@mipmap/launcher"
         android:roundIcon="@mipmap/launcher"
