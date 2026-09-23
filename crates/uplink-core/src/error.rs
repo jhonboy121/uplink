@@ -44,6 +44,8 @@ pub enum Error {
     Opus(String),
     #[error("qr: {0}")]
     Qr(String),
+    #[error("identity card: {0}")]
+    Card(String),
     #[error("node command queue is full")]
     CommandQueueFull,
     #[error("node stopped")]

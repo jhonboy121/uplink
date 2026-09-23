@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod calls;
+pub mod card;
 pub mod contacts;
 pub mod crypto;
 mod error;

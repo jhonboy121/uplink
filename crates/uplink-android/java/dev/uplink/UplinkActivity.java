@@ -126,14 +126,12 @@ public class UplinkActivity extends NativeActivity {
     }
 
     /**
-     * Sends the identity as a picture: the code with the mark in it, drawn by {@link IdentityCard}
-     * from the modules Rust encodes. The drawing and the file are done on the calling thread, so
-     * a failure is thrown back to Rust rather than disappearing into a posted runnable.
+     * Offers a picture Rust has already written into {@link UplinkFiles#DIRECTORY} to the share
+     * sheet. Nothing is drawn here: the card is composed in `uplink_core::card`, where the one
+     * thing that matters about it — that it still scans — can be tested.
      */
-    void shareIdentity(byte[] modules, int size, int logo, String caption, final String title)
-            throws IOException {
-        File card = IdentityCard.write(this, modules, size, logo, caption);
-        final Uri uri = UplinkFiles.uriFor(this, card);
+    void shareImage(String name, final String title) throws IOException {
+        final Uri uri = UplinkFiles.uriFor(this, name);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {

@@ -21,17 +21,25 @@ import java.io.FileNotFoundException;
  * chooser, and only the URI that was granted to it.
  */
 public class UplinkFiles extends ContentProvider {
-    /** Inside {@link Context#getCacheDir()}. Only what is meant to leave the app goes here. */
+    /** Inside the app's files directory, which is what Rust knows as its data directory. */
     static final String DIRECTORY = "share";
     private static final String TYPE = "image/png";
 
     /** The URI for a file already written into {@link #DIRECTORY}. */
-    static Uri uriFor(Context context, File file) {
+    static Uri uriFor(Context context, String name) throws FileNotFoundException {
+        if (!new File(directory(context), name).isFile()) {
+            throw new FileNotFoundException("nothing to share at " + DIRECTORY + "/" + name);
+        }
         return new Uri.Builder()
                 .scheme("content")
                 .authority(context.getPackageName() + ".files")
-                .appendPath(file.getName())
+                .appendPath(name)
                 .build();
+    }
+
+    /** Where Rust writes what is meant to leave the app. Nothing else belongs here. */
+    private static File directory(Context context) {
+        return new File(context.getFilesDir(), DIRECTORY);
     }
 
     @Override
@@ -83,7 +91,7 @@ public class UplinkFiles extends ContentProvider {
                 || name.contains(File.separator) || name.equals("..")) {
             throw new FileNotFoundException("not a shared file: " + uri);
         }
-        File file = new File(new File(context.getCacheDir(), DIRECTORY), name);
+        File file = new File(directory(context), name);
         if (!file.isFile()) {
             throw new FileNotFoundException("no such shared file: " + name);
         }

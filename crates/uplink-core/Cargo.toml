@@ -6,6 +6,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+ab_glyph.workspace = true
+# PNG in and out: the mark that goes in the middle of a code, and the card that comes out.
+image = { workspace = true, features = ["png"] }
 iroh.workspace = true
 noq-proto.workspace = true
 opus-sys.workspace = true

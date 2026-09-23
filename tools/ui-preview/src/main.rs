@@ -169,6 +169,12 @@ fn main() -> Result<()> {
     }
     app.global::<Theme>().set_appearance(Appearance::System);
 
+    // Not a screen: the picture "share my identity" sends. It is drawn by core rather than by
+    // Slint, but it is as much a thing to look at as the rest, and it is not on any screen.
+    let card = format!("{OUT_DIR}/identity-card.png");
+    std::fs::write(&card, uplink_core::card::identity(keys()[0].1, "Scan to connect")?)?;
+    println!("{card}");
+
     println!("rendered to {OUT_DIR}/");
     Ok(())
 }
@@ -301,9 +307,7 @@ fn qr_image(key: &str) -> Result<(slint::Image, f32)> {
     for (pixel, value) in buffer.make_mut_slice().iter_mut().zip(luma) {
         *pixel = slint::Rgb8Pixel { r: value, g: value, b: value };
     }
-    #[expect(clippy::cast_precision_loss, reason = "a code is at most 177 modules across")]
-    let mark = matrix.logo() as f32 / matrix.framed() as f32;
-    Ok((slint::Image::from_rgb8(buffer), mark))
+    Ok((slint::Image::from_rgb8(buffer), matrix.logo() as f32 / matrix.framed() as f32))
 }
 
 /// A gradient where a camera frame would be, so the call screens aren't reviewed against black.

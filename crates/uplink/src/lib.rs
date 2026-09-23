@@ -32,6 +32,7 @@ use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{CallLog, CallRecord, Outcome};
+use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::qr;
 use uplink_core::media::MediaSession;
@@ -64,9 +65,11 @@ const FINGERPRINT_GROUPS: usize = 8;
 const FINGERPRINT_ROW_GROUPS: usize = 4;
 const FINGERPRINT_SELF_GROUPS: usize = 3;
 const QR_PIXELS: usize = 512;
-/// Under the code on the shared picture, and the name the chooser goes out under.
+/// Under the code on the shared picture, the name the chooser goes out under, and what the file
+/// is called — the key never changes, so one file is rewritten rather than a new one each time.
 const SHARE_CAPTION: &str = "Scan to connect";
 const SHARE_TITLE: &str = "My uplink code";
+const SHARE_FILE: &str = "identity.png";
 // Scanning: CPU-readable frames, big enough to read a code held up to the camera.
 const SCAN_WIDTH: i32 = 960;
 const SCAN_HEIGHT: i32 = 720;
@@ -393,24 +396,18 @@ fn qr_image(id: &EndpointId) -> Result<(slint::Image, f32)> {
     Ok((slint::Image::from_rgb8(buffer), ratio(matrix.logo(), matrix.framed())))
 }
 
-/// Hands the identity to the share sheet as a picture of its code. The encoding is ours, the
-/// drawing is Java's, because that is where there is a text engine for the line underneath.
-fn share_identity(platform: &Platform, key: &str) -> Result<()> {
-    let matrix = qr::encode(key)?;
-    Ok(platform.share_identity(
-        &matrix.modules,
-        matrix.size,
-        matrix.logo(),
-        SHARE_CAPTION,
-        SHARE_TITLE,
-    )?)
+/// Hands the identity to the share sheet as a picture of its code. Drawn by core, written where
+/// the app's content provider can serve it, and handed to Android by name.
+fn share_identity(platform: &Platform, data_dir: &Path, key: &str) -> Result<()> {
+    let directory = Platform::share_dir(data_dir);
+    std::fs::create_dir_all(&directory)?;
+    std::fs::write(directory.join(SHARE_FILE), card::identity(key, SHARE_CAPTION)?)?;
+    Ok(platform.share_image(SHARE_FILE, SHARE_TITLE)?)
 }
 
 /// A count of modules as a share of the whole drawing.
 fn ratio(part: usize, whole: usize) -> f32 {
-    #[expect(clippy::cast_precision_loss, reason = "a code is at most 177 modules across")]
-    let ratio = part as f32 / whole.max(1) as f32;
-    ratio
+    part as f32 / whole.max(1) as f32
 }
 
 /// Contacts for the list, in the order they were added.
@@ -1220,12 +1217,12 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     });
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
-    let (p, weak) = (Rc::clone(&platform), ui.as_weak());
+    let (p, weak, dir) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf());
     ui.on_share_key(move || {
         let Some(ui) = weak.upgrade() else { return };
         // The picture, not the key: a code is what someone points a camera at, and it is what
         // arrives if they save it and open it from the other side.
-        if let Err(e) = share_identity(&p, &ui.get_my_id()) {
+        if let Err(e) = share_identity(&p, &dir, &ui.get_my_id()) {
             tracing::error!("sharing the identity: {e:#}");
             toast(&ui, "Could not share your code");
         }

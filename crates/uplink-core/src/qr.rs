@@ -38,10 +38,7 @@ impl Matrix {
     /// The side in modules of the mark in the middle. Odd, like every code size, so the two share
     /// a centre module and the mark lands on the grid instead of straddling it.
     pub fn logo(&self) -> usize {
-        #[expect(clippy::cast_precision_loss, reason = "a code is at most 177 modules across")]
-        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "positive, small")]
-        let modules = (self.size as f32 * LOGO).round() as usize;
-        modules | 1
+        ((self.size as f32 * LOGO).round() as usize) | 1
     }
 
     /// Draws the code as greyscale, at least `size` across. The scale is whole pixels per module,

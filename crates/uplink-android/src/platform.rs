@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -27,6 +28,8 @@ const EXIT_RECORDS: i32 = 3;
 const TRACE_MIN_RUN: usize = 6;
 const TRACE_MAX_LINES: usize = 30;
 const SINGLE_PERMISSION: i32 = 1;
+/// Must match `UplinkFiles.DIRECTORY`, which is the Java side of the same agreement.
+const SHARE_DIR: &str = "share";
 // android.util.Log levels, as passed to `UplinkActivity.log`.
 const ANDROID_LOG_INFO: jint = 4;
 const ANDROID_LOG_WARN: jint = 5;
@@ -249,36 +252,24 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
-    /// Offers the identity to the share sheet as a picture of its code — the thing people
-    /// actually send each other. `modules` is the code row by row, `logo` how many of them the
-    /// mark in the middle covers, and Java draws the rest.
-    pub fn share_identity(
-        &self,
-        modules: &[bool],
-        size: usize,
-        logo: usize,
-        caption: &str,
-        title: &str,
-    ) -> Result<(), Error> {
-        let dark: Vec<u8> = modules.iter().map(|&dark| u8::from(dark)).collect();
-        let (size, logo) = (jint::try_from(size)?, jint::try_from(logo)?);
+    /// Offers a picture already written into [`Self::share_dir`] to the share sheet.
+    pub fn share_image(&self, name: &str, title: &str) -> Result<(), Error> {
         self.with_activity(|env, activity| {
-            let dark = env.byte_array_from_slice(&dark)?;
-            let (caption, title) = (env.new_string(caption)?, env.new_string(title)?);
+            let (name, title) = (env.new_string(name)?, env.new_string(title)?);
             env.call_method(
                 activity,
-                jni_str!("shareIdentity"),
-                jni_sig!("([BIILjava/lang/String;Ljava/lang/String;)V"),
-                &[
-                    JValue::Object(&dark),
-                    JValue::Int(size),
-                    JValue::Int(logo),
-                    JValue::Object(&caption),
-                    JValue::Object(&title),
-                ],
+                jni_str!("shareImage"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                &[JValue::Object(&name), JValue::Object(&title)],
             )?;
             Ok(())
         })
+    }
+
+    /// Where a file has to be for [`Self::share_image`] to find it: the one directory the app's
+    /// content provider serves, inside the data directory. Nothing else belongs in it.
+    pub fn share_dir(data_dir: &Path) -> PathBuf {
+        data_dir.join(SHARE_DIR)
     }
 
     /// Speaker or earpiece for the call audio.

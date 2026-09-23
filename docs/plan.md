@@ -319,12 +319,16 @@ default); keep disk usage lean. Avoid build scripts.
   The mark in the middle is why every code is now drawn at error correction **H**: level H spends
   about 30% of the code on recovery and the mark covers a fifth of its width, which is a
   twenty-fifth of its area. `qr::Matrix::logo` owns that number, a test punches exactly that hole
-  and decodes the result, and both the screen and the shared card are drawn from it — the UI gets
-  it as a fraction, Java as a count of modules.
-  The drawing is Java's: `IdentityCard` has a text engine and a PNG writer, which Rust here does
-  not, so Rust sends the modules and Java draws paper, code, plate, mark and caption. Sharing a
-  file needs a `content://` URI at this target level, so there is a minimal read-only
-  `ContentProvider` (`UplinkFiles`) over one cache directory rather than a dependency on androidx.
+  and decodes the result, and both the screen and the shared card are drawn from it.
+  **The card is drawn in Rust**, in `uplink_core::card`: `ab_glyph` rasterises the one line of
+  text and `image` reads the mark and writes the PNG, which is three small crates against a
+  platform-specific drawing that could not be tested. Now the thing that actually matters — that
+  the finished picture still decodes to the key, mark and caption and all — is a test, and
+  `just preview` writes the card out beside the screens. Java keeps only what has to be Java:
+  sharing a file needs a `content://` URI at this target level, so a minimal read-only
+  `ContentProvider` (`UplinkFiles`) serves the one directory of the data dir that Rust writes to.
+  `imageproc` was the obvious candidate and was passed over: `draw_text_mut` would have saved
+  about twenty lines and brought rayon, rand and the rest of an image-processing library with it.
   The mark's art is **not centred in its own 48-unit viewBox** (it runs y 4.4–38.75), so the badge
   is a separate render from `mark.py` with the art's bounding box as the viewBox; a square crop of
   the viewBox would hang the mark high on its plate.
