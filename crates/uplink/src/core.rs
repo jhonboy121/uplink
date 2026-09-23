@@ -30,12 +30,47 @@ pub struct Core {
     calls: NodeHandle,
     id: EndpointId,
     db: Db,
-    /// Events out. Taken by whoever is currently answering for the app — the UI while it is on
-    /// screen, and otherwise the headless path. There is only ever one of them.
-    events: Mutex<Option<mpsc::Receiver<Event>>>,
+    /// Where a window wants events delivered, while there is one. The core consumes the endpoint's
+    /// stream itself and forwards through this — rather than handing the stream to whoever is
+    /// answering, which had no answer for a process that starts at boot and never has a window.
+    inbox: Arc<Mutex<Option<mpsc::Sender<Event>>>>,
     /// Holding this is what keeps the endpoint bound; the handle is what everything else uses.
     node: Mutex<Option<Node>>,
     runtime: Runtime,
+}
+
+/// Enough for a burst of call state changes; the endpoint never produces them faster than a
+/// person can act on them.
+const EVENT_QUEUE: usize = 16;
+
+/// The one consumer of the endpoint's events, for as long as the process lives. A window gets
+/// them while it is attached; otherwise they are answered here, because a call arriving at a
+/// backgrounded app is the case this whole arrangement exists for.
+async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Option<mpsc::Sender<Event>>>>) {
+    while let Some(event) = events.recv().await {
+        // Cloned out rather than held: the lock must not span the await below.
+        let window = inbox.lock().clone();
+        let Some(window) = window else {
+            unattended(event);
+            continue;
+        };
+        if let Err(closed) = window.send(event).await {
+            // The window went without saying so. Whatever it was, nobody saw it.
+            inbox.lock().take();
+            unattended(closed.0);
+        }
+    }
+    tracing::info!("endpoint stopped speaking");
+}
+
+/// What happens to an event with nobody watching. Ringing lives here, and until it does an
+/// incoming call is logged and nothing else — which is worth saying out loud rather than
+/// dropping it silently.
+fn unattended(event: Event) {
+    match event {
+        Event::Incoming { peer } => tracing::warn!(peer = %peer.fmt_short(), "call with no window to show it"),
+        event => tracing::debug!(?event, "event with no window"),
+    }
 }
 
 impl Drop for Core {
@@ -57,15 +92,10 @@ impl Core {
         let id = secret.public();
         let db = Db::open(data_dir)?;
         let (node, events) = runtime.block_on(Node::start(secret, Network::N0))?;
+        let inbox = Arc::<Mutex<Option<mpsc::Sender<Event>>>>::default();
+        runtime.spawn(deliver(events, Arc::clone(&inbox)));
         tracing::info!(%id, "core up");
-        Ok(Self {
-            calls: node.handle(),
-            id,
-            db,
-            events: Mutex::new(Some(events)),
-            node: Mutex::new(Some(node)),
-            runtime,
-        })
+        Ok(Self { calls: node.handle(), id, db, inbox, node: Mutex::new(Some(node)), runtime })
     }
 
     pub const fn runtime(&self) -> &Runtime {
@@ -84,16 +114,17 @@ impl Core {
         self.db.clone()
     }
 
-    /// Takes the event stream. The second caller gets nothing, which is the honest answer: two
-    /// things answering for one endpoint would each see half the calls.
-    pub fn take_events(&self) -> Option<mpsc::Receiver<Event>> {
-        self.events.lock().take()
+    /// A window says where to send events while it is up. The previous one, if any, stops
+    /// receiving: there is one endpoint and one thing showing it at a time.
+    pub fn attach(&self) -> mpsc::Receiver<Event> {
+        let (sender, events) = mpsc::channel(EVENT_QUEUE);
+        *self.inbox.lock() = Some(sender);
+        events
     }
 
-    /// Hands the stream back, so the next thing to come along can answer for the app. Called when
-    /// the UI goes away, which is exactly when the headless path needs it.
-    pub fn return_events(&self, events: mpsc::Receiver<Event>) {
-        *self.events.lock() = Some(events);
+    /// The window has gone. Events go back to being answered without one.
+    pub fn detach(&self) {
+        self.inbox.lock().take();
     }
 
     /// Leaks this into a `jlong` for the Java side to hold. Reclaimed by [`Self::from_handle`].

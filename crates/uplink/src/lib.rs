@@ -1282,12 +1282,8 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     // what lets anything else take over.
     let (s, weak, p, c) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform), Arc::clone(&core));
     spawn_ui(async move {
-        let Some(events) = c.take_events() else {
-            tracing::warn!("something else is already answering for this endpoint");
-            return;
-        };
-        let events = handle_node_events(events, weak, s, p).await;
-        c.return_events(events);
+        handle_node_events(c.attach(), weak, s, p).await;
+        c.detach();
     });
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
@@ -1586,14 +1582,14 @@ fn describe(event: &Event) -> String {
 }
 
 /// Runs on the UI thread (tokio channels work on any executor); applies node events to the UI
-/// and starts or stops call video. Returns the stream when this window stops answering for the
-/// app, so whatever comes next can pick it up.
+/// and starts or stops call video. Ends when the window does, which is when the core goes back to
+/// answering for itself.
 async fn handle_node_events(
     mut events: mpsc::Receiver<Event>,
     ui: slint::Weak<App>,
     state: Rc<RefCell<State>>,
     platform: Rc<Platform>,
-) -> mpsc::Receiver<Event> {
+) {
     while let Some(event) = events.recv().await {
         let status = describe(&event);
         tracing::info!("{status}");
@@ -1688,7 +1684,6 @@ async fn handle_node_events(
             _ => {}
         }
     }
-    events
 }
 
 /// May run several times per process (Android reuses processes), so nothing here is global:

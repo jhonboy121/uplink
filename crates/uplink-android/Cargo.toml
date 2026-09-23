@@ -18,6 +18,7 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 uplink-core.workspace = true
+arc-swap.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
 tokio = { workspace = true, features = ["sync"] }

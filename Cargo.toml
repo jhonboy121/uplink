@@ -20,6 +20,9 @@ opus-sys = { path = "sys/opus-sys" }
 # Glyph outlines and their rasterisation, for the line of text on the shared identity card. Two
 # small crates; a full image-processing library would be a lot of machinery for one line.
 ab_glyph = "0.2"
+# A pointer that is read constantly and replaced rarely, without a lock on the read side. The
+# activity is exactly that: every platform call looks at it, and it changes twice in its life.
+arc-swap = "1"
 android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
 bindgen = { version = "=0.72.1", default-features = false, features = ["logging", "prettyplease"] }
 clap = { version = "4.6", features = ["derive", "env"] }

@@ -11,12 +11,13 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use android_activity::AndroidApp;
+use arc_swap::ArcSwapOption;
 use jni::objects::{JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue};
 use jni::refs::Global;
 use jni::strings::JNIStr;
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, JavaVM, NativeMethod, Outcome, jni_sig, jni_str};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 
@@ -110,10 +111,11 @@ pub struct Platform {
     /// bars, picture-in-picture and stepping into the background all need one, and none of them
     /// can happen without someone looking at the screen anyway.
     ///
-    /// An `RwLock` rather than a mutex: this is read on nearly every call and written twice in an
-    /// activity's life. The global ref is refcounted, so a reader clones it out and lets go of
-    /// the lock rather than holding it across a call into Java.
-    activity: RwLock<Option<Arc<Global<JObject<'static>>>>>,
+    /// Read on nearly every platform call, from whichever thread is making it, and replaced twice
+    /// in an activity's life — so it is swapped rather than locked, and a reader takes its own
+    /// reference without ever blocking the one that replaces it. `Global` cannot be cloned
+    /// without an `Env`, a new global ref being a JNI call, so the refcount is an `Arc` of ours.
+    activity: ArcSwapOption<Global<JObject<'static>>>,
     inner: Arc<Inner>,
     /// `Build.VERSION.SDK_INT`. What the app was built against says nothing about what it is
     /// running on, and the two disagree by three years on a phone that cannot take Google's
@@ -190,11 +192,8 @@ impl Platform {
         // At info, and once per process: which Android this is decides what the app may ask for,
         // and it is the first thing worth knowing about a device that behaves oddly.
         tracing::info!(sdk, "platform bridge attached");
-        // `Global` cannot be cloned without an `Env` — a new global ref is a JNI call — so the
-        // refcount that lets a reader let go of the lock is ours rather than JNI's.
-        let platform =
-            Self { vm, context: Arc::new(context), activity: RwLock::new(Some(Arc::new(activity))), inner, sdk };
-        Ok((platform, incoming))
+        let activity = ArcSwapOption::from(Some(Arc::new(activity)));
+        Ok((Self { vm, context: Arc::new(context), activity, inner, sdk }, incoming))
     }
 
     /// Every call into the activity goes through here, which is also the one place that can see a
@@ -211,7 +210,7 @@ impl Platform {
     /// Anything that needs the window or the task. Fails plainly when there is no activity rather
     /// than pretending, because the caller is asking for something only a visible app can do.
     fn with_activity<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
-        let activity = self.activity.read().clone().ok_or(Error::NoActivity)?;
+        let activity = self.activity.load_full().ok_or(Error::NoActivity)?;
         self.vm.attach_current_thread(|env| match f(env, activity.as_obj()) {
             Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
             outcome => outcome,
