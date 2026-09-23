@@ -40,4 +40,6 @@ pub enum Error {
     LogFilter(#[from] tracing_subscriber::filter::ParseError),
     #[error("a value does not fit the Java type it crosses as")]
     TooBig(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Core(#[from] uplink_core::Error),
 }

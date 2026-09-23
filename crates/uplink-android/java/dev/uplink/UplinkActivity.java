@@ -136,17 +136,18 @@ public class UplinkActivity extends NativeActivity {
     }
 
     /**
-     * Offers a picture Rust has already written into {@link UplinkFiles#DIRECTORY} to the share
-     * sheet. Nothing is drawn here: the card is composed in `uplink_core::card`, where the one
-     * thing that matters about it — that it still scans — can be tested.
+     * Offers a file Rust has already written into {@link UplinkFiles#DIRECTORY} to the share
+     * sheet. Nothing is composed here — the identity card is drawn in `uplink_core::card`, where
+     * the one thing that matters about it, that it still scans, can be tested.
      */
-    void shareImage(String name, final String title) throws IOException {
+    void shareFile(String name, final String title) throws IOException {
         final Uri uri = UplinkFiles.uriFor(this, name);
+        final String type = UplinkFiles.typeOf(name);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 Intent send = new Intent(Intent.ACTION_SEND);
-                send.setType("image/png");
+                send.setType(type);
                 send.putExtra(Intent.EXTRA_STREAM, uri);
                 // The chooser reads the grant off the clip data, so a target that never looks at
                 // EXTRA_STREAM still gets permission for the file.

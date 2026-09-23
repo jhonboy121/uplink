@@ -153,7 +153,6 @@ async fn write_frame(stream: &mut SendStream, header: &FrameHeader, data: &[u8])
 }
 
 /// Media endpoints of a connected call, handed to the app with [`crate::node::Event::Connected`].
-#[derive(Debug)]
 pub struct MediaSession {
     pub video: VideoSender,
     pub incoming_video: mpsc::Receiver<Frame>,
@@ -162,6 +161,15 @@ pub struct MediaSession {
     pub audio: AudioSender,
     pub incoming_audio: AudioReceiver,
     pub stats: Arc<MediaStats>,
+}
+
+/// Written out, not derived: a session holds the QUIC connection and the codecs' buffers, and
+/// deriving this put ten kilobytes of quinn internals into the log every time a call connected —
+/// half the file, for an event whose interesting part is that it happened.
+impl std::fmt::Debug for MediaSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MediaSession")
+    }
 }
 
 /// Call-task side of the media plumbing.

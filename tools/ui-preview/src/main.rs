@@ -155,9 +155,6 @@ fn main() -> Result<()> {
     shoot(&window, &app, canvas, "call-connected-muted")?;
 
     app.set_call_state(CallState::Idle);
-    app.set_log_open(true);
-    shoot(&window, &app, canvas, "log")?;
-    app.set_log_open(false);
 
     // The same screens in light. A call is dark in either theme, so it is not repeated here.
     app.global::<Theme>().set_appearance(Appearance::Light);
@@ -244,13 +241,6 @@ fn populate(app: &App) -> Result<()> {
     app.set_call_status("".into());
     app.set_frame(stand_in(0x2B, 0x4B, 0x6B));
     app.set_remote_frame(stand_in(0x3A, 0x33, 0x50));
-    app.set_stats(
-        "cam 30.0 fps · blit 29.8 fps · 640 µs/blit · CPU 18% (100% = 1 core)\n\
-         voice ok · sent 1121 received 1030 (late 1, fec 0, concealed 1)\n\
-         mic 48000 samples (0 lost) · speaker 48000 samples (0 lost)"
-            .into(),
-    );
-    app.set_log("00:31:02 call connected peer=0e62c812 key_exchange=X25519MLKEM768\n00:31:02 encoder started\n00:31:03 voice streams open rate=48000".into());
     Ok(())
 }
 

@@ -23,7 +23,13 @@ import java.io.FileNotFoundException;
 public class UplinkFiles extends ContentProvider {
     /** Inside the app's files directory, which is what Rust knows as its data directory. */
     static final String DIRECTORY = "share";
-    private static final String TYPE = "image/png";
+    private static final String PNG = "image/png";
+    private static final String TEXT = "text/plain";
+
+    /** The type a name implies. Only what the app actually shares is worth listing. */
+    static String typeOf(String name) {
+        return name != null && name.endsWith(".png") ? PNG : TEXT;
+    }
 
     /** The URI for a file already written into {@link #DIRECTORY}. */
     static Uri uriFor(Context context, String name) throws FileNotFoundException {
@@ -54,7 +60,7 @@ public class UplinkFiles extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return TYPE;
+        return typeOf(uri.getLastPathSegment());
     }
 
     /** Share targets ask for the name and size before they read anything. */

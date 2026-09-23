@@ -11,7 +11,7 @@ slint::slint! {
     // resolved against this file, so the app and the preview tool both find them.
     #[include_path = "../../../assets"]
 
-    import { Button, LineEdit, ScrollView, VerticalBox, HorizontalBox, Palette } from "std-widgets.slint";
+    import { LineEdit, ScrollView, Palette } from "std-widgets.slint";
 
     // The design's three faces, vendored in assets/fonts and registered from the markup itself,
     // so no build script is involved. Outfit names things, Public Sans carries prose, and
@@ -411,13 +411,6 @@ slint::slint! {
             Rectangle { vertical-stretch: 1; }
         }
     }
-
-    component Card inherits Rectangle {
-        border-radius: Theme.radius;
-        background: Theme.surface;
-        @children
-    }
-
 
     component Tabs inherits Rectangle {
         in-out property <Screen> screen;
@@ -1280,7 +1273,7 @@ slint::slint! {
     component SettingsPage inherits Rectangle {
         in property <length> top-inset;
         in property <string> quality;
-        callback open-log();
+        callback share-diagnostics();
         background: Theme.ground;
 
         VerticalLayout {
@@ -1323,11 +1316,13 @@ slint::slint! {
                 value: root.quality;
                 tappable: false;
             }
+            // Not shown, sent. A log on a phone screen helps nobody; a log in a chat message is
+            // the only way a fault on someone else's phone ever reaches us.
             DetailRow {
                 title: "Diagnostics";
-                detail: "What this run has been doing";
-                value: "Open";
-                clicked => { root.open-log(); }
+                detail: "Send the log to whoever is fixing this";
+                value: "Share";
+                clicked => { root.share-diagnostics(); }
             }
             Rectangle { vertical-stretch: 1; }
         }
@@ -1342,6 +1337,8 @@ slint::slint! {
         in property <string> timer;
         in property <string> key-exchange;
         in property <string> status;
+        // What the call is not managing to do, if anything: video that never started, say.
+        in property <string> trouble;
         in property <CallState> state;
         in-out property <bool> swapped;
         in property <bool> mic-on;
@@ -1458,6 +1455,16 @@ slint::slint! {
                             height: self.font-size * Theme.line-box;
                             vertical-alignment: center;
                         }
+                        // A call that is carrying less than it should says so. Audio with no
+                        // video otherwise looks exactly like a call where nobody moved.
+                        if root.trouble != "" : Text {
+                            text: root.trouble;
+                            color: Theme.end;
+                            font-size: 0.8125rem;
+                            height: self.font-size * Theme.line-box;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
                     }
                     if root.connected && root.key-exchange != "" : VerticalLayout {
                         alignment: start;
@@ -1545,9 +1552,9 @@ slint::slint! {
         in property <string> my-id;
         in property <[string]> my-fingerprint-lines;
         in property <string> my-short-fingerprint;
-        in property <string> stats;
-        in property <string> log;
         in property <string> call-status;
+        // Cleared when a call starts; set if part of it never came up.
+        in-out property <string> call-trouble;
         in property <string> peer-name;
         in property <string> peer-initial: "?";
         in property <string> call-timer;
@@ -1576,7 +1583,6 @@ slint::slint! {
         in property <bool> permissions-blocked: false;
         in property <[PermissionItem]> permissions;
         in-out property <Screen> screen: Screen.people;
-        in-out property <bool> log-open: false;
         in-out property <bool> scanning: false;
         in-out property <bool> swapped: false;
         in-out property <bool> mic-on: true;
@@ -1597,6 +1603,7 @@ slint::slint! {
         callback remove-contact(string);
         callback pick-key();
         callback share-key();
+        callback share-diagnostics();
         callback scan(bool);
         callback grant-permissions();
         callback open-settings();
@@ -1615,8 +1622,7 @@ slint::slint! {
         out property <bool> bars-light: !Theme.dark
             && root.call-state == CallState.idle
             && root.confirming == Confirm.none
-            && root.peer-key == ""
-            && !root.log-open;
+            && root.peer-key == "";
         changed bars-light => { root.bars-changed(self.bars-light); }
 
         title: "uplink";
@@ -1672,7 +1678,7 @@ slint::slint! {
                 if root.screen == Screen.settings : SettingsPage {
                     top-inset: root.safe-area-insets.top;
                     quality: root.quality;
-                    open-log => { root.log-open = true; }
+                    share-diagnostics => { root.share-diagnostics(); }
                 }
             }
             Tabs {
@@ -1690,6 +1696,7 @@ slint::slint! {
             timer: root.call-timer;
             key-exchange: root.key-exchange;
             status: root.call-status;
+            trouble: root.call-trouble;
             state: root.call-state;
             swapped <=> root.swapped;
             mic-on: root.mic-on;
@@ -1807,57 +1814,5 @@ slint::slint! {
             animate opacity { duration: 420ms; easing: ease-out; }
         }
 
-        if root.log-open : Rectangle {
-            background: #000000F2;
-            VerticalBox {
-                padding-top: root.safe-area-insets.top + Theme.gap-large;
-                padding-bottom: root.safe-area-insets.bottom + Theme.gap-large;
-                spacing: Theme.gap;
-                HorizontalLayout {
-                    alignment: space-between;
-                    Text {
-                        text: "Diagnostics";
-                        color: Theme.text;
-                        font-size: 1.3rem;
-                        font-weight: 600;
-                        vertical-alignment: center;
-                    }
-                    Button {
-                        text: "Close";
-                        clicked => { root.log-open = false; }
-                    }
-                }
-                Card {
-                    height: live.preferred-height;
-                    live := VerticalBox {
-                        spacing: 2px;
-                        Text {
-                            text: "Now";
-                            color: Theme.text;
-                            font-size: 0.9rem;
-                            font-weight: 600;
-                        }
-                        Text {
-                            text: root.stats;
-                            color: Theme.muted;
-                            font-size: 0.7rem;
-                            font-family: Theme.mono;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-                ScrollView {
-                    vertical-stretch: 1;
-                    mouse-drag-pan-enabled: true;
-                    Text {
-                        text: root.log;
-                        color: Theme.muted;
-                        font-size: 0.7rem;
-                        font-family: Theme.mono;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
     }
 }

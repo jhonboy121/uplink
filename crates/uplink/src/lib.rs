@@ -34,6 +34,7 @@ use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{CallLog, CallRecord, Outcome};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
+use uplink_core::logs;
 use uplink_core::qr;
 use uplink_core::media::MediaSession;
 use uplink_core::node::{Command, EndReason, Event, Network, Node, NodeHandle};
@@ -50,9 +51,8 @@ const LOG_FILTER: &str = match option_env!("UPLINK_LOG") {
     None => "info",
 };
 const FALLBACK_DATA_DIR: &str = "/data/local/tmp";
-const PREVIOUS_LOG_TAIL_LINES: usize = 20;
-/// Lines kept in the in-app log view.
-const LOG_VIEW_LINES: usize = 300;
+/// Stats ticks per line written to the log. The counters are read every second either way.
+const STATS_LOG_EVERY: u32 = 5;
 
 const CAPTURE_WIDTH: i32 = 1280;
 const CAPTURE_HEIGHT: i32 = 720;
@@ -70,6 +70,11 @@ const QR_PIXELS: usize = 512;
 const SHARE_CAPTION: &str = "Scan to connect";
 const SHARE_TITLE: &str = "My uplink code";
 const SHARE_FILE: &str = "identity.png";
+const DIAGNOSTICS_FILE: &str = "uplink-logs.tar.gz";
+const DIAGNOSTICS_TITLE: &str = "uplink diagnostics";
+/// Shown on the call screen when the codecs did not come up: the call runs on audio, and saying
+/// nothing makes that look like a peer who is sitting still.
+const NO_VIDEO: &str = "Video isn't working on this phone — audio only";
 // Scanning: CPU-readable frames, big enough to read a code held up to the camera.
 const SCAN_WIDTH: i32 = 960;
 const SCAN_HEIGHT: i32 = 720;
@@ -135,10 +140,10 @@ struct State {
 }
 
 impl State {
+    /// Something worth knowing about later. It goes to the log file, which is the only copy
+    /// anyone reads — there is no log on screen, because a log on screen never leaves the phone.
     fn status(&self, message: impl AsRef<str>) {
-        if let Some(ui) = self.ui.upgrade() {
-            append_log(&ui, message.as_ref());
-        }
+        tracing::info!("{}", message.as_ref());
     }
 
     /// Assumes the camera permission is granted (see [`request_camera`]).
@@ -253,9 +258,19 @@ impl State {
         match CallVideo::start(parts, &self.avc, VIDEO, self.runtime.clone(), on_remote_frame) {
             Ok(call) => self.call = Some(call),
             Err(e) => {
+                // Loud on both ends of the report: in the log with the reason, and on the call
+                // screen, because the peer cannot tell a broken encoder from a still room.
                 tracing::error!("call video: {e:#}");
                 self.status(format!("call video failed: {e:#}"));
+                self.trouble(NO_VIDEO);
             }
+        }
+    }
+
+    /// Says on the call screen that part of the call never came up.
+    fn trouble(&self, message: &str) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_call_trouble(message.into());
         }
     }
 
@@ -398,11 +413,50 @@ fn qr_image(id: &EndpointId) -> Result<(slint::Image, f32)> {
 
 /// Hands the identity to the share sheet as a picture of its code. Drawn by core, written where
 /// the app's content provider can serve it, and handed to Android by name.
-fn share_identity(platform: &Platform, data_dir: &Path, key: &str) -> Result<()> {
-    let directory = Platform::share_dir(data_dir);
-    std::fs::create_dir_all(&directory)?;
-    std::fs::write(directory.join(SHARE_FILE), card::identity(key, SHARE_CAPTION)?)?;
-    Ok(platform.share_image(SHARE_FILE, SHARE_TITLE)?)
+async fn write_identity_card(data_dir: PathBuf, key: String) -> Result<()> {
+    let directory = Platform::share_dir(&data_dir);
+    let card = card::identity(&key, SHARE_CAPTION)?;
+    tokio::fs::create_dir_all(&directory).await?;
+    Ok(tokio::fs::write(directory.join(SHARE_FILE), card).await?)
+}
+
+/// Writes a file on the runtime, then offers it to the share sheet from the UI loop — which is
+/// where the platform bridge lives, because it is an `Rc` and does not cross threads.
+fn share_when_written(
+    handle: &Handle,
+    platform: &Rc<Platform>,
+    ui: &slint::Weak<App>,
+    file: &'static str,
+    title: &'static str,
+    trouble: &'static str,
+    write: impl Future<Output = Result<()>> + Send + 'static,
+) {
+    let writing = handle.spawn(write);
+    let (platform, weak) = (Rc::clone(platform), ui.clone());
+    spawn_ui(async move {
+        let shared = match writing.await {
+            Ok(Ok(())) => platform.share_file(file, title).map_err(anyhow::Error::from),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(anyhow::Error::from(e)),
+        };
+        if let (Err(e), Some(ui)) = (shared, weak.upgrade()) {
+            tracing::error!("sharing {file}: {e:#}");
+            toast(&ui, trouble);
+        }
+    });
+}
+
+/// Sends every kept log file as one archive. Reading a log off a phone screen is no way to
+/// report anything, and a tester on another continent has no adb; this is how a fault gets here.
+///
+/// Packing runs on the tokio runtime, never on the UI thread: the set can be a hundred megabytes
+/// before it compresses, and the tap that starts it must not freeze the phone.
+async fn pack_diagnostics(data_dir: PathBuf) -> Result<()> {
+    let out = Platform::share_dir(&data_dir).join(DIAGNOSTICS_FILE);
+    logs::archive(&data_dir, log::LOG_STEM, logs::KEEP, &out).await?;
+    let size = tokio::fs::metadata(&out).await.map(|file| file.len()).unwrap_or_default();
+    tracing::info!(bytes = size, "diagnostics packed");
+    Ok(())
 }
 
 /// A count of modules as a share of the whole drawing.
@@ -708,12 +762,21 @@ fn refresh_gate(ui: &App, platform: &Platform) -> bool {
 /// would be a wall between the user and the prompt they already understand.
 const GATE_EXPLAINED: &str = "gate-explained";
 
-fn gate_explained(data_dir: &Path) -> bool {
-    data_dir.join(GATE_EXPLAINED).exists()
+/// Runs `task` on the UI loop, saying so if the loop is gone rather than dropping it silently.
+fn spawn_ui(task: impl Future<Output = ()> + 'static) {
+    if let Err(e) = slint::spawn_local(task) {
+        tracing::warn!("the event loop refused a task: {e}");
+    }
 }
 
-fn mark_gate_explained(data_dir: &Path) {
-    if let Err(e) = std::fs::write(data_dir.join(GATE_EXPLAINED), []) {
+/// Owned paths and no borrows: both run as tasks on the runtime, because the UI loop has no
+/// reactor for `tokio::fs` and no business waiting on flash either.
+async fn gate_explained(data_dir: PathBuf) -> bool {
+    tokio::fs::try_exists(data_dir.join(GATE_EXPLAINED)).await.unwrap_or(false)
+}
+
+async fn mark_gate_explained(data_dir: PathBuf) {
+    if let Err(e) = tokio::fs::write(data_dir.join(GATE_EXPLAINED), []).await {
         tracing::warn!("recording that the gate was explained: {e}");
     }
 }
@@ -826,12 +889,11 @@ fn texture_image(frame: Frame) -> slint::Image {
     .build()
 }
 
-fn previous_run_report(platform: &Platform, data_dir: &Path) -> String {
+/// Why the last run ended, into this run's log. The previous run's own log goes out with
+/// [`share_diagnostics`] whole, so only what Android knows and the file cannot say is repeated.
+fn log_previous_exits(platform: &Platform) {
     let exits = platform.previous_exits().unwrap_or_else(|e| format!("exit info unavailable: {e}"));
-    let previous_log = std::fs::read_to_string(data_dir.join(log::PREVIOUS_LOG_FILE)).unwrap_or_default();
-    let lines: Vec<&str> = previous_log.lines().collect();
-    let tail = lines[lines.len().saturating_sub(PREVIOUS_LOG_TAIL_LINES)..].join("\n");
-    format!("previous exits:\n{exits}\nprevious log tail:\n{tail}")
+    tracing::info!("previous exits:\n{exits}");
 }
 
 /// Logs panics from any thread into this instance's log; restores the default hook on drop so a
@@ -922,7 +984,7 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
 fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
     let platform = Rc::new(Platform::attach(&app)?);
-    let report = previous_run_report(&platform, data_dir);
+    log_previous_exits(&platform);
     let avc = platform.avc()?;
 
     let runtime = uplink_core::runtime::build(dispatch)?;
@@ -982,7 +1044,6 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 
     let ui = App::new()?;
     state.borrow_mut().ui = ui.as_weak();
-    ui.set_log(report.into());
     ui.set_my_id(identity.to_string().into());
     ui.set_my_fingerprint_lines(fingerprint_lines(&identity));
     ui.set_my_short_fingerprint(groups(&identity, FINGERPRINT_SELF_GROUPS, " · ").into());
@@ -1069,16 +1130,31 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 
     // Anything missing on a launch that has already seen the explainer goes straight to Android's
     // dialog: a lapsed one-time grant should not mean reading the same screen again.
-    if !refresh_gate(&ui, &platform) && gate_explained(data_dir) {
-        request_gate(&ui, &platform);
+    if !refresh_gate(&ui, &platform) {
+        let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+        // The read is the runtime's, the gate is the UI loop's; a JoinHandle joins the two
+        // without either doing the other's work.
+        let reading = runtime.handle().spawn(gate_explained(data_dir.to_path_buf()));
+        spawn_ui(async move {
+            if matches!(reading.await, Ok(true))
+                && let Some(ui) = weak.upgrade()
+            {
+                request_gate(&ui, &p);
+            }
+        });
     }
 
     let (weak, p, dir) = (ui.as_weak(), Rc::clone(&platform), data_dir.to_path_buf());
+    let handle = runtime.handle().clone();
     ui.on_grant_permissions(move || {
-        if let Some(ui) = weak.upgrade() {
-            mark_gate_explained(&dir);
-            request_gate(&ui, &p);
-        }
+        let (weak, p) = (weak.clone(), Rc::clone(&p));
+        let writing = handle.spawn(mark_gate_explained(dir.clone()));
+        spawn_ui(async move {
+            drop(writing.await);
+            if let Some(ui) = weak.upgrade() {
+                request_gate(&ui, &p);
+            }
+        });
     });
     let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
     ui.on_open_settings(move || {
@@ -1218,14 +1294,21 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
     let (p, weak, dir) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf());
+    let handle = runtime.handle().clone();
     ui.on_share_key(move || {
         let Some(ui) = weak.upgrade() else { return };
         // The picture, not the key: a code is what someone points a camera at, and it is what
-        // arrives if they save it and open it from the other side.
-        if let Err(e) = share_identity(&p, &dir, &ui.get_my_id()) {
-            tracing::error!("sharing the identity: {e:#}");
-            toast(&ui, "Could not share your code");
-        }
+        // arrives if they save it and open it from the other side. Drawing and writing it are
+        // the runtime's work, not this tap's.
+        let card = write_identity_card(dir.clone(), ui.get_my_id().to_string());
+        share_when_written(&handle, &p, &weak, SHARE_FILE, SHARE_TITLE, "Could not share your code", card);
+    });
+    let (p, weak, dir, handle) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf(), runtime.handle().clone());
+    ui.on_share_diagnostics(move || {
+        // The set can be a hundred megabytes before it compresses; packing it is the runtime's.
+        let packing = pack_diagnostics(dir.clone());
+        let trouble = "Could not pack the log";
+        share_when_written(&handle, &p, &weak, DIAGNOSTICS_FILE, DIAGNOSTICS_TITLE, trouble, packing);
     });
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
     ui.on_scan(move |on| {
@@ -1284,17 +1367,27 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     let stats_timer = Timer::default();
     let s = Rc::clone(&state);
     let mut last = (Instant::now(), cpu::process_seconds());
+    let mut ticks: u32 = 0;
     stats_timer.start(TimerMode::Repeated, STATS_INTERVAL, move || {
         let now = (Instant::now(), cpu::process_seconds());
         let secs = now.0.duration_since(last.0).as_secs_f64();
         let cpu_percent = last.1.zip(now.1).map(|(before, after)| (after - before) / secs * PERCENT);
         last = now;
+        ticks += 1;
         with_state(&s, |state| {
             state.recover_audio();
-            let (text, timer) = (stats_text(state, secs, cpu_percent), state.call_timer());
+            // A codec that dies mid-call takes the picture with it and says nothing otherwise.
+            if state.call.as_ref().is_some_and(|call| !call.codecs_running()) {
+                state.trouble(NO_VIDEO);
+            }
+            // Counted every second, written every few: the log is read by whoever is fixing a
+            // call that has already happened, and a line a second would bury it.
+            let text = stats_text(state, secs, cpu_percent);
+            if ticks.is_multiple_of(STATS_LOG_EVERY) {
+                tracing::info!("{text}");
+            }
             if let Some(ui) = state.ui.upgrade() {
-                ui.set_stats(text.into());
-                ui.set_call_timer(timer.into());
+                ui.set_call_timer(state.call_timer().into());
             }
         });
     });
@@ -1323,7 +1416,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 /// Says something went wrong and gets out of the way; the markup's own Timer dismisses it.
 fn toast(ui: &App, message: impl Into<String>) {
     let message = message.into();
-    append_log(ui, &message);
+    tracing::info!("{message}");
     ui.set_toast(message.into());
 }
 
@@ -1334,8 +1427,8 @@ fn peer_key(text: &str) -> Option<EndpointId> {
 }
 
 fn set_call_status(ui: &slint::Weak<App>, status: String) {
+    tracing::info!("{status}");
     if let Some(ui) = ui.upgrade() {
-        append_log(&ui, &status);
         ui.set_call_status(status.into());
     }
 }
@@ -1404,10 +1497,9 @@ async fn handle_node_events(
     platform: Rc<Platform>,
 ) {
     while let Some(event) = events.recv().await {
-        tracing::info!(?event, "node event");
-        let Some(ui) = ui.upgrade() else { break };
         let status = describe(&event);
-        append_log(&ui, &status);
+        tracing::info!("{status}");
+        let Some(ui) = ui.upgrade() else { break };
         ui.set_call_status(status.into());
         if let Some(call_state) = call_state(&event) {
             ui.set_call_state(call_state);
@@ -1422,6 +1514,8 @@ async fn handle_node_events(
         match &event {
             Event::Dialing { peer } | Event::Incoming { peer } => {
                 let incoming = matches!(event, Event::Incoming { .. });
+                // Whatever went wrong last time was about last time.
+                ui.set_call_trouble(Default::default());
                 with_state(&state, |s| {
                     s.pending = Some(PendingCall { peer: *peer, incoming, at: SystemTime::now(), answered: false });
                 });
@@ -1502,8 +1596,9 @@ async fn handle_node_events(
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     let data_dir = app.internal_data_path().unwrap_or_else(|| PathBuf::from(FALLBACK_DATA_DIR));
-    let dispatch = match log::init(LOG_TAG, LOG_FILTER, &data_dir) {
-        Ok(dispatch) => dispatch,
+    // The guard flushes the log writer's worker; logging stops the moment it is dropped.
+    let (dispatch, _writer) = match log::init(LOG_TAG, LOG_FILTER, &data_dir) {
+        Ok(logging) => logging,
         Err(e) => return log::logcat(LOG_TAG, Level::ERROR, &format!("logging init failed: {e}")),
     };
     let _log = tracing::dispatcher::set_default(&dispatch);
@@ -1513,11 +1608,3 @@ fn android_main(app: AndroidApp) {
     }
 }
 
-/// Appends to the in-app log view, keeping the newest [`LOG_VIEW_LINES`] lines.
-fn append_log(ui: &App, line: &str) {
-    let log = ui.get_log();
-    let mut lines: Vec<&str> = log.lines().collect();
-    lines.push(line);
-    let newest = lines.len().saturating_sub(LOG_VIEW_LINES);
-    ui.set_log(lines[newest..].join("\n").into());
-}

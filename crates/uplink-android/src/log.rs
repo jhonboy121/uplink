@@ -1,38 +1,39 @@
 //! `tracing` → logcat, plus a file in the app's data dir (readable in-app; no adb).
 
 use std::ffi::{CStr, CString, c_int};
-use std::fs::File;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Mutex;
 
 use ndk_sys::android_LogPriority;
 use tracing::field::{Field, Visit};
 use tracing::{Dispatch, Event, Level, Subscriber};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Context, SubscriberExt};
+use uplink_core::logs::{self, Rolling};
 
 use crate::Error;
 
-pub const LOG_FILE: &str = "uplink.log";
-pub const PREVIOUS_LOG_FILE: &str = "uplink.prev.log";
+/// What the log files are called; see [`uplink_core::logs`] for how they roll.
+pub const LOG_STEM: &str = "uplink";
 
 /// Builds the subscriber. It is *not* installed globally: `android_main` can run several
 /// times per process, so callers scope it (`dispatcher::set_default`) and hand it to other
-/// threads. `filter` uses `Targets` syntax, e.g. `info,uplink=debug`. The previous run's log is
-/// kept as [`PREVIOUS_LOG_FILE`].
-pub fn init(tag: &'static CStr, filter: &str, dir: &Path) -> Result<Dispatch, Error> {
-    let current = dir.join(LOG_FILE);
-    if current.exists() {
-        std::fs::rename(&current, dir.join(PREVIOUS_LOG_FILE))?;
-    }
-    let file = File::create(current)?;
+/// threads. `filter` uses `Targets` syntax, e.g. `info,uplink=debug`.
+///
+/// The returned guard flushes the writer's worker thread; logging stops when it is dropped, so
+/// it belongs beside the dispatch for as long as the app runs.
+pub fn init(tag: &'static CStr, filter: &str, dir: &Path) -> Result<(Dispatch, WorkerGuard), Error> {
+    let rolling = Rolling::new(dir, LOG_STEM, logs::MAX_BYTES, logs::KEEP)?;
+    // Lossy: under a flood a dropped line beats blocking the thread that logged it, and the
+    // threads that log most here are carrying a call.
+    let (writer, guard) = tracing_appender::non_blocking(rolling);
     let subscriber = tracing_subscriber::registry()
         .with(Logcat { tag })
-        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(Mutex::new(file)))
+        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
         .with(Targets::from_str(filter)?);
-    Ok(Dispatch::new(subscriber))
+    Ok((Dispatch::new(subscriber), guard))
 }
 
 /// Writes straight to logcat, for when the subscriber is unavailable.

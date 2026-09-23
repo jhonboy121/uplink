@@ -45,6 +45,9 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 qrcode = { version = "0.14", default-features = false }
 rqrr = { version = "0.9", default-features = false }
 rtrb = "0.4"
+# The diagnostics archive. gzip rather than zstd: flate2's rust_backend is already here for the
+# APK writer, and zstd would add a C library for a file that is sent once.
+tar = { version = "0.4", default-features = false }
 rustls = { version = "0.23.33", default-features = false, features = ["aws_lc_rs", "std"] }
 serde = { version = "1", features = ["derive"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
@@ -56,6 +59,10 @@ tokio = { version = "1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+# Only for `non_blocking`: its own rolling appender rotates by time, and the log has to roll by
+# size. A `tracing` subscriber takes a synchronous writer, so this is what keeps the write off
+# whichever thread logged.
+tracing-appender = { version = "0.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

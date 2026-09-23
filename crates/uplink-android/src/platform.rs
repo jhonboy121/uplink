@@ -293,13 +293,13 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
-    /// Offers a picture already written into [`Self::share_dir`] to the share sheet.
-    pub fn share_image(&self, name: &str, title: &str) -> Result<(), Error> {
+    /// Offers a file already written into [`Self::share_dir`] to the share sheet.
+    pub fn share_file(&self, name: &str, title: &str) -> Result<(), Error> {
         self.with_activity(|env, activity| {
             let (name, title) = (env.new_string(name)?, env.new_string(title)?);
             env.call_method(
                 activity,
-                jni_str!("shareImage"),
+                jni_str!("shareFile"),
                 jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
                 &[JValue::Object(&name), JValue::Object(&title)],
             )?;

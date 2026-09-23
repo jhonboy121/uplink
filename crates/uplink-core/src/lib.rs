@@ -7,6 +7,7 @@ pub mod contacts;
 pub mod crypto;
 mod error;
 pub mod identity;
+pub mod logs;
 pub mod media;
 pub mod node;
 pub mod qr;
