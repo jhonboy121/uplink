@@ -101,3 +101,25 @@ server — use them before writing markup. What the first pass of our UI got wro
 - **Render before declaring UI done:** `just preview` draws every screen with the software renderer into
   `target/ui-preview/`. It caught blank glyphs, a bar covering content, and buttons eating all the slack — none of
   which the compiler sees.
+- **The Back gesture finishes the activity unless the UI accepts it.** The Android backend turns
+  Back into a `Key.Back` press, dispatches it, and on the `OnBackInvokedDispatcher` path calls
+  `finish()` when nothing accepts. Registering a competing `OnBackInvokedCallback` in Java is
+  fighting it and loses anyway: the backend registers later, and a dispatcher prefers the last
+  callback at a given priority. Accept the key instead, in a `FocusScope` **wrapping the window's
+  contents** — rejected keys travel up to the parent, so one scope also covers the case where a
+  `LineEdit` has focus and ignored it. One scope covers both the dispatcher path and, below 33,
+  the key-event path, where accepting reports `InputStatus::Handled` and stops it reaching
+  `Activity.onBackPressed`.
+- **`accept` and `reject` in a `key-pressed` handler are resolved like any other name**, so a
+  window that also declares `callback accept()` shadows the `EventResult` value and the error is
+  the unhelpful "Callback must be called. Did you forgot the '()'?". Write `EventResult.accept`.
+- **`changed x => {}` belongs to whatever declares it**: moving markup inside a new wrapper
+  element takes the handlers with it, and `self` then means the wrapper. Leave them at the level
+  whose property they watch.
+- **There is no draggable element.** `TouchArea` gives raw pointer events with no tap-versus-drag
+  slop, so `clicked` fires after a drag too; `SwipeGestureHandler` recognises directional swipes,
+  `Flickable`/`ScrollView` pan content, and `DragArea`/`DropArea` are drag-and-drop of *data*.
+  Moving an element means holding its position yourself and ignoring a `clicked` that travelled
+  further than the slop.
+- **A component cannot ask for its parent's size**: inside it, `parent` is itself. Pass the
+  available width and height in as properties if it has to clamp itself to the window.

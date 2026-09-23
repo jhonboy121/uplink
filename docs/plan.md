@@ -279,12 +279,6 @@ default); keep disk usage lean. Avoid build scripts.
     the locked transition — the self-view folding from full frame into its corner. A call that
     times out should **stay on the call screen** long enough to say it did not connect, the way
     every phone does, instead of vanishing back to the list. "Calling…" wants its dots animated.
-  - **Tapping the self-view hides it instead of swapping it.** It is meant to trade places with
-    the remote picture, which is what every other call app does with that tap.
-  - **A call should say what it is riding on.** A small marker on the call screen for direct
-    versus relayed, because the two behave nothing alike — a relayed call between two carrier
-    NATs has run at 618 ms average with 12-second excursions, while the same pair direct was
-    113 ms. The user cannot fix the route, but "relayed" explains what they are seeing.
   - **Network telemetry, on the screen rather than only in the log.** Throughput each way, and a
     banner when a call is struggling that says **whose side** it is: our own send rate collapsing
     is a different sentence from frames not arriving. The counters already exist in
@@ -319,11 +313,10 @@ default); keep disk usage lean. Avoid build scripts.
       over a night, because that number decides whether this is acceptable or whether uplink ends
       up needing a push server after all.
   - **A call must survive leaving the call screen**, and must not stop the rest of the app being
-    usable. Adding a contact or sending diagnostics mid-call should not mean hanging up.
-    - **Minimised in-app frame while uplink is foreground.** PiP does nothing here, because the
-      user has not left the app — this is the common case and needs its own answer: the call
-      shrinks to a draggable frame and the tabs underneath stay usable.
-    - **PiP once the user leaves the app**, which is the other half of the same feature.
+    usable. The half that happens inside uplink is **done**: a call folds into a draggable frame
+    over the pages, so adding a contact or sending diagnostics mid-call costs nothing. Back is
+    part of the same story and is done too — it closes the innermost thing and, with nothing left
+    to close, steps into the background rather than finishing the activity.
     What is settled: a call already keeps running in the background on a foreground service.
     What is not:
     - **Picture-in-picture** is the platform's answer to "use the phone while calling". It needs
@@ -427,3 +420,16 @@ default); keep disk usage lean. Avoid build scripts.
     sample), and on WiFi this side advertises no public IPv4 at all — so IPv4 punching cannot
     work. Both ends have global IPv6, which should sidestep it and is not being used; a router's
     inbound IPv6 filter is the first suspect.
+- **2026-09-23**: **a call stops being a whole screen.** It folds into a draggable frame over the
+  pages, so the rest of the app is usable while it runs; the self view swaps instead of vanishing;
+  and the call screen says whether it is Direct or Relayed, which is the difference between 113 ms
+  and 618 ms on the same pair of phones.
+  The Back gesture is handled the way Slint's Android backend intends rather than around it. That
+  backend turns Back into a `Key.Back` press and **finishes the activity when nothing accepts it**
+  — which here would drop the endpoint an incoming call arrives at. Registering our own
+  `OnBackInvokedCallback` in Java loses anyway, because the backend registers later and a
+  dispatcher prefers the last callback at a priority; a `FocusScope` wrapping the window accepts
+  the key instead, and one mechanism then covers both the dispatcher path and the older key-event
+  path. Back now closes the innermost thing on screen and, with nothing left, calls
+  `moveTaskToBack` — the activity is never finished. Details in
+  [docs/ref/slint-1.18-android.md](ref/slint-1.18-android.md).
