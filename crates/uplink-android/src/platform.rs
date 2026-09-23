@@ -30,6 +30,10 @@ const TRACE_MAX_LINES: usize = 30;
 const SINGLE_PERMISSION: i32 = 1;
 /// Must match `UplinkFiles.DIRECTORY`, which is the Java side of the same agreement.
 const SHARE_DIR: &str = "share";
+/// `Build.VERSION_CODES.TIRAMISU`: the first Android with a notification permission. It cannot be
+/// read off the device the way the other constants are — a platform older than this has no such
+/// field, which is the whole problem being worked around.
+const NOTIFICATIONS_SDK: jint = 33;
 // android.util.Log levels, as passed to `UplinkActivity.log`.
 const ANDROID_LOG_INFO: jint = 4;
 const ANDROID_LOG_WARN: jint = 5;
@@ -92,13 +96,17 @@ pub struct Platform {
     vm: JavaVM,
     activity: Global<JObject<'static>>,
     inner: Arc<Inner>,
+    /// `Build.VERSION.SDK_INT`. What the app was built against says nothing about what it is
+    /// running on, and the two disagree by three years on a phone that cannot take Google's
+    /// updates — so anything newer than `minSdk` is asked about here before it is used.
+    sdk: jint,
 }
 
 impl Platform {
     pub fn attach(app: &AndroidApp) -> Result<Self, Error> {
         // SAFETY: android-activity guarantees a valid JavaVM pointer for the process lifetime.
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
-        let (activity, inner) = vm.attach_current_thread(|env| -> Result<_, Error> {
+        let (activity, inner, sdk) = vm.attach_current_thread(|env| -> Result<_, Error> {
             // SAFETY: a global ref to the activity owned by android-activity; not deleted here.
             let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
             let class = env.get_object_class(&activity)?;
@@ -126,17 +134,42 @@ impl Platform {
                 drop(unsafe { Arc::from_raw(std::ptr::with_exposed_provenance::<Inner>(handle)) });
                 return Err(e);
             }
-            Ok((env.new_global_ref(&activity)?, inner))
+            let sdk = env
+                .get_static_field(jni_str!("android/os/Build$VERSION"), jni_str!("SDK_INT"), jni_sig!("I"))?
+                .i()?;
+            Ok((env.new_global_ref(&activity)?, inner, sdk))
         })?;
-        tracing::debug!("platform bridge attached");
-        Ok(Self { vm, activity, inner })
+        // At info, and once per process: which Android this is decides what the app may ask for,
+        // and it is the first thing worth knowing about a device that behaves oddly.
+        tracing::info!(sdk, "platform bridge attached");
+        Ok(Self { vm, activity, inner, sdk })
     }
 
     fn with_activity<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
         self.vm.attach_current_thread(|env| f(env, self.activity.as_obj()))
     }
 
+    /// Whether this Android has a notification permission at all. Before 13 there is none to
+    /// hold: an app may post unless the user has switched its notifications off. Asking anyway
+    /// does not merely come back false — `POST_NOTIFICATIONS` is not a field of that platform's
+    /// `Manifest.permission`, so looking it up by name throws, and the app reads its own
+    /// notifications as refused for good however many times the user grants them.
+    const fn asks_about_notifications(&self) -> bool {
+        self.sdk >= NOTIFICATIONS_SDK
+    }
+
+    /// Whether the app may post notifications, which is the whole of the answer before 13 and
+    /// agrees with the permission after it.
+    fn notifications_enabled(&self) -> Result<bool, Error> {
+        self.with_activity(|env, activity| {
+            Ok(env.call_method(activity, jni_str!("notificationsEnabled"), jni_sig!("()Z"), &[])?.z()?)
+        })
+    }
+
     pub fn has_permission(&self, permission: Permission) -> Result<bool, Error> {
+        if permission == Permission::PostNotifications && !self.asks_about_notifications() {
+            return self.notifications_enabled();
+        }
         let granted = self.inner.permission_granted;
         self.with_activity(|env, activity| {
             let name = permission_string(env, permission)?;
@@ -155,6 +188,10 @@ impl Platform {
     /// Whether Android would still show its own dialog. False once the user has refused for good,
     /// which is the only case that has to send them to Settings.
     pub fn should_explain(&self, permission: Permission) -> Result<bool, Error> {
+        // No dialog exists to explain, so this is the "only Settings can fix it" case outright.
+        if permission == Permission::PostNotifications && !self.asks_about_notifications() {
+            return Ok(false);
+        }
         self.with_activity(|env, activity| {
             let name = permission_string(env, permission)?;
             Ok(env
@@ -194,6 +231,10 @@ impl Platform {
     pub async fn request_permission(&self, permission: Permission) -> Result<bool, Error> {
         if self.has_permission(permission)? {
             return Ok(true);
+        }
+        // Switched off, and there is no dialog on this platform that could switch them back on.
+        if permission == Permission::PostNotifications && !self.asks_about_notifications() {
+            return Ok(false);
         }
         let code = self.inner.next_request_code.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();

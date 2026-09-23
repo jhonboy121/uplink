@@ -3,6 +3,7 @@ package dev.uplink;
 import android.content.ClipData;
 import android.content.Intent;
 import android.app.NativeActivity;
+import android.app.NotificationManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -72,6 +73,15 @@ public class UplinkActivity extends NativeActivity {
      */
     boolean shouldExplain(String permission) {
         return shouldShowRequestPermissionRationale(permission);
+    }
+
+    /**
+     * Whether the app may post notifications. Before Android 13 this is the only answer there is,
+     * since there is no permission to hold; from 13 on it agrees with the permission.
+     */
+    boolean notificationsEnabled() {
+        NotificationManager notifications = getSystemService(NotificationManager.class);
+        return notifications != null && notifications.areNotificationsEnabled();
     }
 
     /** Opens this app's own page in Settings, not the top of Settings. */
