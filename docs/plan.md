@@ -100,9 +100,10 @@ default); keep disk usage lean. Avoid build scripts.
 5. **Audio**: AAudio voice-communication + Opus on its own stream.
 6. **Call service**: foreground service so calls survive backgrounding.
 7. **Product UI** (design locked, see Revisions): 7a contacts + QR + call screens **done**, matched to the design and
-   themed; 7b the shell (three tabs, contacts with favourites and last-called, Connect, Settings), first run (splash,
-   permission gate, profile), profile over the wire + `rusqlite` contacts, privacy switches; 7c PiP, lock-screen calls,
-   diagnostics report; 7d verification, identity rotation, history.
+   themed. 7b: the shell (People / Calls / Connect / Settings), the splash, the permission gate, `rusqlite` contacts
+   and the call log — **done**; still open are the contact screen (favourite, rename, remove), ringback and ringtone
+   with an outgoing timeout, the profile over the wire, and the privacy switches. 7c PiP, lock-screen calls,
+   diagnostics report; 7d verification, identity rotation.
 8. ~~**Resource table**~~ **done**: `tools/android-res` compiles `android/` into the manifest, `resources.arsc` and the
    APK itself. Launcher icon and system splash confirmed on the S24. See [docs/ref/android-res.md](ref/android-res.md).
 9. Security to-dos above; then iOS (CI) and web.
@@ -271,6 +272,10 @@ default); keep disk usage lean. Avoid build scripts.
     thing people actually send each other, and a scanned image is already a supported way in.
   - **Errors belong inline** where the thing went wrong; a modal only when the user has to decide something. A toast
     that disappears is not an error report.
+  - **A call attempt needs a sound and an end.** Ringback while an outgoing call is ringing, a
+    ringtone for an incoming one, and a **timeout on establishing an outgoing call** — dialing a
+    key nobody is listening on currently waits until the user gives up. The tone routes through the
+    existing AAudio path, and stops the moment the call connects or ends.
   - **Strings get translated with Slint's own scheme**, which is gettext (`@tr()` → `.pot` → `.po`), not FTL. Bionic has
     no gettext, so use **bundled** translations: the compiler takes `SLINT_BUNDLE_TRANSLATIONS=<dir>` as an environment
     variable, so the `slint!` macro can bundle without a build script, and `slint::select_bundled_translation` switches
