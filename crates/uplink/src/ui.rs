@@ -31,6 +31,17 @@ slint::slint! {
     export enum Screen { people, connect, settings }
     export enum CallState { idle, dialing, ringing, incoming, connected }
 
+    // A call cannot happen without all three, so the gate is not dismissable. `blocked` is the
+    // one Android will not ask about again, which is the only case that needs Settings.
+    export enum Grant { needed, granted, blocked }
+
+    export struct PermissionItem {
+        name: string,
+        why: string,
+        grant: Grant,
+        icon: image,
+    }
+
     export struct ContactItem {
         name: string,
         id: string,
@@ -177,24 +188,72 @@ slint::slint! {
         animate opacity, background { duration: 160ms; easing: ease-out; }
     }
 
-    // The first thing a launch shows, over the endpoint coming up. Dark in either theme, like a
-    // call, and like the system splash Android composes from the same mark and ground.
+    component PageTitle inherits Text {
+        color: Theme.text;
+        font-family: Theme.display;
+        font-size: 1.4375rem;
+        font-weight: 600;
+        height: self.font-size * Theme.line-box;
+        vertical-alignment: center;
+    }
+
+    // The design's full-width action. Its secondary colours were written for a dark ground, so
+    // here they come from the accent rather than the literal pale blue, to stay readable in light.
+    component Wide inherits Rectangle {
+        in property <string> text;
+        in property <bool> primary: false;
+        in property <bool> enabled: true;
+        callback clicked();
+        height: Theme.wide-height;
+        border-radius: Theme.wide-radius;
+        background: root.primary ? Theme.beacon : Theme.beacon.with-alpha(0.12);
+        border-width: root.primary ? 0px : 1px;
+        border-color: Theme.beacon.with-alpha(0.30);
+        opacity: root.enabled ? 1.0 : 0.45;
+        accessible-role: button;
+        accessible-label: text;
+        accessible-action-default => { root.clicked(); }
+        Text {
+            text: root.text;
+            color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : Theme.beacon;
+            font-size: 1rem;
+            font-weight: root.primary ? 600 : 400;
+            height: self.font-size * Theme.line-box;
+            vertical-alignment: center;
+        }
+        touch := TouchArea {
+            mouse-cursor: root.enabled ? pointer : default;
+            clicked => {
+                if (root.enabled) {
+                    root.clicked();
+                }
+            }
+        }
+        states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
+        animate opacity { duration: 160ms; easing: ease-out; }
+    }
+
+    // The first thing a launch shows, over the endpoint coming up. It follows the theme: a dark
+    // splash handing over to a light app is a flash, and the ground is the one thing that must
+    // not change across the handover.
     component Splash inherits Rectangle {
-        background: Theme.under-video;
+        background: Theme.ground;
         VerticalLayout {
             alignment: center;
             spacing: Theme.splash-gap;
             HorizontalLayout {
                 alignment: center;
                 Image {
-                    source: @image-url("icons/mark.svg");
+                    // Two files rather than one tinted: the mark is two-tone, and `colorize`
+                    // would flatten the peers into the link.
+                    source: Theme.dark ? @image-url("icons/mark.svg") : @image-url("icons/mark-light.svg");
                     width: Theme.splash-mark;
                     height: self.width;
                 }
             }
             Text {
                 text: "uplink";
-                color: Theme.on-video;
+                color: Theme.text;
                 font-family: Theme.display;
                 font-size: 1.90625rem;
                 font-weight: 600;
@@ -207,11 +266,104 @@ slint::slint! {
             y: parent.height - self.height - Theme.splash-foot;
             width: parent.width;
             text: "P2P · E2EE";
-            color: Theme.on-video-muted;
+            color: Theme.muted;
             font-family: Theme.mono;
             font-size: 0.8125rem;
             letter-spacing: 1.8px;
             horizontal-alignment: center;
+        }
+    }
+
+    // The gate. Everything a call needs, asked for once, with the reason next to each — asking
+    // cold is how people tap Deny.
+    component PermissionsPage inherits Rectangle {
+        in property <[PermissionItem]> permissions;
+        in property <bool> blocked;
+        in property <length> top-inset;
+        callback grant();
+        callback settings();
+        background: Theme.ground;
+
+        VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 0;
+                padding-top: root.top-inset + Theme.bar-top;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                padding-bottom: Theme.bar-bottom;
+                PageTitle { text: root.blocked ? "uplink can't call yet" : "Before your first call"; }
+            }
+            VerticalLayout {
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: root.blocked
+                        ? "Android won't ask again, so these have to be turned on in settings. uplink will be waiting when you come back."
+                        : "A call needs all three. uplink asks once, and asks for nothing else — no contacts, no location, no storage.";
+                    color: Theme.muted;
+                    font-size: 0.9375rem;
+                    wrap: word-wrap;
+                }
+                for item in root.permissions : HorizontalLayout {
+                    spacing: Theme.row-gap;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: item.icon;
+                            width: Theme.key-icon;
+                            height: self.width;
+                            colorize: item.grant == Grant.blocked ? Theme.end
+                                : item.grant == Grant.granted ? Theme.answer
+                                : Theme.beacon;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: item.name;
+                            color: Theme.text;
+                            font-size: 1rem;
+                            font-weight: 600;
+                            height: self.font-size * Theme.line-box;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: item.why;
+                            color: Theme.muted;
+                            font-size: 0.8125rem;
+                            height: self.font-size * Theme.line-box;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: item.grant == Grant.granted ? "on" : item.grant == Grant.blocked ? "off" : "needed";
+                            color: item.grant == Grant.granted ? Theme.answer
+                                : item.grant == Grant.blocked ? Theme.end
+                                : Theme.muted;
+                            font-family: Theme.mono;
+                            font-size: 0.75rem;
+                            letter-spacing: 0.6px;
+                        }
+                    }
+                }
+                Wide {
+                    text: root.blocked ? "Open settings" : "Continue";
+                    primary: true;
+                    clicked => {
+                        if (root.blocked) {
+                            root.settings();
+                        } else {
+                            root.grant();
+                        }
+                    }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
         }
     }
 
@@ -221,14 +373,6 @@ slint::slint! {
         @children
     }
 
-    component PageTitle inherits Text {
-        color: Theme.text;
-        font-family: Theme.display;
-        font-size: 1.4375rem;
-        font-weight: 600;
-        height: self.font-size * Theme.line-box;
-        vertical-alignment: center;
-    }
 
     component Tabs inherits Rectangle {
         in-out property <Screen> screen;
@@ -288,41 +432,6 @@ slint::slint! {
     }
 
     // The design's full-width action. Its secondary colours were written for a dark ground, so
-    // here they come from the accent rather than the literal pale blue, to stay readable in light.
-    component Wide inherits Rectangle {
-        in property <string> text;
-        in property <bool> primary: false;
-        in property <bool> enabled: true;
-        callback clicked();
-        height: Theme.wide-height;
-        border-radius: Theme.wide-radius;
-        background: root.primary ? Theme.beacon : Theme.beacon.with-alpha(0.12);
-        border-width: root.primary ? 0px : 1px;
-        border-color: Theme.beacon.with-alpha(0.30);
-        opacity: root.enabled ? 1.0 : 0.45;
-        accessible-role: button;
-        accessible-label: text;
-        accessible-action-default => { root.clicked(); }
-        Text {
-            text: root.text;
-            color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : Theme.beacon;
-            font-size: 1rem;
-            font-weight: root.primary ? 600 : 400;
-            height: self.font-size * Theme.line-box;
-            vertical-alignment: center;
-        }
-        touch := TouchArea {
-            mouse-cursor: root.enabled ? pointer : default;
-            clicked => {
-                if (root.enabled) {
-                    root.clicked();
-                }
-            }
-        }
-        states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
-        animate opacity { duration: 160ms; easing: ease-out; }
-    }
-
     // What a thing is on the start side, what it is set to on the end side. Ends the People
     // list with your own key, and makes up the Settings list.
     component DetailRow inherits Rectangle {
@@ -910,6 +1019,12 @@ slint::slint! {
         in property <string> quality: "720p · 30";
 
         in property <bool> booting: true;
+        in property <bool> gate: false;
+        // Nothing explains itself before it has been asked, so a fresh install would otherwise
+        // look identical to a refusal.
+        in-out property <bool> asked: false;
+        in property <bool> permissions-blocked: false;
+        in property <[PermissionItem]> permissions;
         in-out property <Screen> screen: Screen.people;
         in-out property <bool> log-open: false;
         in-out property <bool> scanning: false;
@@ -933,6 +1048,8 @@ slint::slint! {
         callback pick-key();
         callback share-key();
         callback scan(bool);
+        callback grant-permissions();
+        callback open-settings();
 
         title: "uplink";
         background: Theme.ground;
@@ -941,8 +1058,9 @@ slint::slint! {
         default-font-size: 16px;
         // Prose is Public Sans; Outfit and Plex Mono are asked for by the elements that want them.
         default-font-family: "Public Sans";
-        // Our surfaces are dark, so the std-widgets follow rather than fight them.
-        init => { Palette.color-scheme = ColorScheme.dark; }
+        // The palette is left alone: Slint's Android backend fills it from the system's night
+        // mode, and writing it here would pin the app to one theme and make `Theme.system-dark`
+        // read back whatever we just wrote.
 
         // Pages and the tab bar share the window: the bar takes space, it does not cover content.
         VerticalLayout {
@@ -1005,8 +1123,22 @@ slint::slint! {
             flip-camera => { root.flip-camera(); }
         }
 
-        // Over everything, until the endpoint is up and a call could actually arrive.
-        if root.booting : Splash { }
+        // Nothing behind this is reachable until all three are granted.
+        if root.gate : PermissionsPage {
+            top-inset: root.safe-area-insets.top;
+            permissions: root.permissions;
+            blocked: root.permissions-blocked;
+            grant => { root.grant-permissions(); }
+            settings => { root.open-settings(); }
+        }
+
+        // Over everything until the endpoint is up. It fades rather than being torn out: the
+        // ground does not change across the handover, so all that leaves is the mark.
+        splash := Splash {
+            opacity: root.booting ? 1.0 : 0.0;
+            visible: self.opacity > 0.0;
+            animate opacity { duration: 420ms; easing: ease-out; }
+        }
 
         if root.log-open : Rectangle {
             background: #000000F2;

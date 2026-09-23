@@ -34,6 +34,8 @@ const UTF8_LONG_LEN_FLAG: u8 = 0x80;
 
 // Res_value data types.
 pub const TYPE_REFERENCE: u8 = 0x01;
+/// A reference to a theme attribute, as `?android:attr/foo` — resolved per theme at runtime.
+pub const TYPE_ATTRIBUTE: u8 = 0x02;
 pub const TYPE_STRING: u8 = 0x03;
 pub const TYPE_INT_DEC: u8 = 0x10;
 pub const TYPE_INT_HEX: u8 = 0x11;

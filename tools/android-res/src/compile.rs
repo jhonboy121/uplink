@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 
-use crate::chunk::{TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE, TYPE_STRING};
+use crate::chunk::{TYPE_ATTRIBUTE, TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE, TYPE_STRING};
 use crate::framework;
 use crate::xml::{ANDROID_NS, Attr, Element, Value};
 
@@ -137,6 +137,11 @@ pub fn style_item(node: roxmltree::Node, symbols: &Symbols) -> Result<(u32, u8, 
         None => bail!("{name}: only android: attributes can be set in a style here"),
     };
     let text = node.text().unwrap_or_default().trim();
+    // `?android:attr/foo` defers to the theme, which is how a value follows light and dark
+    // without a second configuration in the table.
+    if let Some(deferred) = text.strip_prefix('?') {
+        return Ok((attr, TYPE_ATTRIBUTE, reference(&format!("@{deferred}"), symbols)?));
+    }
     Ok(match value(text, symbols)? {
         Value::Ref(id) => (attr, TYPE_REFERENCE, id),
         Value::Bool(b) => (attr, TYPE_INT_BOOLEAN, u32::from(b) * u32::MAX),

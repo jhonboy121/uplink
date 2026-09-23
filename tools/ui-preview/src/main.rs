@@ -17,7 +17,7 @@ mod dump;
 #[path = "../../../crates/uplink/src/ui.rs"]
 mod ui;
 
-use ui::{App, Appearance, CallState, ContactItem, Screen, Theme};
+use ui::{App, Appearance, CallState, ContactItem, Grant, PermissionItem, Screen, Theme};
 
 /// Logical pixels.
 /// The S24 Ultra is 1440x3120 at 3x. `UPLINK_PREVIEW_SIZE=360x799` renders at the design's own
@@ -69,10 +69,22 @@ fn main() -> Result<()> {
     let app = App::new()?;
     populate(&app)?;
     std::fs::create_dir_all(OUT_DIR)?;
+    // The app follows the system, and the host has no night mode, so each set says which it is
+    // rather than depending on where it runs.
+    app.global::<Theme>().set_appearance(Appearance::Dark);
 
     // What a launch shows first, before anything else is reachable.
     shoot(&window, &app, canvas, "splash")?;
     app.set_booting(false);
+
+    // The gate, first as it is asked and then as it looks once Android has stopped asking.
+    app.set_gate(true);
+    app.set_permissions(gate(&[Grant::Needed, Grant::Needed, Grant::Needed]));
+    shoot(&window, &app, canvas, "permissions")?;
+    app.set_permissions(gate(&[Grant::Granted, Grant::Blocked, Grant::Blocked]));
+    app.set_permissions_blocked(true);
+    shoot(&window, &app, canvas, "permissions-blocked")?;
+    app.set_gate(false);
 
     // Idle screens.
     app.set_call_state(CallState::Idle);
@@ -170,6 +182,26 @@ fn populate(app: &App) -> Result<()> {
     );
     app.set_log("00:31:02 call connected peer=0e62c812 key_exchange=X25519MLKEM768\n00:31:02 encoder started\n00:31:03 voice streams open rate=48000".into());
     Ok(())
+}
+
+/// The gate's three rows in the given states, with the icons the app uses.
+fn gate(states: &[Grant; 3]) -> slint::ModelRc<PermissionItem> {
+    let rows = [
+        ("Camera", "So they can see you", &include_bytes!("../../../assets/icons/camera.svg")[..]),
+        ("Microphone", "So they can hear you", &include_bytes!("../../../assets/icons/mic.svg")[..]),
+        ("Notifications", "So you know when someone calls", &include_bytes!("../../../assets/icons/bell.svg")[..]),
+    ];
+    let items: Vec<PermissionItem> = rows
+        .iter()
+        .zip(states)
+        .map(|((name, why, svg), grant)| PermissionItem {
+            name: (*name).into(),
+            why: (*why).into(),
+            grant: *grant,
+            icon: slint::Image::load_from_svg_data(svg).unwrap_or_default(),
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(items))
 }
 
 /// Mirrors the app's own fingerprint formatting; the app keeps its copy next to its contacts.

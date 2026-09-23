@@ -38,7 +38,7 @@ use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
 use uplink_core::{EndpointId, identity};
 
 use crate::audio::CallAudio;
-use crate::ui::{App, CallState, ContactItem, Screen};
+use crate::ui::{App, CallState, ContactItem, Grant, PermissionItem, Screen};
 use crate::video::{CallVideo, VideoParts};
 
 const LOG_TAG: &CStr = c"uplink";
@@ -439,17 +439,76 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     }
 }
 
-/// Asks once for permission to show the call notification; the service runs without it.
-fn request_notifications(platform: &Rc<Platform>) {
-    let platform = Rc::clone(platform);
+/// The gate's three, in the order they are asked for and shown.
+const GATE: [(Permission, &str, &str); 3] = [
+    (Permission::Camera, "Camera", "So they can see you"),
+    (Permission::RecordAudio, "Microphone", "So they can hear you"),
+    (Permission::PostNotifications, "Notifications", "So you know when someone calls"),
+];
+
+fn gate_icon(permission: Permission) -> slint::Image {
+    match permission {
+        Permission::Camera => slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/camera.svg")),
+        Permission::RecordAudio => slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/mic.svg")),
+        Permission::PostNotifications => {
+            slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/bell.svg"))
+        }
+    }
+    .unwrap_or_default()
+}
+
+/// Reads each permission's state and shows the gate while any is missing. `blocked` means Android
+/// will not ask again, so the only way on is Settings.
+fn refresh_gate(ui: &App, platform: &Platform) -> bool {
+    let mut items = Vec::with_capacity(GATE.len());
+    let mut blocked = false;
+    let mut all = true;
+    for (permission, name, why) in GATE {
+        let granted = platform.has_permission(permission).unwrap_or(false);
+        // Android stops explaining once a refusal is final, so "will not explain and not granted"
+        // is what distinguishes blocked from merely not asked yet.
+        let explains = platform.should_explain(permission).unwrap_or(false);
+        let grant = if granted {
+            Grant::Granted
+        } else if explains {
+            Grant::Needed
+        } else {
+            Grant::Blocked
+        };
+        all &= granted;
+        blocked |= grant == Grant::Blocked;
+        items.push(PermissionItem {
+            name: name.into(),
+            why: why.into(),
+            grant,
+            icon: gate_icon(permission),
+        });
+    }
+    // Before anything has been asked, nothing explains and nothing is granted — which looks like
+    // blocked. Only treat it as blocked once a request has actually happened.
+    ui.set_permissions(slint::ModelRc::new(slint::VecModel::from(items)));
+    ui.set_permissions_blocked(blocked && ui.get_asked());
+    ui.set_gate(!all);
+    all
+}
+
+/// Asks for each missing permission in turn, then re-reads the gate.
+fn request_gate(ui: &App, platform: &Rc<Platform>) {
+    let (weak, platform) = (ui.as_weak(), Rc::clone(platform));
     let task = slint::spawn_local(async move {
-        match platform.request_permission(Permission::PostNotifications).await {
-            Ok(granted) => tracing::info!(granted, "notification permission"),
-            Err(e) => tracing::warn!("notification permission: {e}"),
+        for (permission, _, _) in GATE {
+            match platform.request_permission(permission).await {
+                Ok(granted) => tracing::info!(?permission, granted, "gate"),
+                Err(e) => tracing::warn!(?permission, "gate: {e}"),
+            }
+        }
+        if let Some(ui) = weak.upgrade() {
+            ui.set_asked(true);
+            refresh_gate(&ui, &platform);
         }
     });
     if let Err(e) = task {
-        tracing::error!("spawning notification request: {e}");
+        tracing::error!("spawning the permission gate: {e}");
     }
 }
 
@@ -672,6 +731,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
     }));
 
     let lifecycle = Rc::clone(&state);
+    let resumed = Rc::downgrade(&platform);
     slint::android::init_with_event_listener(app, move |event| match event {
         // A call keeps the camera: the foreground service is what allows that in the background.
         PollEvent::Main(MainEvent::Pause) => with_state(&lifecycle, |s| {
@@ -680,6 +740,11 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         PollEvent::Main(MainEvent::Resume { .. }) => with_state(&lifecycle, |s| {
             if std::mem::take(&mut s.resume_camera) {
                 s.start_camera();
+            }
+            // Coming back from Settings is the common case: re-read rather than asking the user
+            // to confirm they did what they just did.
+            if let (Some(ui), Some(platform)) = (s.ui.upgrade(), resumed.upgrade()) {
+                refresh_gate(&ui, &platform);
             }
         }),
         _ => {}
@@ -696,7 +761,20 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
     show_contacts(&state, &ui);
-    request_notifications(&platform);
+    refresh_gate(&ui, &platform);
+
+    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    ui.on_grant_permissions(move || {
+        if let Some(ui) = weak.upgrade() {
+            request_gate(&ui, &p);
+        }
+    });
+    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    ui.on_open_settings(move || {
+        if let Err(e) = p.open_app_settings() {
+            set_call_status(&weak, format!("could not open settings: {e}"));
+        }
+    });
 
     // The splash stays until the endpoint is bound, because until then no call could arrive.
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));

@@ -149,6 +149,30 @@ impl Platform {
         })
     }
 
+    /// Whether Android would still show its own dialog. False once the user has refused for good,
+    /// which is the only case that has to send them to Settings.
+    pub fn should_explain(&self, permission: Permission) -> Result<bool, Error> {
+        self.with_activity(|env, activity| {
+            let name = permission_string(env, permission)?;
+            Ok(env
+                .call_method(
+                    activity,
+                    jni_str!("shouldExplain"),
+                    jni_sig!("(Ljava/lang/String;)Z"),
+                    &[JValue::Object(&name)],
+                )?
+                .z()?)
+        })
+    }
+
+    /// Opens this app's own page in Settings, where a permission refused for good can be granted.
+    pub fn open_app_settings(&self) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("openAppSettings"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
     /// Resolves to whether the permission is granted, prompting the user if needed.
     pub async fn request_permission(&self, permission: Permission) -> Result<bool, Error> {
         if self.has_permission(permission)? {

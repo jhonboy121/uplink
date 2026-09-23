@@ -5,6 +5,7 @@ import android.app.NativeActivity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.provider.Settings;
 import android.util.Log;
 
 import java.io.InputStream;
@@ -54,6 +55,27 @@ public class UplinkActivity extends NativeActivity {
             @Override
             public void run() {
                 requestPermissions(permissions, requestCode);
+            }
+        });
+    }
+
+    /**
+     * Whether Android would still show its own dialog for this permission. False after the user
+     * has refused for good, which is the only case that needs sending them to Settings.
+     */
+    boolean shouldExplain(String permission) {
+        return shouldShowRequestPermissionRationale(permission);
+    }
+
+    /** Opens this app's own page in Settings, not the top of Settings. */
+    void openAppSettings() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                settings.setData(Uri.fromParts("package", getPackageName(), null));
+                settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(settings);
             }
         });
     }
