@@ -559,6 +559,15 @@ default); keep disk usage lean. Avoid build scripts.
     at boot resolves DNS with iroh's fallback nameservers: iroh reads the system's through
     `ndk_context`, which android-activity sets only when an activity starts. It asserts it is the
     first to set it, so we cannot set it earlier.
+- **2026-09-24**: **Settings is grouped by surface, not by headers** (Settings canvas:
+  artboard E is the spec; A–D were the
+  alternatives). Each group is an inset `surface` card with a 14 px radius, 16 px in from the edge.
+  Rows are 68 px, with a 38 px icon tile ahead of the text and a hairline between rows that starts
+  where the text does. This **supersedes the locked design's "rows are separated by a hairline,
+  not by cards" for Settings only**, by the user's choice; the contact list keeps its flat rows.
+  Groups, in order: reachability (it is what silently costs calls), appearance, call and network,
+  diagnostics. The copy is shorter to fit beside the tiles: "Left to right" became LTR, and an
+  unrestricted battery reads Allowed, like the lock-screen row.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

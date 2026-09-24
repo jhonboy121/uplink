@@ -165,6 +165,20 @@ slint::slint! {
         out property <length> splash-gap: 20px;
         out property <length> splash-foot: 32px;
         out property <length> group-head: 30px;
+        // Settings: rows on inset surface groups, each with an icon tile. Drawn at 360dp in the
+        // settings canvas, so these are dp as they stand.
+        out property <length> setting-height: 68px;
+        out property <length> setting-pad: 16px;
+        out property <length> setting-gap: 14px;
+        out property <length> setting-tile: 38px;
+        out property <length> setting-tile-radius: 11px;
+        out property <length> setting-icon: 20px;
+        out property <length> setting-title-box: 24px;
+        out property <length> setting-detail-box: 19px;
+        out property <length> group-edge: 16px;
+        // Stronger than `hairline`: on a group's surface the page's own reads as nothing.
+        out property <color> group-hairline: dark ? #263140E6 : #E1E7EE;
+        out property <length> group-gap: 14px;
         out property <length> brand: 26px;
         out property <length> sheet-width: 320px;
         out property <length> toast-bottom: 88px;
@@ -581,9 +595,8 @@ slint::slint! {
         animate opacity { duration: 160ms; easing: ease-out; }
     }
 
-    // The design's full-width action. Its secondary colours were written for a dark ground, so
-    // What a thing is on the start side, what it is set to on the end side. Ends the People
-    // list with your own key, and makes up the Settings list.
+    // What a thing is on the start side, what it is set to on the end side, on a flat list with a
+    // hairline above each row. The contact screen's rows; Settings has its own, in groups.
     component DetailRow inherits Rectangle {
         in property <string> title;
         in property <string> detail;
@@ -1549,20 +1562,108 @@ slint::slint! {
         }
     }
 
-    // The label over a group of settings. The same treatment the contact list gives a date, so
-    // the two flat lists in this app are divided the same way.
-    component GroupHead inherits HorizontalLayout {
-        in property <string> text;
-        padding-left: Theme.edge;
-        padding-right: Theme.edge;
-        Text {
-            text: root.text;
-            color: Theme.muted;
-            font-family: Theme.mono;
-            font-size: 0.6875rem;
-            letter-spacing: 1.6px;
-            height: Theme.group-head;
-            vertical-alignment: bottom;
+    // A group of settings on its own inset surface. The surface does the grouping a label used
+    // to, so no group is named.
+    component SettingsGroup inherits Rectangle {
+        background: Theme.surface;
+        border-radius: Theme.radius;
+        clip: true;
+        VerticalLayout {
+            @children
+        }
+    }
+
+    // Between two rows of a group. It starts where the text does, so the tiles read as one
+    // column rather than as boxes cut apart.
+    component SettingsDivider inherits Rectangle {
+        height: 1px;
+        Rectangle {
+            x: Theme.setting-pad + Theme.setting-tile + Theme.setting-gap;
+            width: parent.width - self.x;
+            height: parent.height;
+            background: Theme.group-hairline;
+        }
+    }
+
+    // What a setting is on the start side, what it is set to on the end side, and a tile with
+    // its icon ahead of both. The value is in the accent only when tapping it does something.
+    component SettingsRow inherits Rectangle {
+        in property <image> icon;
+        in property <string> title;
+        in property <string> detail;
+        in property <string> value;
+        in property <bool> tappable: true;
+        callback clicked();
+        height: Theme.setting-height;
+        // Must be constant; a row that does nothing when tapped says so through `enabled` below.
+        accessible-role: button;
+        accessible-enabled: root.tappable;
+        accessible-label: root.title;
+        accessible-description: root.detail;
+        accessible-value: root.value;
+        accessible-action-default => {
+            if (root.tappable) {
+                root.clicked();
+            }
+        }
+        touch := TouchArea {
+            enabled: root.tappable;
+            mouse-cursor: root.tappable ? pointer : default;
+            clicked => { root.clicked(); }
+        }
+        background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+        animate background { duration: 160ms; easing: ease-out; }
+        HorizontalLayout {
+            padding-left: Theme.setting-pad;
+            padding-right: Theme.setting-pad;
+            spacing: Theme.setting-gap;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: Theme.setting-tile;
+                    height: self.width;
+                    border-radius: Theme.setting-tile-radius;
+                    background: Theme.raised;
+                    Image {
+                        source: root.icon;
+                        width: Theme.setting-icon;
+                        height: self.width;
+                        colorize: Theme.beacon;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: 1rem;
+                    font-weight: 700;
+                    height: Theme.setting-title-box;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.detail;
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    height: Theme.setting-detail-box;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: root.value;
+                    color: root.tappable ? Theme.beacon : Theme.muted;
+                    font-size: 0.908rem;
+                    font-family: Theme.mono;
+                    height: self.font-size * Theme.line-box;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
 
@@ -1601,74 +1702,92 @@ slint::slint! {
                 mouse-drag-pan-enabled: true;
                 VerticalLayout {
                     alignment: start;
-                    GroupHead { text: "Appearance"; }
-                    // A flat list like the design's, hairline above every row including the first.
-                    DetailRow {
-                        title: "Theme";
-                        detail: Theme.appearance == Appearance.system ? "Follows the system" : "Set on this phone";
-                        value: Theme.appearance == Appearance.system ? "System"
-                            : Theme.appearance == Appearance.light ? "Light"
-                            : "Dark";
-                        clicked => {
-                            Theme.appearance = Theme.appearance == Appearance.system ? Appearance.light
-                                : Theme.appearance == Appearance.light ? Appearance.dark
-                                : Appearance.system;
+                    padding-left: Theme.group-edge;
+                    padding-right: Theme.group-edge;
+                    padding-bottom: Theme.group-edge;
+                    spacing: Theme.group-gap;
+                    // First, because it is the one group that silently costs calls. The first
+                    // two are read back from Android and say so; the maker's list cannot be read,
+                    // so its row offers the screen and claims nothing.
+                    SettingsGroup {
+                        SettingsRow {
+                            icon: @image-url("icons/battery.svg");
+                            title: "Battery";
+                            detail: "Wait for calls while asleep";
+                            value: root.battery-unrestricted ? "Allowed" : "Allow";
+                            tappable: !root.battery-unrestricted;
+                            clicked => { root.allow-battery(); }
+                        }
+                        SettingsDivider { }
+                        SettingsRow {
+                            icon: @image-url("icons/lock.svg");
+                            title: "Lock screen calls";
+                            detail: "Ring over the lock screen";
+                            value: root.full-screen-calls ? "Allowed" : "Allow";
+                            tappable: !root.full-screen-calls;
+                            clicked => { root.allow-full-screen-calls(); }
+                        }
+                        if root.maker-list : SettingsDivider { }
+                        if root.maker-list : SettingsRow {
+                            icon: @image-url("icons/apps.svg");
+                            title: "Background apps";
+                            detail: "Your phone's own list";
+                            value: "Open";
+                            clicked => { root.open-maker-list(); }
                         }
                     }
-                    DetailRow {
-                        title: "Layout direction";
-                        detail: "Mirrors every screen, for Arabic";
-                        value: Theme.rtl ? "Right to left" : "Left to right";
-                        clicked => { Theme.rtl = !Theme.rtl; }
+                    SettingsGroup {
+                        SettingsRow {
+                            icon: @image-url("icons/theme.svg");
+                            title: "Theme";
+                            detail: Theme.appearance == Appearance.system ? "Follows the system" : "Set on this phone";
+                            value: Theme.appearance == Appearance.system ? "System"
+                                : Theme.appearance == Appearance.light ? "Light"
+                                : "Dark";
+                            clicked => {
+                                Theme.appearance = Theme.appearance == Appearance.system ? Appearance.light
+                                    : Theme.appearance == Appearance.light ? Appearance.dark
+                                    : Appearance.system;
+                            }
+                        }
+                        SettingsDivider { }
+                        SettingsRow {
+                            icon: @image-url("icons/direction.svg");
+                            title: "Layout direction";
+                            detail: "Mirrors every screen";
+                            value: Theme.rtl ? "RTL" : "LTR";
+                            clicked => { Theme.rtl = !Theme.rtl; }
+                        }
                     }
-                    GroupHead { text: "Calls"; }
-                    DetailRow {
-                        title: "Call quality";
-                        detail: "Caps what the camera sends";
-                        value: root.quality;
-                        tappable: false;
+                    SettingsGroup {
+                        SettingsRow {
+                            icon: @image-url("icons/video.svg");
+                            title: "Call quality";
+                            detail: "Caps what the camera sends";
+                            value: root.quality;
+                            tappable: false;
+                        }
+                        SettingsDivider { }
+                        // The count rather than the list: which relays are on is a detail, and
+                        // how many is the part worth seeing without opening anything.
+                        SettingsRow {
+                            icon: @image-url("icons/relays.svg");
+                            title: "Relays";
+                            detail: "When a direct path won't form";
+                            value: root.relays-on + " on";
+                            clicked => { root.edit-relays(); }
+                        }
                     }
-                    // What decides whether a call can reach this phone when nobody is using it.
-                    // The first two are read back from Android and say so; the maker's list
-                    // cannot be read, so its row offers the screen and claims nothing.
-                    GroupHead { text: "Staying reachable"; }
-                    DetailRow {
-                        title: "Battery";
-                        detail: "Lets uplink wait for calls while the phone sleeps";
-                        value: root.battery-unrestricted ? "Unrestricted" : "Allow";
-                        tappable: !root.battery-unrestricted;
-                        clicked => { root.allow-battery(); }
-                    }
-                    DetailRow {
-                        title: "Calls on the lock screen";
-                        detail: "Lets a call ring over the lock screen";
-                        value: root.full-screen-calls ? "Allowed" : "Allow";
-                        tappable: !root.full-screen-calls;
-                        clicked => { root.allow-full-screen-calls(); }
-                    }
-                    if root.maker-list : DetailRow {
-                        title: "Background apps";
-                        detail: "Your phone's own list of apps it may stop; let uplink run";
-                        value: "Open";
-                        clicked => { root.open-maker-list(); }
-                    }
-                    GroupHead { text: "Network"; }
-                    // The count rather than the list: which relays are on is a detail, and how
-                    // many is the part worth seeing without opening anything.
-                    DetailRow {
-                        title: "Relays";
-                        detail: "Servers that carry a call when a direct path will not form";
-                        value: root.relays-on + " on";
-                        clicked => { root.edit-relays(); }
-                    }
-                    GroupHead { text: "Troubleshooting"; }
                     // Not shown, sent. A log on a phone screen helps nobody; a log in a chat
                     // message is the only way a fault on someone else's phone reaches us.
-                    DetailRow {
-                        title: "Diagnostics";
-                        detail: "Send the log to whoever is fixing this";
-                        value: "Share";
-                        clicked => { root.share-diagnostics(); }
+                    SettingsGroup {
+                        SettingsRow {
+                            icon: @image-url("icons/share.svg");
+                            title: "Diagnostics";
+                            detail: "Send the log to the fixer";
+                            value: "Share";
+                            clicked => { root.share-diagnostics(); }
+                        }
                     }
                 }
             }
