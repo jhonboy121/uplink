@@ -763,6 +763,30 @@ fn gate_icon(permission: Permission) -> slint::Image {
     .unwrap_or_default()
 }
 
+/// Reads back what the Settings rows about staying reachable say. Each is changed in a system
+/// screen, so this runs whenever the app returns to the front. A failed read leaves the row as it
+/// was rather than guessing.
+fn refresh_reachability(ui: &App, platform: &Platform) {
+    match platform.battery_unrestricted() {
+        Ok(unrestricted) => ui.set_battery_unrestricted(unrestricted),
+        Err(e) => tracing::warn!("reading battery optimisation: {e}"),
+    }
+    match platform.full_screen_calls_allowed() {
+        Ok(allowed) => ui.set_full_screen_calls(allowed),
+        Err(e) => tracing::warn!("reading full-screen calls: {e}"),
+    }
+    match platform.has_maker_list() {
+        Ok(found) => ui.set_maker_list(found),
+        Err(e) => tracing::warn!("looking for the maker's background list: {e}"),
+    }
+    tracing::info!(
+        battery_unrestricted = ui.get_battery_unrestricted(),
+        full_screen_calls = ui.get_full_screen_calls(),
+        maker_list = ui.get_maker_list(),
+        "reachability"
+    );
+}
+
 /// Reads each permission's state and shows the gate while any is missing. `blocked` means Android
 /// will not ask again, so the only way on is Settings.
 fn refresh_gate(ui: &App, platform: &Platform) -> bool {
@@ -814,6 +838,9 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 fn went_back(ui: &App) -> bool {
     if ui.get_confirming() != Confirm::None {
         ui.set_confirming(Confirm::None);
+    } else if ui.get_battery_ask() && !ui.get_gate() {
+        // Back out of the explainer is "Not now", which is also what it would mean in person.
+        ui.invoke_skip_battery();
     } else if ui.get_editing_relays() {
         // Back out of the sheet is Cancel, not Save: nothing here is meant to happen by accident.
         ui.set_editing_relays(false);
@@ -866,15 +893,31 @@ fn appearance_from(stored: Option<&str>) -> Appearance {
     }
 }
 
-fn mark_gate_explained(settings: &Settings) {
-    if let Err(e) = settings.set_flag(settings::GATE_EXPLAINED, true) {
-        tracing::warn!("recording that the gate was explained: {e}");
+
+/// Explains the battery exemption once, after the permissions the app cannot work without. Not a
+/// gate: refusing it costs reachability overnight, not the app. It is only marked as offered once
+/// the user chooses, so a launch killed with the page up shows it again.
+fn offer_battery_exemption(ui: &App, platform: &Platform, settings: &Settings) {
+    if settings.flag(settings::BATTERY_OFFERED) {
+        return;
+    }
+    match platform.battery_unrestricted() {
+        Ok(unrestricted) => ui.set_battery_ask(!unrestricted),
+        Err(e) => tracing::warn!("reading battery optimisation: {e}"),
+    }
+}
+
+/// The explainer was answered, either way.
+fn battery_offered(ui: &App, settings: &Settings) {
+    ui.set_battery_ask(false);
+    if let Err(e) = settings.set_flag(settings::BATTERY_OFFERED, true) {
+        tracing::warn!("recording the battery offer: {e}");
     }
 }
 
 /// Asks for each missing permission in turn, then re-reads the gate.
-fn request_gate(ui: &App, platform: &Rc<Platform>) {
-    let (weak, platform) = (ui.as_weak(), Rc::clone(platform));
+fn request_gate(ui: &App, platform: &Rc<Platform>, settings: &Settings) {
+    let (weak, platform, settings) = (ui.as_weak(), Rc::clone(platform), settings.clone());
     let task = slint::spawn_local(async move {
         for (permission, _, _) in GATE {
             match platform.request_permission(permission).await {
@@ -884,7 +927,9 @@ fn request_gate(ui: &App, platform: &Rc<Platform>) {
         }
         if let Some(ui) = weak.upgrade() {
             ui.set_asked(true);
-            refresh_gate(&ui, &platform);
+            if refresh_gate(&ui, &platform) {
+                offer_battery_exemption(&ui, &platform, &settings);
+            }
         }
     });
     if let Err(e) = task {
@@ -1078,18 +1123,13 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (platform, platform_events) = Platform::attach(&app)?;
     let platform = Rc::new(platform);
 
-    // The endpoint belongs to the process, not to this window. A second launch of the activity
-    // finds the one already bound rather than binding another — and with it the log writer, which
-    // has been running all along and must not be started a second time on the same file.
-    // SAFETY: the handle is one this process leaked below and Java has held ever since.
-    let core = match unsafe { Core::from_handle(platform.core_handle()?) } {
-        Some(core) => core,
-        None => {
-            let logging = log::init(LOG_TAG, LOG_FILTER, data_dir)?;
-            let core = Arc::new(Core::start(logging, data_dir)?);
-            platform.set_core_handle(Arc::clone(&core).into_handle())?;
-            core
-        }
+    // The endpoint belongs to the process, not to this window. The Application starts it for
+    // whoever asks first — this window, or the listening service after a boot — so a window
+    // usually finds it bound already, along with the log writer, which must not be started a
+    // second time on the same file.
+    // SAFETY: the handle is the one the Application's `nativeStart` returned, held ever since.
+    let Some(core) = (unsafe { Core::from_handle(platform.core_handle()?) }) else {
+        anyhow::bail!("the endpoint did not start; the reason is in logcat");
     };
     // This window's threads log through the core's subscriber, whichever run created it.
     let dispatch = core.dispatch();
@@ -1152,6 +1192,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             // to confirm they did what they just did.
             if let (Some(ui), Some(platform)) = (s.ui.upgrade(), resumed.upgrade()) {
                 refresh_gate(&ui, &platform);
+                refresh_reachability(&ui, &platform);
             }
         }),
         _ => {}
@@ -1243,23 +1284,68 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         }
     });
 
-    // Anything missing on a launch that has already seen the explainer goes straight to Android's
-    // dialog: a lapsed one-time grant should not mean reading the same screen again.
-    if !refresh_gate(&ui, &platform) && settings.flag(settings::GATE_EXPLAINED) {
-        request_gate(&ui, &platform);
+    // Android's dialogs only ever follow a tap on the gate, never a launch: a dialog over a screen
+    // nobody has read yet is asking cold. With the gate already open, the battery offer is the one
+    // thing left to ask at startup.
+    if refresh_gate(&ui, &platform) {
+        offer_battery_exemption(&ui, &platform, &settings);
     }
 
     let (weak, p, s) = (ui.as_weak(), Rc::clone(&platform), settings.clone());
     ui.on_grant_permissions(move || {
         if let Some(ui) = weak.upgrade() {
-            mark_gate_explained(&s);
-            request_gate(&ui, &p);
+            request_gate(&ui, &p, &s);
         }
     });
     let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
     ui.on_open_settings(move || {
         if let Err(e) = p.open_app_settings() {
             set_call_status(&weak, format!("could not open settings: {e}"));
+        }
+    });
+
+    refresh_reachability(&ui, &platform);
+    let (weak, p, s) = (ui.as_weak(), Rc::clone(&platform), settings.clone());
+    ui.on_allow_battery(move || {
+        // From the explainer or from Settings alike. The explainer stays up until Android's
+        // dialog has closed, so the user is never moved on before they have answered.
+        let (weak, p, s) = (weak.clone(), Rc::clone(&p), s.clone());
+        spawn_ui(async move {
+            let answered = p.request_battery_exemption().await;
+            let Some(ui) = weak.upgrade() else { return };
+            match answered {
+                Ok(unrestricted) => {
+                    tracing::info!(unrestricted, "battery exemption answered");
+                    ui.set_battery_unrestricted(unrestricted);
+                    if ui.get_battery_ask() {
+                        battery_offered(&ui, &s);
+                    }
+                }
+                Err(e) => toast(&ui, format!("Could not open battery settings: {e}")),
+            }
+        });
+    });
+    let (weak, s) = (ui.as_weak(), settings.clone());
+    ui.on_skip_battery(move || {
+        if let Some(ui) = weak.upgrade() {
+            tracing::info!("battery exemption declined for now");
+            battery_offered(&ui, &s);
+        }
+    });
+    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    ui.on_allow_full_screen_calls(move || {
+        if let Err(e) = p.open_full_screen_calls_settings()
+            && let Some(ui) = weak.upgrade()
+        {
+            toast(&ui, format!("Could not open that setting: {e}"));
+        }
+    });
+    let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
+    ui.on_open_maker_list(move || {
+        if let Err(e) = p.open_maker_list()
+            && let Some(ui) = weak.upgrade()
+        {
+            toast(&ui, format!("Could not open that list: {e}"));
         }
     });
 
@@ -1372,6 +1458,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 PlatformEvent::PictureInPicture(active) => ui.set_call_pip(active),
                 PlatformEvent::Hangup => ui.invoke_hangup(),
                 PlatformEvent::ToggleMic => ui.invoke_toggle_mic(),
+                PlatformEvent::Answer => ui.invoke_accept(),
             }
         }
     });
@@ -1381,10 +1468,13 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     state.borrow_mut().core = Some(Arc::clone(&core));
     ui.set_booting(false);
     // While this window is up it answers for the app; handing the stream back on the way out is
-    // what lets anything else take over.
+    // what lets anything else take over. Attached now rather than inside the task: Answer from
+    // the notification can be waiting already, and the call it connects has to find this window
+    // attached, since that is where its media goes.
+    let events = core.attach();
     let (s, weak, p, c) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform), Arc::clone(&core));
     spawn_ui(async move {
-        handle_node_events(c.attach(), weak, s, p).await;
+        handle_node_events(events, weak, s, p).await;
         c.detach();
     });
 

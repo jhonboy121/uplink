@@ -23,6 +23,28 @@
     <!-- Waiting for a call is not any of Android's named service types, and it is the only type
          a BOOT_COMPLETED receiver may still start. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Listening again after a reboot or an update, without anyone opening the app. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- A ringing call: over the lock screen, and vibrating. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The one-tap dialog for leaving battery optimisation. Without it the user is sent to a
+         list of every app to find us in. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- From Android 11 another app's component resolves to nothing unless its package is named
+         here, installed or not. These are the makers whose background lists we can offer; see
+         UplinkApplication.MAKER_LISTS. -->
+    <queries>
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.asus.mobilemanager" />
+    </queries>
 
     <!-- Our own Application: it exists before any activity, service or receiver, which makes it
          the one thing the app can be driven through when nobody is looking at the screen. -->
@@ -75,6 +97,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Holds the peer-to-peer endpoint open so incoming calls can arrive" />
         </service>
+
+        <!-- Exported because the system sends BOOT_COMPLETED; MY_PACKAGE_REPLACED only ever
+             reaches the package that was replaced. -->
+        <receiver
+            android:name="${boot_receiver}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- foregroundServiceType 0xc0 = camera | microphone. -->
         <service

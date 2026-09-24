@@ -8,9 +8,9 @@ use rusqlite::{OptionalExtension, params};
 use crate::Error;
 use crate::db::Db;
 
-/// Whether the permission explainer has been shown. A one-time grant lapses when the process
-/// dies, and reading the same screen every launch is a wall between the user and the prompt.
-pub const GATE_EXPLAINED: &str = "gate-explained";
+/// Whether the battery explainer has been answered. Shown once: the exemption is not required,
+/// and a "no" asked again every launch is nagging. Settings keeps the way back.
+pub const BATTERY_OFFERED: &str = "battery-explained";
 /// `system`, `light` or `dark` — whatever the UI puts there; this store does not interpret it.
 pub const APPEARANCE: &str = "appearance";
 /// Whether every screen is mirrored, for Arabic.
@@ -115,11 +115,11 @@ mod tests {
     #[test]
     fn a_flag_is_off_until_it_is_set() -> Result<(), Error> {
         let settings = settings()?;
-        assert!(!settings.flag(GATE_EXPLAINED));
-        settings.set_flag(GATE_EXPLAINED, true)?;
-        assert!(settings.flag(GATE_EXPLAINED));
-        settings.set_flag(GATE_EXPLAINED, false)?;
-        assert!(!settings.flag(GATE_EXPLAINED));
+        assert!(!settings.flag(LAYOUT_RTL));
+        settings.set_flag(LAYOUT_RTL, true)?;
+        assert!(settings.flag(LAYOUT_RTL));
+        settings.set_flag(LAYOUT_RTL, false)?;
+        assert!(!settings.flag(LAYOUT_RTL));
         Ok(())
     }
 }

@@ -510,5 +510,55 @@ default); keep disk usage lean. Avoid build scripts.
     in `Core` now, declared last so it outlives the runtime whose threads log on the way down, and
     is created once per process beside the core rather than once per window.
 
+- **2026-09-24**: **a call rings a phone nobody is looking at.** Not yet device-tested.
+  - **The core is started from Java, by whoever needs it first.** `UplinkApplication.onCreate`
+    loads the library itself, which runs our `JNI_OnLoad` and registers the Application's natives
+    — NativeActivity's own load never runs it, and after a boot there is no NativeActivity.
+    `ensureCore()` is synchronized and binds once per process, for the window, the listening
+    service, or a boot. A `START_STICKY` restart after a kill used to bring back the service with
+    no endpoint behind it; now it brings the endpoint back too.
+  - **The core rings, not the window.** On `Incoming` it looks up the nickname and calls
+    `ring`; `Connected` or `Ended` stops it, window or no window. The ringtone and vibration are
+    ours (the user's ringtone, by ringer mode), because a channel sound plays once and a call rings
+    until someone acts. The full-screen `CallStyle` notification is shown only while no activity
+    is in front, tracked by lifecycle callbacks — in front, the call screen already says it all.
+  - **Answering is the window's job**, because the call's media goes to whoever is attached when it
+    connects. Answer opens the activity over the lock screen (`setShowWhenLocked` and
+    `setTurnScreenOn`, undone when the call ends), the window attaches *before* the event loop
+    runs, and a call that was already ringing is replayed into it as `Incoming`. The pending
+    Answer is delivered once the native bridge is up. The camera and microphone service starts on
+    `Connected` as before — from the front, which Android allows. Decline needs no window: it goes
+    straight to the endpoint.
+  - **Boot and update:** `UplinkBootReceiver` starts the listening service on `BOOT_COMPLETED` and
+    `MY_PACKAGE_REPLACED`. Installing an update kills the process, so without the second one a phone
+    would be unreachable after every update until its app was opened.
+  - **Settings → Staying reachable** (not in the locked design; raise it). Battery reads
+    `isIgnoringBatteryOptimizations` and offers the one-tap dialog; "Calls on the lock screen" reads
+    `canUseFullScreenIntent` (14+). "Background apps" appears only when a maker's list resolves
+    **and** is exported (`<queries>` names the packages), and opening it claims nothing. Both are
+    read again on every resume. The component names come from community lists; only Huawei's
+    EMUI 9+ one was chosen deliberately. **The exemption is also offered once at startup**, right
+    after the permission gate is satisfied: a "Stay reachable" page explains it first, the way the
+    gate explains permissions, with Allow and Not now (Back means Not now). Not in the locked
+    design. The answer is remembered (`battery-explained`) once the user chooses, so a "no" is not
+    asked again every launch.
+    **Android's dialog is started from the activity, never with `NEW_TASK` from the
+    Application.** It belongs to Settings, so `NEW_TASK` puts it into Settings' own task whenever
+    one exists, and the whole Settings page comes up behind the dialog. It was a bottom sheet the
+    first time and a full Settings page once Settings had been opened.
+  - **The permission gate no longer asks on launch.** A launch that had seen the explainer before
+    went straight to Android's dialogs, over a gate whose Continue then looked pointless. Now the
+    dialogs only ever follow a tap on Continue, and the `gate-explained` flag is gone (old rows are
+    harmless and unread).
+  - **Java's log lines reach the file now.** `nativeLog` ran on Java's threads, which have no
+    `tracing` subscriber in scope, so it most likely wrote nothing; the core's dispatch is scoped
+    around it now. The native side of it moved from the activity to the Application, so the
+    service and the receiver log to the file with no window up.
+  - **Known gaps:** a missed call while no window is up is not written to the call log (that
+    bookkeeping is still the window's), and there is no missed-call notification. A core started
+    at boot resolves DNS with iroh's fallback nameservers: iroh reads the system's through
+    `ndk_context`, which android-activity sets only when an activity starts. It asserts it is the
+    first to set it, so we cannot set it earlier.
+
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

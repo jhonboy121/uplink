@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 anyhow.workspace = true
 arc-swap.workspace = true
 i-slint-core.workspace = true
+jni.workspace = true
 ndk.workspace = true
 rtrb.workspace = true
 parking_lot.workspace = true

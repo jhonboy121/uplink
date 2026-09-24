@@ -9,22 +9,37 @@
 //!
 //! No Rust statics: the handle is an `Arc` leaked into a `jlong`, the way `Platform` already
 //! hands its own state to Java, and the one process-wide slot holding it is a Java field.
+//!
+//! It is started from Java, by `UplinkApplication.ensureCore`, whoever needs it first: the window,
+//! or the listening service after a boot, an update or a restart. That is why the Application's
+//! natives are registered here, in `JNI_OnLoad`, rather than by the window.
 
-use std::path::Path;
+use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+use jni::objects::{JClass, JObject, JString};
+use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jint, jlong};
+use jni::{EnvUnowned, JavaVM, NativeMethod, Outcome, jni_str};
 use parking_lot::Mutex;
-use tracing::Dispatch;
-use uplink_android::log::Logging;
+use tracing::{Dispatch, Level};
+use uplink_android::log::{self, Logging};
+use uplink_android::platform::{AppContext, address_from_handle, handle_from_address};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
-use uplink_core::node::{Event, Network, Node, NodeHandle};
+use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
 use uplink_core::relays::Relays;
 use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, SecretKey, identity};
+
+use crate::{LOG_FILTER, LOG_TAG};
+
+/// Must match `UplinkApplication.RING_DECLINE`.
+const RING_DECLINE: jint = 0;
 
 /// What the app is, minus the looking at it.
 ///
@@ -43,7 +58,8 @@ pub struct Core {
     /// Where a window wants events delivered, while there is one. The core consumes the endpoint's
     /// stream itself and forwards through this — rather than handing the stream to whoever is
     /// answering, which had no answer for a process that starts at boot and never has a window.
-    inbox: Arc<Mutex<Option<mpsc::Sender<Event>>>>,
+    inbox: Arc<Mutex<Inbox>>,
+    ringer: Ringer,
     /// Holding this is what keeps the endpoint bound; the handle is what everything else uses.
     node: Mutex<Option<Node>>,
     runtime: Runtime,
@@ -58,32 +74,82 @@ pub struct Core {
 /// person can act on them.
 const EVENT_QUEUE: usize = 16;
 
+/// Where events go, and the call ringing right now if one is. One lock for both, so a window
+/// attaching mid-ring is either sent the ring or already there to see it — never neither.
+#[derive(Default)]
+struct Inbox {
+    window: Option<mpsc::Sender<Event>>,
+    ringing: Option<EndpointId>,
+}
+
+/// Rings for an incoming call and stops when it is answered or over, whether or not a window is
+/// up. The window cannot own this: the call that most needs ringing is the one nobody is
+/// looking at.
+#[derive(Clone)]
+struct Ringer {
+    context: AppContext,
+    db: Db,
+}
+
+impl Ringer {
+    fn follow(&self, event: &Event) {
+        let outcome = match event {
+            Event::Incoming { peer } => self.context.ring(&self.name_of(peer)),
+            Event::Connected { .. } | Event::Ended { .. } => self.context.stop_ringing(),
+            _ => return,
+        };
+        if let Err(e) = outcome {
+            tracing::warn!("ringing: {e}");
+        }
+    }
+
+    /// The nickname for a saved contact, and the short key for anyone else.
+    fn name_of(&self, peer: &EndpointId) -> String {
+        let saved = match Contacts::open(self.db.clone()) {
+            Ok(contacts) => contacts.name_of(peer).map(str::to_owned),
+            Err(e) => {
+                tracing::warn!("reading contacts for a ringing call: {e}");
+                None
+            }
+        };
+        saved.unwrap_or_else(|| peer.fmt_short().to_string())
+    }
+}
+
 /// The one consumer of the endpoint's events, for as long as the process lives. A window gets
 /// them while it is attached; otherwise they are answered here, because a call arriving at a
 /// backgrounded app is the case this whole arrangement exists for.
-async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Option<mpsc::Sender<Event>>>>) {
+async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ringer: Ringer) {
     while let Some(event) = events.recv().await {
+        ringer.follow(&event);
         // Cloned out rather than held: the lock must not span the await below.
-        let window = inbox.lock().clone();
+        let window = {
+            let mut inbox = inbox.lock();
+            match &event {
+                Event::Incoming { peer } => inbox.ringing = Some(*peer),
+                Event::Connected { .. } | Event::Ended { .. } => inbox.ringing = None,
+                _ => {}
+            }
+            inbox.window.clone()
+        };
         let Some(window) = window else {
-            unattended(event);
+            unattended(&event);
             continue;
         };
         if let Err(closed) = window.send(event).await {
             // The window went without saying so. Whatever it was, nobody saw it.
-            inbox.lock().take();
-            unattended(closed.0);
+            inbox.lock().window.take();
+            unattended(&closed.0);
         }
     }
     tracing::info!("endpoint stopped speaking");
 }
 
-/// What happens to an event with nobody watching. Ringing lives here, and until it does an
-/// incoming call is logged and nothing else — which is worth saying out loud rather than
-/// dropping it silently.
-fn unattended(event: Event) {
+/// An event with nobody watching. A ringing call has already been handed to the notification,
+/// and a window opened from it is sent the call when it attaches.
+fn unattended(event: &Event) {
     match event {
-        Event::Incoming { peer } => tracing::warn!(peer = %peer.fmt_short(), "call with no window to show it"),
+        Event::Incoming { peer } => tracing::info!(peer = %peer.fmt_short(), "ringing with no window"),
         event => tracing::debug!(?event, "event with no window"),
     }
 }
@@ -102,7 +168,7 @@ impl Drop for Core {
 impl Core {
     /// Binds the endpoint and opens the database. Blocks until the endpoint is up, because until
     /// it is there is nothing to answer a call with.
-    pub fn start(logging: Logging, data_dir: &Path) -> Result<Self> {
+    pub fn start(logging: Logging, data_dir: &Path, context: AppContext) -> Result<Self> {
         let runtime = uplink_core::runtime::build(logging.dispatch())?;
         let secret = runtime.block_on(identity::load_or_create(data_dir))?;
         let id = secret.public();
@@ -111,8 +177,9 @@ impl Core {
         // made on the settings screen lands the next time the process starts.
         let relays = Relays::load(&Settings::open(db.clone())?);
         let (node, events) = runtime.block_on(Node::start(secret.clone(), Network::Public(relays)))?;
-        let inbox = Arc::<Mutex<Option<mpsc::Sender<Event>>>>::default();
-        runtime.spawn(deliver(events, Arc::clone(&inbox)));
+        let inbox = Arc::<Mutex<Inbox>>::default();
+        let ringer = Ringer { context, db: db.clone() };
+        runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone()));
         tracing::info!(%id, "core up");
         Ok(Self {
             calls: ArcSwap::from_pointee(node.handle()),
@@ -120,6 +187,7 @@ impl Core {
             secret,
             db,
             inbox,
+            ringer,
             node: Mutex::new(Some(node)),
             runtime,
             logging,
@@ -153,14 +221,14 @@ impl Core {
             // Left with no endpoint at all: say so rather than let the UI keep claiming we are
             // reachable, since the next launch is now the only thing that can fix it.
             Err(e) => {
-                if let Some(window) = self.inbox.lock().clone() {
+                if let Some(window) = self.inbox.lock().window.clone() {
                     drop(window.try_send(Event::Offline));
                 }
                 return Err(e.into());
             }
         };
         self.calls.store(Arc::new(node.handle()));
-        self.runtime.spawn(deliver(events, Arc::clone(&self.inbox)));
+        self.runtime.spawn(deliver(events, Arc::clone(&self.inbox), self.ringer.clone()));
         *self.node.lock() = Some(node);
         tracing::info!("endpoint rebound");
         Ok(())
@@ -186,15 +254,23 @@ impl Core {
 
     /// A window says where to send events while it is up. The previous one, if any, stops
     /// receiving: there is one endpoint and one thing showing it at a time.
+    ///
+    /// A call that started ringing before the window existed is sent to it first: that is the
+    /// call it was most likely opened to answer.
     pub fn attach(&self) -> mpsc::Receiver<Event> {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
-        *self.inbox.lock() = Some(sender);
+        let mut inbox = self.inbox.lock();
+        if let Some(peer) = inbox.ringing {
+            // A new channel with room in it; there is no way for this to fail.
+            drop(sender.try_send(Event::Incoming { peer }));
+        }
+        inbox.window = Some(sender);
         events
     }
 
     /// The window has gone. Events go back to being answered without one.
     pub fn detach(&self) {
-        self.inbox.lock().take();
+        self.inbox.lock().window.take();
     }
 
     /// Leaks this into a `jlong` for the Java side to hold. Reclaimed by [`Self::from_handle`].
@@ -215,5 +291,123 @@ impl Core {
             Arc::increment_strong_count(pointer);
             Some(Arc::from_raw(pointer))
         }
+    }
+
+    /// The core behind a handle Java passed back.
+    fn from_java(handle: jlong) -> Option<Arc<Self>> {
+        let address = address_from_handle(handle)?;
+        // SAFETY: Java only holds the handle `native_start` returned, and never releases it: the
+        // core lives as long as the process does.
+        unsafe { Self::from_handle(address) }
+    }
+}
+
+/// Registers `UplinkApplication`'s natives. Runs when the Application loads the library, before
+/// any activity, service or receiver exists — and inside a call from our own class, so `FindClass`
+/// searches our classloader rather than the system's, which has never heard of us.
+#[unsafe(no_mangle)]
+extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void) -> jint {
+    // SAFETY: the VM passes a pointer to itself, valid for the life of the process.
+    let vm = unsafe { JavaVM::from_raw(vm) };
+    let registered = vm.attach_current_thread(|env| -> Result<(), jni::errors::Error> {
+        let class = env.find_class(jni_str!("dev/uplink/UplinkApplication"))?;
+        // SAFETY: the function pointers match the Java declarations in UplinkApplication.
+        unsafe { env.register_native_methods(&class, &natives()) }
+    });
+    match registered {
+        Ok(()) => JNI_VERSION_1_6,
+        Err(e) => {
+            log::logcat(LOG_TAG, Level::ERROR, &format!("registering the application's natives: {e}"));
+            JNI_ERR
+        }
+    }
+}
+
+fn natives() -> [NativeMethod<'static>; 3] {
+    // SAFETY: signatures match the `extern "system"` functions below and UplinkApplication's natives.
+    unsafe {
+        [
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeStart"),
+                jni_str!("(Ljava/lang/String;)J"),
+                native_start as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeLog"),
+                jni_str!("(JILjava/lang/String;)V"),
+                native_log as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeRingAction"),
+                jni_str!("(JI)V"),
+                native_ring_action as *mut c_void,
+            ),
+        ]
+    }
+}
+
+/// Starts logging and the core, and returns the handle Java keeps for the life of the process.
+/// Zero if it failed, which Java reads as "not listening". Only ever called once per process:
+/// `ensureCore` is synchronized and checks first.
+extern "system" fn native_start<'local>(
+    mut env: EnvUnowned<'local>,
+    application: JObject<'local>,
+    data_dir: JString<'local>,
+) -> jlong {
+    let outcome = env.with_env(|env| -> Result<jlong> {
+        let data_dir = PathBuf::from(data_dir.try_to_string(env)?);
+        let context = AppContext::new(env, &application)?;
+        let logging = log::init(LOG_TAG, LOG_FILTER, &data_dir)?;
+        // This thread is Java's, with no subscriber of its own, and starting is worth a record.
+        let dispatch = logging.dispatch();
+        let _log = tracing::dispatcher::set_default(&dispatch);
+        let core = Arc::new(Core::start(logging, &data_dir, context)?);
+        Ok(handle_from_address(core.into_handle())?)
+    });
+    // Straight to logcat: if this failed, there may be no subscriber to log to.
+    match outcome.into_outcome() {
+        Outcome::Ok(handle) => handle,
+        Outcome::Err(e) => {
+            log::logcat(LOG_TAG, Level::ERROR, &format!("starting the core: {e:#}"));
+            0
+        }
+        Outcome::Panic(_) => {
+            log::logcat(LOG_TAG, Level::ERROR, "panic starting the core");
+            0
+        }
+    }
+}
+
+/// Java's logs, so they land in the log file too (there is no adb in the field). Java calls in on
+/// its own threads, which have no subscriber of their own, so the core's is scoped around it.
+extern "system" fn native_log<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    priority: jint,
+    message: JString<'local>,
+) {
+    let Some(core) = Core::from_java(handle) else { return };
+    let outcome = env.with_env(|env| -> Result<String, jni::errors::Error> { message.try_to_string(env) });
+    let Outcome::Ok(message) = outcome.into_outcome() else { return };
+    tracing::dispatcher::with_default(&core.dispatch(), || log::java(priority, &message));
+}
+
+/// A button on the ringing notification that needs no window.
+extern "system" fn native_ring_action<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    action: jint,
+) {
+    let Some(core) = Core::from_java(handle) else { return };
+    let _log = tracing::dispatcher::set_default(&core.dispatch());
+    if action != RING_DECLINE {
+        tracing::warn!(action, "unknown ring action");
+        return;
+    }
+    match core.calls().try_send(Command::Answer(false)) {
+        Ok(()) => tracing::info!("declined from the notification"),
+        Err(e) => tracing::error!("declining from the notification: {e}"),
     }
 }

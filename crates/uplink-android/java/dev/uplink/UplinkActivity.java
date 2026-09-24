@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
 import android.app.RemoteAction;
+import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -15,6 +16,7 @@ import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.Log;
 import android.util.Rational;
 import android.view.WindowInsetsController;
@@ -43,12 +45,28 @@ public class UplinkActivity extends NativeActivity {
     static final String EXTRA_ACTION = "action";
     static final int ACTION_HANGUP = 0;
     static final int ACTION_MIC = 1;
+    static final int ACTION_ANSWER = 2;
+    /** Why the activity was opened for a call, from the ringing notification. */
+    static final String EXTRA_CALL = "call";
+    static final int CALL_SHOW = 1;
+    static final int CALL_ANSWER = 2;
+
+    /** Cleared before the handle is released. */
+    private volatile long nativeHandle;
 
     /**
-     * Static so {@link #log} works from anywhere in the app (the call service has no activity).
-     * There is one activity per process; it is cleared before the handle is released.
+     * Answer was tapped before the window was up to take it. Answering is the window's to do,
+     * because the call's media goes to whoever is attached when it connects.
      */
-    private static volatile long nativeHandle;
+    private volatile boolean answerPending;
+
+    /** Request codes are Rust's and never negative, so this marks none outstanding. */
+    private static final int NO_REQUEST = -1;
+    /**
+     * The request code of the battery dialog, if one is open, so its result is not mistaken for
+     * an image pick. Main thread only, like the results themselves.
+     */
+    private int batteryRequest = NO_REQUEST;
 
     /** What the UI last asked the system bars to look like; see {@link #applySystemBars()}. */
     private volatile boolean lightSystemBars;
@@ -74,13 +92,46 @@ public class UplinkActivity extends NativeActivity {
         } else {
             registerReceiver(callActions, filter);
         }
+        takeCallIntent(getIntent());
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        takeCallIntent(intent);
+    }
+
+    /**
+     * Opened from a ringing call: show over the lock screen and wake it, which is what a phone
+     * does with a call. Undone when the call is over, in {@link #setInCall}, so the app is not
+     * left readable to anyone holding a locked phone.
+     */
+    private void takeCallIntent(Intent intent) {
+        int call = intent != null ? intent.getIntExtra(EXTRA_CALL, 0) : 0;
+        if (call == 0) {
+            return;
+        }
+        // Consumed, so a later recreation does not answer a call that is long gone.
+        intent.removeExtra(EXTRA_CALL);
+        setShowWhenLocked(true);
+        setTurnScreenOn(true);
+        if (call == CALL_ANSWER) {
+            answerPending = true;
+            deliverAnswer();
+        }
+    }
+
+    private void deliverAnswer() {
+        long handle = nativeHandle;
+        if (handle != 0 && answerPending) {
+            answerPending = false;
+            nativeCallAction(handle, ACTION_ANSWER);
+        }
+    }
 
     private static native void nativePermissionsResult(
             long handle, int requestCode, String[] permissions, int[] grantResults);
-
-    private static native void nativeLog(long handle, int priority, String message);
 
     private static native void nativeImagePicked(long handle, int requestCode, int[] pixels, int width, int height);
 
@@ -90,19 +141,19 @@ public class UplinkActivity extends NativeActivity {
 
     private static native void nativeCallAction(long handle, int action);
 
-    /** Logs to logcat and, when the bridge is up, into the app's own log file. */
+    /** A screen started for a result has closed; the caller reads the outcome for itself. */
+    private static native void nativeActivityDone(long handle, int requestCode);
+
+    /** Logs to logcat and, once the core is up, into the app's own log file. */
     static void log(int priority, String message) {
-        Log.println(priority, TAG, message);
-        long handle = nativeHandle;
-        if (handle != 0) {
-            nativeLog(handle, priority, message);
-        }
+        UplinkApplication.log(priority, message);
     }
 
     /** Called from Rust once natives are registered. */
     void attachNative(long handle) {
         nativeHandle = handle;
         log(Log.DEBUG, "native bridge attached");
+        deliverAnswer();
     }
 
     /** Callable from any thread; the request runs on the UI thread. */
@@ -159,6 +210,29 @@ public class UplinkActivity extends NativeActivity {
     }
 
     /**
+     * Android's one-tap dialog for the battery exemption, or its list of apps where there is no
+     * dialog. Started from here, in our own task: the dialog belongs to Settings, so started with
+     * NEW_TASK from the Application it joins Settings' task whenever one exists, and the whole
+     * Settings page comes up behind it. For a result, so the caller can wait until the user has
+     * answered; what they answered is read back from Android rather than from the result code.
+     */
+    void requestBatteryExemption(final int requestCode) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                batteryRequest = requestCode;
+                try {
+                    startActivityForResult(new Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, app().packageUri()), requestCode);
+                } catch (ActivityNotFoundException e) {
+                    log(Log.WARN, "no battery exemption dialog: " + e);
+                    startActivityForResult(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), requestCode);
+                }
+            }
+        });
+    }
+
+    /**
      * Leaves the app running with its task behind everything else, rather than tearing it down —
      * a finished activity would take the endpoint with it and leave nothing to ring.
      */
@@ -202,6 +276,11 @@ public class UplinkActivity extends NativeActivity {
         super.onActivityResult(requestCode, resultCode, data);
         long handle = nativeHandle;
         if (handle == 0) {
+            return;
+        }
+        if (requestCode == batteryRequest) {
+            batteryRequest = NO_REQUEST;
+            nativeActivityDone(handle, requestCode);
             return;
         }
         Uri uri = resultCode == RESULT_OK && data != null ? data.getData() : null;
@@ -357,7 +436,18 @@ public class UplinkActivity extends NativeActivity {
         refreshPictureInPicture();
         if (!running) {
             leavePictureInPicture();
+            leaveLockScreen();
         }
+    }
+
+    private void leaveLockScreen() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                setShowWhenLocked(false);
+                setTurnScreenOn(false);
+            }
+        });
     }
 
     @Override

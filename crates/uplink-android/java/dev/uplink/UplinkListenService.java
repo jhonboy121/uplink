@@ -33,8 +33,27 @@ public class UplinkListenService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        final UplinkApplication app = (UplinkApplication) getApplication();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        // Android wants the notification within seconds of the start, and binding can take
+        // longer than that, so it goes up first and says what is true at the time.
+        startForeground(NOTIFICATION_ID, notification(app.hasCore()), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        if (!app.hasCore()) {
+            // Started by a boot, an update, or Android restarting us after a kill: nobody has
+            // brought the endpoint up, so this does. Off the main thread, because it blocks
+            // until the endpoint is bound.
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    if (app.ensureCore() == 0) {
+                        UplinkActivity.log(Log.ERROR, "endpoint did not start; not listening");
+                        stopSelf();
+                        return;
+                    }
+                    getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification(true));
+                }
+            }, "uplink-start").start();
+        }
         UplinkActivity.log(Log.INFO, "listening");
         // Restarted if Android ever does kill us: being reachable is the whole point of it.
         return START_STICKY;
@@ -51,14 +70,14 @@ public class UplinkListenService extends Service {
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
-    private Notification notification() {
+    private Notification notification(boolean ready) {
         Intent open = new Intent(this, UplinkActivity.class);
         PendingIntent tap = PendingIntent.getActivity(
                 this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(getResources().getIdentifier("notification", "drawable", getPackageName()))
-                .setContentTitle("Ready for calls")
-                .setContentText("uplink is reachable")
+                .setContentTitle(ready ? "Ready for calls" : "Starting")
+                .setContentText(ready ? "uplink is reachable" : "uplink is coming online")
                 .setContentIntent(tap)
                 .setOngoing(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

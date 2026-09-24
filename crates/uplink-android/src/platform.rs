@@ -36,10 +36,6 @@ const SHARE_DIR: &str = "share";
 /// read off the device the way the other constants are — a platform older than this has no such
 /// field, which is the whole problem being worked around.
 const NOTIFICATIONS_SDK: jint = 33;
-// android.util.Log levels, as passed to `UplinkActivity.log`.
-const ANDROID_LOG_INFO: jint = 4;
-const ANDROID_LOG_WARN: jint = 5;
-const ANDROID_LOG_ERROR: jint = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
@@ -101,12 +97,60 @@ impl Inner {
     }
 }
 
-pub struct Platform {
+/// The `Application` and the VM to reach it with: everything the app can do with no window.
+/// It exists before any activity, service or receiver, so permissions can be read through it,
+/// audio routed, services started and notifications posted — everything a call needs before
+/// anyone is looking at it. Cheap to clone; the process-wide core holds one.
+#[derive(Clone)]
+pub struct AppContext {
     vm: JavaVM,
-    /// Always here: the `Application`, which exists before any activity, service or receiver.
-    /// Permissions can be read through it, audio routed, services started and notifications
-    /// posted — everything a call needs before anyone is looking at it.
-    context: Arc<Global<JObject<'static>>>,
+    application: Arc<Global<JObject<'static>>>,
+}
+
+impl AppContext {
+    /// From a native method called on the Application itself.
+    pub fn new(env: &mut Env, application: &JObject) -> Result<Self, Error> {
+        Ok(Self { vm: env.get_java_vm()?, application: Arc::new(env.new_global_ref(application)?) })
+    }
+
+    /// The one place a throw is still pending, so it is where Java's own message is read.
+    fn with<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
+        self.vm.attach_current_thread(|env| match f(env, self.application.as_obj()) {
+            Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
+            outcome => outcome,
+        })
+    }
+
+    /// Rings for an incoming call: the user's ringtone, and a call notification whenever the
+    /// app is not in front. Stopped by [`Self::stop_ringing`], not by a timer of its own.
+    pub fn ring(&self, who: &str) -> Result<(), Error> {
+        self.with(|env, application| {
+            let who = env.new_string(who)?;
+            env.call_method(application, jni_str!("ring"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&who)])?;
+            Ok(())
+        })
+    }
+
+    pub fn stop_ringing(&self) -> Result<(), Error> {
+        self.call(jni_str!("stopRinging"))
+    }
+
+    /// A no-argument `void` method of the Application.
+    fn call(&self, method: &JNIStr) -> Result<(), Error> {
+        self.with(|env, application| {
+            env.call_method(application, method, jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
+    /// A no-argument `boolean` method of the Application.
+    fn ask(&self, method: &JNIStr) -> Result<bool, Error> {
+        self.with(|env, application| Ok(env.call_method(application, method, jni_sig!("()Z"), &[])?.z()?))
+    }
+}
+
+pub struct Platform {
+    context: AppContext,
     /// Only while an activity is. Requesting a permission, picking an image, the window's system
     /// bars, picture-in-picture and stepping into the background all need one, and none of them
     /// can happen without someone looking at the screen anyway.
@@ -130,6 +174,8 @@ pub enum PlatformEvent {
     PictureInPicture(bool),
     Hangup,
     ToggleMic,
+    /// Answer was tapped on the ringing notification, which opened this window to take it.
+    Answer,
 }
 
 impl PlatformEvent {
@@ -137,6 +183,7 @@ impl PlatformEvent {
         match code {
             0 => Some(Self::Hangup),
             1 => Some(Self::ToggleMic),
+            2 => Some(Self::Answer),
             _ => None,
         }
     }
@@ -187,31 +234,26 @@ impl Platform {
             let application = env
                 .call_method(&activity, jni_str!("getApplication"), jni_sig!("()Landroid/app/Application;"), &[])?
                 .l()?;
-            Ok((env.new_global_ref(&activity)?, env.new_global_ref(&application)?, inner, sdk))
+            Ok((env.new_global_ref(&activity)?, AppContext::new(env, &application)?, inner, sdk))
         })?;
-        // Not logged here: attaching is what tells us whether this process already has a core,
-        // and therefore happens before there is a subscriber to log to. The caller reports `sdk`
-        // once it does — see [`Self::sdk`].
+        // Not logged here: attaching is what finds this process's core, and therefore happens
+        // before there is a subscriber to log to. The caller reports `sdk` once it does — see
+        // [`Self::sdk`].
         let activity = ArcSwapOption::from(Some(Arc::new(activity)));
-        Ok((Self { vm, context: Arc::new(context), activity, inner, sdk }, incoming))
+        Ok((Self { context, activity, inner, sdk }, incoming))
     }
 
-    /// Every call into the activity goes through here, which is also the one place that can see a
-    /// throw while the throwable is still pending — so it is where Java's own message is read.
     /// Anything that only needs a `Context`, which is everything the app does when nobody is
     /// looking at it.
     fn with_context<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
-        self.vm.attach_current_thread(|env| match f(env, self.context.as_obj()) {
-            Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
-            outcome => outcome,
-        })
+        self.context.with(f)
     }
 
     /// Anything that needs the window or the task. Fails plainly when there is no activity rather
     /// than pretending, because the caller is asking for something only a visible app can do.
     fn with_activity<T>(&self, f: impl FnOnce(&mut Env, &JObject) -> Result<T, Error>) -> Result<T, Error> {
         let activity = self.activity.load_full().ok_or(Error::NoActivity)?;
-        self.vm.attach_current_thread(|env| match f(env, activity.as_obj()) {
+        self.context.vm.attach_current_thread(|env| match f(env, activity.as_obj()) {
             Err(Error::Jni(jni::errors::Error::JavaException)) => Err(thrown(env)),
             outcome => outcome,
         })
@@ -319,23 +361,57 @@ impl Platform {
         })
     }
 
-    /// The process-wide slot holding whatever outlives the screen. Zero when nothing has put
-    /// anything there yet.
+    /// The process-wide handle to whatever outlives the screen, started now if nothing has
+    /// started it yet — which blocks until the endpoint is bound. Zero if starting it failed.
     pub fn core_handle(&self) -> Result<usize, Error> {
         self.with_context(|env, context| {
-            let handle = env.call_method(context, jni_str!("core"), jni_sig!("()J"), &[])?.j()?;
+            let handle = env.call_method(context, jni_str!("ensureCore"), jni_sig!("()J"), &[])?.j()?;
             Ok(address_from_handle(handle).unwrap_or_default())
         })
     }
 
-    pub fn set_core_handle(&self, handle: usize) -> Result<(), Error> {
-        // Bits, not value: Android tags heap pointers on arm64, so an address can have its top
-        // bit set and a value-preserving conversion to a signed `jlong` would refuse it.
-        let handle = handle_from_address(handle)?;
-        self.with_context(|env, context| {
-            env.call_method(context, jni_str!("setCore"), jni_sig!("(J)V"), &[JValue::Long(handle)])?;
+    /// Whether Android's battery optimisation leaves the app alone, which is what lets the
+    /// endpoint stay bound through the night.
+    pub fn battery_unrestricted(&self) -> Result<bool, Error> {
+        self.context.ask(jni_str!("batteryUnrestricted"))
+    }
+
+    /// Opens Android's dialog from the activity, so it sits over our own screen rather than
+    /// Settings', and resolves once it closes — to whether the app is unrestricted now, read from
+    /// Android rather than from the dialog's result code.
+    pub async fn request_battery_exemption(&self) -> Result<bool, Error> {
+        let code = self.inner.next_request_code.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.inner.pending.lock().insert(code, tx);
+        let opened = self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("requestBatteryExemption"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
             Ok(())
-        })
+        });
+        if let Err(e) = opened {
+            self.inner.pending.lock().remove(&code);
+            return Err(e);
+        }
+        rx.await.map_err(|_| Error::RequestAbandoned)?;
+        self.battery_unrestricted()
+    }
+
+    /// Whether a ringing call may take over the screen; only ever false from Android 14.
+    pub fn full_screen_calls_allowed(&self) -> Result<bool, Error> {
+        self.context.ask(jni_str!("fullScreenCallsAllowed"))
+    }
+
+    pub fn open_full_screen_calls_settings(&self) -> Result<(), Error> {
+        self.context.call(jni_str!("openFullScreenCallsSettings"))
+    }
+
+    /// Whether this phone's maker keeps its own list of apps it may stop, and lets us open it.
+    /// There is no reading what is on that list, only offering it.
+    pub fn has_maker_list(&self) -> Result<bool, Error> {
+        self.context.ask(jni_str!("hasMakerList"))
+    }
+
+    pub fn open_maker_list(&self) -> Result<(), Error> {
+        self.context.call(jni_str!("openMakerList"))
     }
 
     /// Steps the app behind whatever else is on screen, without tearing it down — the process has
@@ -562,11 +638,6 @@ fn natives() -> [NativeMethod<'static>; 6] {
                 native_permissions_result as *mut c_void,
             ),
             NativeMethod::from_raw_parts(
-                jni_str!("nativeLog"),
-                jni_str!("(JILjava/lang/String;)V"),
-                native_log as *mut c_void,
-            ),
-            NativeMethod::from_raw_parts(
                 jni_str!("nativeImagePicked"),
                 jni_str!("(JI[III)V"),
                 native_image_picked as *mut c_void,
@@ -582,17 +653,22 @@ fn natives() -> [NativeMethod<'static>; 6] {
                 jni_str!("(JI)V"),
                 native_call_action as *mut c_void,
             ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeActivityDone"),
+                jni_str!("(JI)V"),
+                native_activity_done as *mut c_void,
+            ),
         ]
     }
 }
 
 /// Bit-preserving pointer → `jlong`: arm64 Android tags heap pointers in the top byte, so
 /// addresses routinely exceed `i64::MAX` as unsigned values.
-fn handle_from_address(address: usize) -> Result<jlong, Error> {
+pub fn handle_from_address(address: usize) -> Result<jlong, Error> {
     jlong::try_from(address.cast_signed()).map_err(|_| Error::Handle)
 }
 
-fn address_from_handle(handle: jlong) -> Option<usize> {
+pub fn address_from_handle(handle: jlong) -> Option<usize> {
     isize::try_from(handle).ok().map(isize::cast_unsigned)
 }
 
@@ -687,30 +763,6 @@ fn luma(argb: &[jint]) -> Vec<u8> {
         .collect()
 }
 
-/// Java's logs, so they land in this run's log file too (there is no adb in the field).
-extern "system" fn native_log<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    handle: jlong,
-    priority: jint,
-    message: JString<'local>,
-) {
-    // SAFETY: Java only calls this with the live handle it received from `attach`.
-    if unsafe { inner_from(handle) }.is_none() {
-        return;
-    }
-    let outcome = env.with_env(|env| -> Result<String, Error> { Ok(message.try_to_string(env)?) });
-    let Outcome::Ok(message) = outcome.into_outcome() else {
-        return;
-    };
-    match priority {
-        p if p >= ANDROID_LOG_ERROR => tracing::error!(target: "java", "{message}"),
-        p if p >= ANDROID_LOG_WARN => tracing::warn!(target: "java", "{message}"),
-        p if p >= ANDROID_LOG_INFO => tracing::info!(target: "java", "{message}"),
-        _ => tracing::debug!(target: "java", "{message}"),
-    }
-}
-
 extern "system" fn native_detach<'local>(_env: EnvUnowned<'local>, _class: JClass<'local>, handle: jlong) {
     let Some(address) = address_from_handle(handle) else {
         return;
@@ -747,6 +799,21 @@ extern "system" fn native_call_action<'local>(
         Some(event) => inner.send(event),
         None => tracing::warn!(action, "unknown call action"),
     }
+}
+
+/// A screen started for a result has closed. Only that it closed is passed on: what it changed
+/// is read back from Android by whoever was waiting.
+extern "system" fn native_activity_done<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    request_code: jint,
+) {
+    // SAFETY: as above.
+    let Some(inner) = (unsafe { inner_from(handle) }) else {
+        return;
+    };
+    inner.complete(request_code, true);
 }
 
 fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> Result<JObject<'local>, Error> {

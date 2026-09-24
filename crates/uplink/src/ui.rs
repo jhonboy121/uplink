@@ -431,6 +431,90 @@ slint::slint! {
         }
     }
 
+    // After the gate, once: the battery exemption, explained before Android's dialog the way the
+    // gate explains permissions. Unlike the gate it can be declined — uplink works without it,
+    // it just may not ring overnight — so "Not now" is as easy to reach as "Allow".
+    component BatteryPage inherits Rectangle {
+        in property <length> top-inset;
+        callback allow();
+        callback skip();
+        background: Theme.ground;
+
+        VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 0;
+                padding-top: root.top-inset + Theme.bar-top;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                padding-bottom: Theme.bar-bottom;
+                PageTitle { text: "Stay reachable"; }
+            }
+            VerticalLayout {
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: "To save battery, Android stops apps it thinks nobody is using. uplink has to keep listening, or a call can't reach you while the phone sleeps.";
+                    color: Theme.muted;
+                    font-size: 0.9375rem;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: Theme.row-gap;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("icons/call.svg");
+                            width: Theme.key-icon;
+                            height: self.width;
+                            colorize: Theme.beacon;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: "Calls while the phone sleeps";
+                            color: Theme.text;
+                            font-size: 1rem;
+                            font-weight: 600;
+                            height: self.font-size * Theme.line-box;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Android asks next. You can change it later in Settings.";
+                            color: Theme.muted;
+                            font-size: 0.8125rem;
+                            height: self.font-size * Theme.line-box;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "optional";
+                            color: Theme.muted;
+                            font-family: Theme.mono;
+                            font-size: 0.75rem;
+                            letter-spacing: 0.6px;
+                        }
+                    }
+                }
+                Wide {
+                    text: "Allow";
+                    primary: true;
+                    clicked => { root.allow(); }
+                }
+                Wide {
+                    text: "Not now";
+                    clicked => { root.skip(); }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+
     component Tabs inherits Rectangle {
         in-out property <Screen> screen;
         // The gesture bar sits under the tabs, so the row clears it from the inside.
@@ -1486,8 +1570,14 @@ slint::slint! {
         in property <length> top-inset;
         in property <string> quality;
         in property <int> relays-on;
+        in property <bool> battery-unrestricted;
+        in property <bool> full-screen-calls;
+        in property <bool> maker-list;
         callback share-diagnostics();
         callback edit-relays();
+        callback allow-battery();
+        callback allow-full-screen-calls();
+        callback open-maker-list();
         background: Theme.ground;
 
         VerticalLayout {
@@ -1537,6 +1627,30 @@ slint::slint! {
                         detail: "Caps what the camera sends";
                         value: root.quality;
                         tappable: false;
+                    }
+                    // What decides whether a call can reach this phone when nobody is using it.
+                    // The first two are read back from Android and say so; the maker's list
+                    // cannot be read, so its row offers the screen and claims nothing.
+                    GroupHead { text: "Staying reachable"; }
+                    DetailRow {
+                        title: "Battery";
+                        detail: "Lets uplink wait for calls while the phone sleeps";
+                        value: root.battery-unrestricted ? "Unrestricted" : "Allow";
+                        tappable: !root.battery-unrestricted;
+                        clicked => { root.allow-battery(); }
+                    }
+                    DetailRow {
+                        title: "Calls on the lock screen";
+                        detail: "Lets a call ring over the lock screen";
+                        value: root.full-screen-calls ? "Allowed" : "Allow";
+                        tappable: !root.full-screen-calls;
+                        clicked => { root.allow-full-screen-calls(); }
+                    }
+                    if root.maker-list : DetailRow {
+                        title: "Background apps";
+                        detail: "Your phone's own list of apps it may stop; let uplink run";
+                        value: "Open";
+                        clicked => { root.open-maker-list(); }
                     }
                     GroupHead { text: "Network"; }
                     // The count rather than the list: which relays are on is a detail, and how
@@ -1982,6 +2096,17 @@ slint::slint! {
         // How many are on, counted where the model is built rather than in the markup.
         in property <int> relays-on;
         in-out property <bool> relays-custom;
+        // Read from Android on start and on every return to the front, since each of them is
+        // changed in a system screen the app sends the user to. Assumed fine until read.
+        in property <bool> battery-unrestricted: true;
+        in property <bool> full-screen-calls: true;
+        in property <bool> maker-list: false;
+        callback allow-battery();
+        callback allow-full-screen-calls();
+        callback open-maker-list();
+        // The one-time explainer for the battery exemption, shown after the gate.
+        in-out property <bool> battery-ask: false;
+        callback skip-battery();
         in-out property <bool> editing-relays: false;
         in-out property <string> new-relay-name;
         in-out property <string> new-relay-url;
@@ -2109,8 +2234,14 @@ slint::slint! {
                         top-inset: root.safe-area-insets.top;
                         quality: root.quality;
                         relays-on: root.relays-on;
+                        battery-unrestricted: root.battery-unrestricted;
+                        full-screen-calls: root.full-screen-calls;
+                        maker-list: root.maker-list;
                         share-diagnostics => { root.share-diagnostics(); }
                         edit-relays => { root.editing-relays = true; }
+                        allow-battery => { root.allow-battery(); }
+                        allow-full-screen-calls => { root.allow-full-screen-calls(); }
+                        open-maker-list => { root.open-maker-list(); }
                     }
                 }
                 Tabs {
@@ -2282,6 +2413,12 @@ slint::slint! {
                 blocked: root.permissions-blocked;
                 grant => { root.grant-permissions(); }
                 settings => { root.open-settings(); }
+            }
+
+            if root.battery-ask && !root.gate : BatteryPage {
+                top-inset: root.safe-area-insets.top;
+                allow => { root.allow-battery(); }
+                skip => { root.skip-battery(); }
             }
 
             // Over everything until the endpoint is up. It fades rather than being torn out: the

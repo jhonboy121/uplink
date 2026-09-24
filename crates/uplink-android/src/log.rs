@@ -63,6 +63,22 @@ pub fn logcat(tag: &CStr, level: Level, message: &str) {
     unsafe { ndk_sys::__android_log_write(prio, tag.as_ptr(), text.as_ptr()) };
 }
 
+/// A line Java logged, re-emitted under the `java` target so it lands in the file too. Java's
+/// `android.util.Log` priorities are logcat's own. The caller must have a subscriber in scope:
+/// Java calls in on its own threads, which have no default of their own.
+pub fn java(priority: c_int, message: &str) {
+    let priority = u32::try_from(priority).unwrap_or_default();
+    if priority >= android_LogPriority::ANDROID_LOG_ERROR.0 {
+        tracing::error!(target: "java", "{message}");
+    } else if priority >= android_LogPriority::ANDROID_LOG_WARN.0 {
+        tracing::warn!(target: "java", "{message}");
+    } else if priority >= android_LogPriority::ANDROID_LOG_INFO.0 {
+        tracing::info!(target: "java", "{message}");
+    } else {
+        tracing::debug!(target: "java", "{message}");
+    }
+}
+
 struct Logcat {
     tag: &'static CStr,
 }
