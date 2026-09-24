@@ -101,9 +101,10 @@ default); keep disk usage lean. Avoid build scripts.
 6. **Call service**: foreground service so calls survive backgrounding.
 7. **Product UI** (design locked, see Revisions): 7a contacts + QR + call screens **done**, matched to the design and
    themed. 7b: the shell (People / Calls / Connect / Settings), the splash, the permission gate, `rusqlite` contacts
-   and the call log — **done**; still open are the contact screen (favourite, rename, remove), ringback and ringtone
-   with an outgoing timeout, the profile over the wire, and the privacy switches. 7c PiP, lock-screen calls,
-   diagnostics report; 7d verification, identity rotation.
+   and the call log, the contact screen, ringtone, ringback and the outgoing timeout — **done**; still open are the
+   profile over the wire and the privacy switches. 7c PiP, lock-screen calls and the diagnostics report **done**;
+   7d verification, identity rotation. 7e call modes (2026-09-24, see Revisions): voice-only calls, camera off
+   mid-call, the peer's camera and mic state shown, and a voice call upgraded to video.
 8. ~~**Resource table**~~ **done**: `tools/android-res` compiles `android/` into the manifest, `resources.arsc` and the
    APK itself. Launcher icon and system splash confirmed on the S24. See [docs/ref/android-res.md](ref/android-res.md).
 9. Security to-dos above; then iOS (CI) and web.
@@ -679,6 +680,35 @@ default); keep disk usage lean. Avoid build scripts.
     The activity listens for `ACTION_TIMEZONE_CHANGED`, `ACTION_TIME_CHANGED` and
     `ACTION_DATE_CHANGED` (midnight), and each one empties the cache and redraws the call log —
     otherwise a list left open overnight kept calling yesterday "today".
+- **2026-09-24**: **to do — call modes (roadmap 7e).** Not started.
+  - **Voice-only calls.** Placed as voice from the start: no camera, no encoder, no video stream
+    — the battery and data a voice call should cost, and what a poor link wants. Its own entry
+    point beside Call (a contact's page, the call log's details), its own call screen (the
+    avatar and name large, no self view), and the call service with the **microphone type
+    only**, since asking for camera when none is used is both wrong and one more thing Android
+    can refuse. The log records which kind the call was.
+  - **Camera off mid-call**, as a control beside mute: the camera stops (and with it the
+    encoder's input), the video stream stays up but carries nothing, and turning it back on
+    starts with a keyframe. The self view shows it is off rather than freezing on the last frame.
+  - **The other side's state, shown.** Their mic muted and their camera off each get an
+    indicator over their video — a muted mic is otherwise indistinguishable from silence, and a
+    camera turned off from a frozen network. Sent over the signalling stream as a state message
+    (`{mic, camera}`) whenever either changes, not inferred from traffic stopping. Reuses the
+    mute icons; state never by colour alone.
+  - **A voice call upgraded to video.** Either side can ask; the other accepts or keeps it voice
+    (a prompt, not a switch flipped on them — a camera turning on unasked is a privacy event).
+    On accept, both start the camera and encoder and the call screen changes over in place, same
+    call, same timer. Needs the call service to gain the camera type **while in front** — the
+    upgrade is always a tap in the app, which is exactly when Android allows it. Downgrading is
+    camera off, above.
+  - **The wire format has to take this first.** `Signal` is a postcard enum: a variant an older
+    build does not know fails to decode, and a decode failure is a protocol error that closes
+    the call. The other phone is often a build behind, so before any new signal ships, receivers
+    must skip messages they cannot read (length-prefixed already, so skipping is cheap) and the
+    offer should carry a small capability set, so a new build never offers video-upgrade to a
+    peer that cannot answer it. Voice-only is the exception: it is an offer with no video
+    stream opened, which an old build would read as a video call whose picture never arrives —
+    so it too waits for capabilities.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
