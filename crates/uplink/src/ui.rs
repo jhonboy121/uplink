@@ -2497,6 +2497,11 @@ slint::slint! {
 
         property <bool> connected: state == CallState.connected;
 
+        // Under everything on the call, so a tap nothing here takes stops here. The picture that
+        // fills the screen takes none, and a tap on it went through to the page beneath — a
+        // contact opened, or a call placed, from a tap on your own face.
+        TouchArea { }
+
         Image {
             width: parent.width;
             height: parent.height;
