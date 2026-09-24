@@ -1518,7 +1518,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         c.detach();
     });
 
-    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_call(move |key| match peer_key(&key, &identity) {
         Ok(peer) => {
             if send_call_command(&s, Command::Call(peer), &weak)
@@ -1527,7 +1527,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 // Optimistic: the node confirms with Dialing, or reverts via Ended.
                 ui.set_call_state(CallState::Dialing);
                 let name = with_contacts(&s, |contacts| contacts.name_of(&peer).map(str::to_owned));
-                set_peer(&ui, &name.flatten().unwrap_or_else(|| short(&peer)));
+                let name = name.flatten().unwrap_or_else(|| short(&peer));
+                set_peer(&ui, &name);
+                start_call_service(&p, &name);
             }
         }
         Err(unusable) => {
@@ -1536,9 +1538,13 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             }
         }
     });
-    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_accept(move || {
-        send_call_command(&s, Command::Answer(true), &weak);
+        if send_call_command(&s, Command::Answer(true), &weak)
+            && let Some(ui) = weak.upgrade()
+        {
+            start_call_service(&p, &ui.get_peer_name());
+        }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_reject(move || {
@@ -1813,6 +1819,16 @@ fn set_call_status(ui: &slint::Weak<App>, status: String) {
     tracing::info!("{status}");
     if let Some(ui) = ui.upgrade() {
         ui.set_call_status(status.into());
+    }
+}
+
+/// Starts the call's foreground service on the tap that places or answers it. Camera and
+/// microphone service types are only granted while the app is in front, and by the time a call
+/// connects the user may have gone elsewhere — which Android answered with a SecurityException
+/// that took the whole app down. Starting here also arms picture-in-picture while it rings.
+fn start_call_service(platform: &Platform, peer: &str) {
+    if let Err(e) = platform.set_call_service(true, peer) {
+        tracing::warn!("call service: {e}");
     }
 }
 

@@ -259,15 +259,21 @@ public class UplinkApplication extends Application {
         }
     }
 
-    /** Runs the foreground service that lets a call keep the camera and microphone in the background. */
+    /**
+     * Runs the foreground service that lets a call keep the camera and microphone in the
+     * background. Started once, on the tap that places or answers the call, which is when the
+     * app is certainly in front; a later call for the same call only renames its notification.
+     */
     void setCall(boolean running, String who) {
+        boolean already = inCall;
         inCall = running;
         peer = who;
-        Intent intent = callIntent();
-        if (running) {
-            startForegroundService(intent);
+        if (!running) {
+            stopService(callIntent());
+        } else if (already) {
+            UplinkCallService.post(this, peer, micOn);
         } else {
-            stopService(intent);
+            startForegroundService(callIntent());
         }
     }
 
@@ -275,7 +281,7 @@ public class UplinkApplication extends Application {
     void setMicOn(boolean on) {
         micOn = on;
         if (inCall) {
-            startForegroundService(callIntent());
+            UplinkCallService.post(this, peer, micOn);
         }
     }
 

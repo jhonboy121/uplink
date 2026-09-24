@@ -109,10 +109,16 @@
             </intent-filter>
         </receiver>
 
-        <!-- foregroundServiceType 0xc0 = camera | microphone. -->
+        <!-- foregroundServiceType 0x400000c0 = camera | microphone | specialUse. The first two
+             are what a call needs; specialUse is the fallback when Android refuses them because
+             the app was not in front, which keeps the call up rather than crashing it. -->
         <service
             android:name="${service}"
             android:exported="false"
-            android:foregroundServiceType="0xc0" />
+            android:foregroundServiceType="0x400000c0">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a call connected when camera and microphone access is refused" />
+        </service>
     </application>
 </manifest>

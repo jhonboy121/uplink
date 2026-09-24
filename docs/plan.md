@@ -610,6 +610,17 @@ default); keep disk usage lean. Avoid build scripts.
     the top. **The confirm sheet sits above the contact page**: beneath it, Remove showed nothing,
     and closing the page to find the sheet cleared the contact it was meant to remove. The idle
     stats line (every 5 s, all day) is only logged while a call or the camera is up.
+- **2026-09-24**: **a call that connected in the background crashed the app.** Dial, switch
+  apps while it rings, and when the peer answered, `startForeground` with the camera and
+  microphone types was refused (`SecurityException`: they are while-in-use types) and nothing
+  caught it — the process died and the call with it. Fixed twice over:
+  - **The call service starts on the tap** that places or answers a call, when the app is
+    certainly in front, not on `Connected`. Later updates (the peer's name, mute) repost the
+    notification in place (`UplinkCallService.post`) instead of starting the service again, which
+    from the background would be refused all over. It also arms picture-in-picture while
+    dialling, so leaving mid-ring shrinks the call as leaving mid-call does.
+  - **A refusal is survivable:** the service falls back to `specialUse` (now also declared on it),
+    logs it, and the call stays up with the camera and microphone quiet until the app is back.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
