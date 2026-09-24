@@ -163,6 +163,12 @@ struct State {
 }
 
 impl State {
+    fn clear_frame(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_frame(slint::Image::default());
+        }
+    }
+
     /// Something worth knowing about later. It goes to the log file, which is the only copy
     /// anyone reads — there is no log on screen, because a log on screen never leaves the phone.
     fn status(&self, message: impl AsRef<str>) {
@@ -172,6 +178,9 @@ impl State {
     /// Assumes the camera permission is granted (see [`request_camera`]).
     fn start_camera(&mut self) {
         self.session = None;
+        // The last picture of whatever ran before would otherwise stay up until this camera's
+        // first frame replaces it: a flash of the front camera before the scanner's back one.
+        self.clear_frame();
         match self.open_session() {
             Ok(session) => {
                 let camera = &session.camera;
@@ -1970,16 +1979,22 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if let Some(ui) = weak.upgrade() {
             ui.set_scanning(on);
         }
-        // Either way the session is rebuilt: with the scan stream, or without it.
         if on {
             request_camera(&s, &p);
-        } else {
-            with_state(&s, |s| {
-                if s.session.is_some() {
-                    s.start_camera();
-                }
-            });
+            return;
         }
+        // A call keeps its camera, rebuilt without the scan stream. Outside one, the camera goes:
+        // it used to be rebuilt anyway, and a front camera ran behind the Connect page for as
+        // long as it was open, feeding a picture nothing showed.
+        let in_call = weak.upgrade().is_some_and(|ui| ui.get_call_state() != CallState::Idle);
+        with_state(&s, |s| {
+            if in_call && s.session.is_some() {
+                s.start_camera();
+            } else {
+                s.session = None;
+                s.clear_frame();
+            }
+        });
     });
 
     let s = Rc::clone(&state);

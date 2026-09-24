@@ -192,6 +192,11 @@ slint::slint! {
         // The call log's direction arrow, sized to its line of text.
         out property <length> call-arrow: 15px;
         out property <length> call-arrow-gap: 4px;
+        // The scanner: the square's share of the screen's shorter side, the dim around it, and
+        // the square's outline.
+        out property <float> scan-window: 0.7;
+        out property <color> scan-dim: #070A0FA6;
+        out property <length> scan-border: 2px;
         // A line of figures on a call's details: tighter than a list row, which carries two lines.
         out property <length> stat-height: 40px;
         // How long a press has to be held to count as a long press. Android's default until the
@@ -1885,13 +1890,117 @@ slint::slint! {
         }
     }
 
+    // Scanning someone's code: the back camera over the whole screen, dimmed around a square that
+    // says where the code should go. The decoder reads the whole frame, so the square is a guide
+    // for the hand, not a limit. Dark whatever the theme, like a call: it is a camera.
+    component ScanPage inherits Rectangle {
+        in property <image> frame;
+        in property <length> top-inset;
+        in property <length> bottom-inset;
+        callback close();
+        callback pick();
+        background: Theme.under-video;
+
+        property <length> window: min(root.width, root.height) * Theme.scan-window;
+        property <length> window-x: (root.width - self.window) / 2;
+        property <length> window-y: (root.height - self.window) / 2;
+
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.frame;
+            image-fit: cover;
+        }
+        // Until the first frame, something rather than a black screen that looks broken.
+        if root.frame.width == 0 : Text {
+            text: "Starting camera…";
+            color: Theme.on-video-muted;
+            font-size: 0.9375rem;
+        }
+        // The dim around the square, as one frame whose border is the dim: Slint has no cut-out,
+        // and four bands left their inner corners square inside the outline's rounded ones. A
+        // border's inner corners are its outer radius less its width, so an outer radius of the
+        // outline's plus the border's makes the dim follow the outline exactly. The border is as
+        // wide as the screen is long, so it covers everything around the square.
+        property <length> dim-reach: max(root.width, root.height);
+        Rectangle {
+            x: root.window-x - root.dim-reach;
+            y: root.window-y - root.dim-reach;
+            width: root.window + root.dim-reach * 2;
+            height: self.width;
+            border-width: root.dim-reach;
+            border-color: Theme.scan-dim;
+            border-radius: Theme.radius + root.dim-reach;
+        }
+        Rectangle {
+            x: root.window-x;
+            y: root.window-y;
+            width: root.window;
+            height: root.window;
+            border-width: Theme.scan-border;
+            border-color: Theme.on-video;
+            border-radius: Theme.radius;
+        }
+
+        // The bar: a way out at the start, the title beside it.
+        HorizontalLayout {
+            y: root.top-inset + Theme.bar-top;
+            height: Theme.copy-target;
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            spacing: Theme.gap;
+            Rectangle {
+                width: Theme.copy-target;
+                border-radius: self.width / 2;
+                background: close-touch.pressed ? Theme.on-video.with-alpha(0.2) : transparent;
+                accessible-role: button;
+                accessible-label: "Stop scanning";
+                accessible-action-default => { root.close(); }
+                close-touch := Tap {
+                    tapped => { root.close(); }
+                }
+                Image {
+                    source: @image-url("icons/close.svg");
+                    width: Theme.key-icon;
+                    height: self.width;
+                    colorize: Theme.on-video;
+                }
+            }
+            Text {
+                text: "Scan their code";
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.1875rem;
+                font-weight: 600;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+        Text {
+            x: Theme.edge;
+            y: root.window-y + root.window + Theme.gap-large;
+            width: parent.width - Theme.edge * 2;
+            text: "Point at the code on their phone.";
+            color: Theme.on-video;
+            font-size: 0.9375rem;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        // A code that came as a picture has no phone to point at: the other way in, from here.
+        Wide {
+            x: Theme.edge;
+            y: parent.height - root.bottom-inset - Theme.gap-large - self.height;
+            width: parent.width - Theme.edge * 2;
+            text: "Choose an image";
+            clicked => { root.pick(); }
+        }
+    }
+
     component KeyPage inherits Rectangle {
         in property <length> top-inset;
         in property <image> qr;
         in property <float> mark;
-        in property <image> frame;
         in property <[string]> fingerprint-lines;
-        in property <bool> scanning;
         in property <string> pending-key;
         in-out property <string> new-name;
         callback scan(bool);
@@ -1922,15 +2031,8 @@ slint::slint! {
                 padding-bottom: Theme.bar-bottom;
                 spacing: Theme.gap;
                 PageTitle {
-                    text: root.scanning ? "Point at their code" : "Connect";
+                    text: "Connect";
                     horizontal-stretch: 1;
-                }
-                if root.scanning : VerticalLayout {
-                    alignment: center;
-                    Pill {
-                        text: "Stop";
-                        clicked => { root.scan(false); }
-                    }
                 }
                 Brand { }
             }
@@ -1949,18 +2051,18 @@ slint::slint! {
                         width: min(root.width - Theme.edge * 2, Theme.qr-size);
                         height: self.width;
                         border-radius: Theme.wide-radius;
-                        background: root.scanning ? Theme.surface : #FFFFFF;
+                        background: #FFFFFF;
                         clip: true;
                         code := Image {
-                            width: parent.width - (root.scanning ? 0px : Theme.qr-pad * 2);
+                            width: parent.width - Theme.qr-pad * 2;
                             height: self.width;
-                            source: root.scanning ? root.frame : root.qr;
-                            image-fit: root.scanning ? ImageFit.cover : ImageFit.contain;
+                            source: root.qr;
+                            image-fit: contain;
                         }
                         // The mark in the middle, the way a payment app puts its own there. The
                         // code is drawn with the error correction to lose it: `mark` is the share
                         // of its width uplink-core says can go, and the plate stays inside that.
-                        if !root.scanning : Rectangle {
+                        Rectangle {
                             width: code.width * root.mark;
                             height: self.width;
                             border-radius: self.width / 2;
@@ -1973,21 +2075,11 @@ slint::slint! {
                         }
                     }
                 }
-                // One Text per line: Slint has no line-height, so a wrapped string would set its
-                // own leading and the design's 1.6 line box would be lost.
-                if root.scanning : Text {
-                    text: "Hold their code steady in the frame";
-                    color: Theme.muted;
-                    font-size: 0.9375rem;
-                    height: self.font-size * Theme.line-box;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                }
                 // The key, and a button that copies it: the CLI and chat both want text, not a
                 // picture. An empty box of the button's width on the other side keeps the key
-                // itself centred.
-                if !root.scanning : HorizontalLayout {
+                // itself centred. One Text per line: Slint has no line-height, so a wrapped string
+                // would set its own leading and the design's 1.6 line box would be lost.
+                HorizontalLayout {
                     alignment: center;
                     spacing: Theme.gap;
                     Rectangle { width: Theme.copy-target; }
@@ -2028,16 +2120,17 @@ slint::slint! {
 
                 // Naming a scanned key happens in a sheet over whatever screen you are on, so
                 // this stays the two things that ever add someone.
+                // Scanning takes the whole screen (`ScanPage`); this only opens it.
                 Wide {
-                    text: root.scanning ? "Stop scanning" : "Scan a code";
-                    primary: !root.scanning;
-                    clicked => { root.scan(!root.scanning); }
+                    text: "Scan a code";
+                    primary: true;
+                    clicked => { root.scan(true); }
                 }
-                if !root.scanning : Wide {
+                Wide {
                     text: "Choose an image";
                     clicked => { root.pick(); }
                 }
-                if !root.scanning : Wide {
+                Wide {
                     text: "Share my identity";
                     clicked => { root.share(); }
                 }
@@ -2776,6 +2869,7 @@ slint::slint! {
             && root.call-state == CallState.idle
             && root.confirming == Confirm.none
             && !root.editing-relays
+            && !root.scanning
             && root.peer-key == "";
         changed bars-light => { root.bars-changed(self.bars-light); }
 
@@ -2860,9 +2954,7 @@ slint::slint! {
                         top-inset: root.safe-area-insets.top;
                         qr: root.qr;
                         mark: root.qr-mark;
-                        frame: root.frame;
                         fingerprint-lines: root.my-fingerprint-lines;
-                        scanning: root.scanning;
                         pending-key: root.peer-key;
                         new-name <=> root.new-name;
                         scan(on) => { root.scan(on); }
@@ -2946,6 +3038,19 @@ slint::slint! {
                 pos-y <=> root.call-fold-y;
                 placed <=> root.call-fold-placed;
                 restore => { root.call-folded = false; }
+            }
+
+            // The scanner takes the whole screen, tabs and all. Under the toast, which is how a
+            // code that is not ours gets said while it runs.
+            if root.scanning : ScanPage {
+                frame: root.frame;
+                top-inset: root.safe-area-insets.top;
+                bottom-inset: root.safe-area-insets.bottom;
+                close => { root.scan(false); }
+                pick => {
+                    root.scan(false);
+                    root.pick-key();
+                }
             }
 
             // Something that went wrong and needs no decision — it says its piece and goes.
