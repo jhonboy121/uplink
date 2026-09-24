@@ -104,7 +104,8 @@ default); keep disk usage lean. Avoid build scripts.
    and the call log, the contact screen, ringtone, ringback and the outgoing timeout — **done**; still open are the
    profile over the wire and the privacy switches. 7c PiP, lock-screen calls and the diagnostics report **done**;
    7d verification, identity rotation. 7e call modes (2026-09-24, see Revisions): voice-only calls, camera off
-   mid-call, the peer's camera and mic state shown, and a voice call upgraded to video.
+   mid-call, the peer's camera and mic state shown, and a voice call upgraded to video. 7f (2026-09-24): a call that
+   survives the network dropping out and coming back (first of these), screen sharing, call recording.
 8. ~~**Resource table**~~ **done**: `tools/android-res` compiles `android/` into the manifest, `resources.arsc` and the
    APK itself. Launcher icon and system splash confirmed on the S24. See [docs/ref/android-res.md](ref/android-res.md).
 9. Security to-dos above; then iOS (CI) and web.
@@ -735,6 +736,42 @@ default); keep disk usage lean. Avoid build scripts.
     cleared by hand (`just db-sql`), rather than carrying migration code for them.
   - Also found: `tools/ui-preview` had not compiled since the call-log fields were added — only
     the app's crates were being checked. Fixed, and the host tools are now part of every check.
+- **2026-09-24**: **to do — roadmap 7f.** Not started. In order:
+  - **A call that survives the network dropping out.** Today a lost connection ends the call as
+    `Failed("connection lost")`, and a phone moving from wifi to cellular, through a lift or a
+    tunnel, is exactly that — on the calls this app is for, which run on mobile networks abroad.
+    - *What already helps:* QUIC migrates a connection to a new address, and iroh keeps looking
+      for paths; a change it absorbs inside the idle timeout never reaches the call.
+    - *What is missing:* (1) **saying it** — media that stops arriving for a couple of seconds
+      shows "Reconnecting…" over the call rather than a frozen face, from the counters telemetry
+      already has; (2) **re-dialling** — when the connection is gone, the side that notices
+      dials the same peer again for a grace period (say 30 s), with an offer that names the call
+      it is resuming (a call id, and a new capability), so the other phone rejoins instead of
+      ringing; the call screen, timer and log entry carry on as one call; (3) **the media
+      restarts** on the new connection: codecs and audio are re-attached, and the first video
+      frame is a keyframe; (4) past the grace period the call ends as **"Connection lost"**, its
+      own outcome, not "Did not connect". Every drop and rejoin goes into the call's quality
+      summary, so a bad call can be told apart from a bad network afterwards.
+    - *Also:* the idle endpoint across network changes (the listening service) — confirm from the
+      beat log that iroh rebinds and stays reachable after wifi↔cellular, and that the relay
+      reconnects after a stretch of no network at all.
+  - **Screen sharing.** Android's `MediaProjection`: a consent dialog for each session, and from
+    Android 14 a foreground service of type `mediaProjection` started only after consent — a
+    second service type the call service gains for the share's length. The projection's virtual
+    display feeds the **same encoder** through its input surface, in place of the camera, so the
+    wire only needs to say it is a screen (a capability, and a flag in the frame header) for the
+    receiver to show it fitted rather than cropped to fill, and in its own orientation.
+    Sharing is always visible to the sharer (a persistent indicator), and stops with the call.
+    Sharing the phone's audio (`AudioPlaybackCapture`) is a later step.
+  - **Call recording.** Consent first: recording a call without the other person's agreement is
+    against the law in many places, so starting a recording **tells the
+    other side** over the wire (a signal and a capability), which shows "… is recording" for as
+    long as it lasts; an older build that cannot show it cannot be recorded. Prior art in this
+    repo: the CLI's `--record` already writes the peer's H.264 and Opus as received into a
+    fragmented MP4 (`mp4-atom`) that stays playable if the call ends abruptly. A first version
+    keeps the streams as they are — their video, their voice and your voice as separate tracks,
+    no re-encoding, no mixing on the phone — in the app's private storage, shared out through the
+    share sheet. About 15 MB a minute at today's 2 Mbps.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
