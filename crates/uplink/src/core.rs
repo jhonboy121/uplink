@@ -17,6 +17,7 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -29,6 +30,8 @@ use uplink_android::log::{self, Logging};
 use uplink_android::platform::{AppContext, address_from_handle, handle_from_address};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+// By path: `jni::Outcome` is imported above, and the two mean unrelated things.
+use uplink_core::calls::{self, CallLog, CallRecord};
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
 use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
@@ -82,9 +85,9 @@ struct Inbox {
     ringing: Option<EndpointId>,
 }
 
-/// Rings for an incoming call and stops when it is answered or over, whether or not a window is
-/// up. The window cannot own this: the call that most needs ringing is the one nobody is
-/// looking at.
+/// Rings for an incoming call, plays ringback for an outgoing one, and stops either when the call
+/// is answered or over, whether or not a window is up. The window cannot own this: the call that
+/// most needs ringing is the one nobody is looking at.
 #[derive(Clone)]
 struct Ringer {
     context: AppContext,
@@ -95,11 +98,21 @@ impl Ringer {
     fn follow(&self, event: &Event) {
         let outcome = match event {
             Event::Incoming { peer } => self.context.ring(&self.name_of(peer)),
+            // Our offer reached them and their phone is ringing: until now there was nothing to
+            // hear, since a dial that never lands is not ringing anywhere.
+            Event::Ringing { .. } => self.context.ringback(),
             Event::Connected { .. } | Event::Ended { .. } => self.context.stop_ringing(),
             _ => return,
         };
         if let Err(e) = outcome {
             tracing::warn!("ringing: {e}");
+        }
+    }
+
+    /// Nobody answered. The notification only shows when uplink is not in front; Java decides.
+    fn missed(&self, peer: &EndpointId) {
+        if let Err(e) = self.context.missed_call(&self.name_of(peer)) {
+            tracing::warn!("missed-call notification: {e}");
         }
     }
 
@@ -116,12 +129,96 @@ impl Ringer {
     }
 }
 
+/// The call in flight, so its outcome is known by the time it ends.
+struct Pending {
+    peer: EndpointId,
+    incoming: bool,
+    at: SystemTime,
+    connected: Option<Instant>,
+}
+
+/// Writes every call to the log as it ends, window or no window. A call that rang with nobody
+/// looking used to vanish: the log was the window's to write.
+struct Ledger {
+    log: Option<CallLog>,
+    db: Db,
+    pending: Option<Pending>,
+}
+
+impl Ledger {
+    fn open(db: Db) -> Self {
+        let log = CallLog::open(db.clone())
+            .inspect_err(|e| tracing::error!("opening the call log; calls go unrecorded: {e}"))
+            .ok();
+        Self { log, db, pending: None }
+    }
+
+    /// The record written, when this event ended a call.
+    fn follow(&mut self, event: &Event) -> Option<CallRecord> {
+        match event {
+            Event::Dialing { peer } | Event::Incoming { peer } => {
+                let incoming = matches!(event, Event::Incoming { .. });
+                self.pending = Some(Pending { peer: *peer, incoming, at: SystemTime::now(), connected: None });
+                None
+            }
+            Event::Connected { .. } => {
+                if let Some(call) = self.pending.as_mut() {
+                    call.connected = Some(Instant::now());
+                }
+                None
+            }
+            Event::Ended { reason, .. } => {
+                let call = self.pending.take()?;
+                let record = CallRecord {
+                    peer: call.peer,
+                    incoming: call.incoming,
+                    outcome: calls::Outcome::of(reason, call.incoming, call.connected.is_some()),
+                    at: call.at,
+                    duration: call.connected.map(|since| since.elapsed()),
+                };
+                self.write(&record);
+                Some(record)
+            }
+            _ => None,
+        }
+    }
+
+    fn write(&self, record: &CallRecord) {
+        if let Some(log) = &self.log
+            && let Err(e) = log.record(record)
+        {
+            tracing::warn!("recording the call: {e}");
+        }
+        // A contact's second line is the same fact, kept beside it so the list does not have to
+        // query the log per row.
+        if record.outcome != calls::Outcome::Answered {
+            return;
+        }
+        match Contacts::open(self.db.clone()) {
+            Ok(mut contacts) if contacts.contains(&record.peer) => {
+                if let Err(e) = contacts.called(record.peer) {
+                    tracing::warn!("stamping the call: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reading contacts to stamp the call: {e}"),
+        }
+    }
+}
+
 /// The one consumer of the endpoint's events, for as long as the process lives. A window gets
 /// them while it is attached; otherwise they are answered here, because a call arriving at a
 /// backgrounded app is the case this whole arrangement exists for.
 async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ringer: Ringer) {
+    let mut ledger = Ledger::open(ringer.db.clone());
     while let Some(event) = events.recv().await {
         ringer.follow(&event);
+        // Written before the window hears of it, so what it reads back already has this call.
+        if let Some(record) = ledger.follow(&event)
+            && record.outcome == calls::Outcome::Missed
+        {
+            ringer.missed(&record.peer);
+        }
         // Cloned out rather than held: the lock must not span the await below.
         let window = {
             let mut inbox = inbox.lock();

@@ -11,6 +11,7 @@ import android.app.Person;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -23,6 +24,7 @@ import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
+import android.media.ToneGenerator;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -54,8 +56,12 @@ public class UplinkApplication extends Application {
     private static final String TAG = "uplink";
     private static final String RING_CHANNEL = "ring";
     private static final int RING_NOTIFICATION_ID = 3;
+    private static final String MISSED_CHANNEL = "missed";
+    private static final int MISSED_NOTIFICATION_ID = 4;
     /** Our own broadcast for the ringing notification's Decline, sent only to ourselves. */
     private static final String ACTION_RING = "dev.uplink.RING_ACTION";
+    /** The missed-call notification was swiped away or cleared. */
+    private static final String ACTION_MISSED_DISMISSED = "dev.uplink.MISSED_DISMISSED";
     /** Must match `RingAction` in Rust. */
     private static final int RING_DECLINE = 0;
     /** On, off, on, off… for as long as it rings; the first zero starts it at once. */
@@ -65,6 +71,7 @@ public class UplinkApplication extends Application {
     private static final int REQUEST_SHOW = 10;
     private static final int REQUEST_ANSWER = 11;
     private static final int REQUEST_DECLINE = 12;
+    private static final int REQUEST_MISSED = 13;
 
     /**
      * Phone makers' own lists of apps they may stop in the background, beside Android's. None of
@@ -109,6 +116,9 @@ public class UplinkApplication extends Application {
     private boolean inFront;
     private Ringtone ringtone;
     private Vibrator vibrator;
+    private ToneGenerator ringbackTone;
+    /** Missed calls since the app was last opened, for the one notification that counts them. */
+    private int missed;
 
     private native long nativeStart(String dataDir);
 
@@ -129,6 +139,7 @@ public class UplinkApplication extends Application {
         }
         registerActivityLifecycleCallbacks(visibility);
         IntentFilter filter = new IntentFilter(ACTION_RING);
+        filter.addAction(ACTION_MISSED_DISMISSED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(ringActions, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -199,6 +210,22 @@ public class UplinkApplication extends Application {
 
     Uri packageUri() {
         return Uri.fromParts("package", getPackageName(), null);
+    }
+
+    /**
+     * Puts text on the clipboard. A key is public, so it is not marked sensitive: Android may
+     * preview it in its copy confirmation, which is what the user wants to see.
+     */
+    void copyText(final String label, final String text) {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText(label, text));
+                }
+            }
+        });
     }
 
     /**
@@ -279,17 +306,84 @@ public class UplinkApplication extends Application {
         });
     }
 
-    /** Answered, declined, timed out or hung up by the caller: whichever it was, stop. */
+    /**
+     * The other phone is ringing. The platform's own ringback tone, on the media stream: before a
+     * call connects the phone is not in call mode, so the voice-call stream would come out of the
+     * earpiece of a phone held at arm's length for video. Callable from any thread.
+     */
+    void ringback() {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (ringbackTone != null) {
+                    return;
+                }
+                try {
+                    ringbackTone = new ToneGenerator(AudioManager.STREAM_MUSIC, ToneGenerator.MAX_VOLUME);
+                    ringbackTone.startTone(ToneGenerator.TONE_SUP_RINGTONE);
+                } catch (RuntimeException e) {
+                    // No tone is a quieter call, not a broken one.
+                    log(Log.WARN, "ringback: " + e);
+                    ringbackTone = null;
+                }
+            }
+        });
+    }
+
+    /** Answered, declined, timed out or hung up: whichever it was, and whichever way, stop. */
     void stopRinging() {
         main.post(new Runnable() {
             @Override
             public void run() {
+                if (ringbackTone != null) {
+                    ringbackTone.stopTone();
+                    ringbackTone.release();
+                    ringbackTone = null;
+                }
                 if (ringing == null) {
                     return;
                 }
                 ringing = null;
                 stopAlerting();
                 showRing();
+            }
+        });
+    }
+
+    /**
+     * A call rang and nobody answered. Shown only while uplink is not in front — in front, the
+     * call screen was the notice — and folded into one notification that counts, cleared the
+     * next time the app is opened.
+     */
+    void missedCall(final String who) {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (inFront) {
+                    return;
+                }
+                missed++;
+                NotificationManager notifications = getSystemService(NotificationManager.class);
+                NotificationChannel channel = new NotificationChannel(
+                        MISSED_CHANNEL, "Missed calls", NotificationManager.IMPORTANCE_DEFAULT);
+                notifications.createNotificationChannel(channel);
+                Intent open = new Intent(UplinkApplication.this, UplinkActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                PendingIntent tap = PendingIntent.getActivity(UplinkApplication.this, REQUEST_MISSED, open,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                Intent dismissing = new Intent(ACTION_MISSED_DISMISSED).setPackage(getPackageName());
+                PendingIntent dismissed = PendingIntent.getBroadcast(UplinkApplication.this, REQUEST_MISSED,
+                        dismissing, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                Notification notification = new Notification.Builder(UplinkApplication.this, MISSED_CHANNEL)
+                        .setSmallIcon(drawable("notification"))
+                        .setContentTitle(missed == 1 ? "Missed call" : missed + " missed calls")
+                        .setContentText(missed == 1 ? who : "Latest from " + who)
+                        .setCategory(Notification.CATEGORY_MISSED_CALL)
+                        .setContentIntent(tap)
+                        .setDeleteIntent(dismissed)
+                        .setAutoCancel(true)
+                        .build();
+                notifications.notify(MISSED_NOTIFICATION_ID, notification);
             }
         });
     }
@@ -405,10 +499,18 @@ public class UplinkApplication extends Application {
         }
     }
 
-    /** Declining needs no window: it goes straight to the endpoint. */
+    /**
+     * Declining needs no window: it goes straight to the endpoint. The missed-call notification
+     * being swiped away comes here too, so the next one counts from zero rather than from calls
+     * the user has already dismissed. Both are ours alone; the receiver is not exported.
+     */
     private final BroadcastReceiver ringActions = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (ACTION_MISSED_DISMISSED.equals(intent.getAction())) {
+                missed = 0;
+                return;
+            }
             stopRinging();
             long handle = core;
             if (handle != 0) {
@@ -426,6 +528,11 @@ public class UplinkApplication extends Application {
         public void onActivityResumed(Activity activity) {
             inFront = true;
             showRing();
+            // Opening the app is where the Calls tab shows them; the count starts again.
+            if (missed > 0) {
+                missed = 0;
+                getSystemService(NotificationManager.class).cancel(MISSED_NOTIFICATION_ID);
+            }
         }
 
         @Override

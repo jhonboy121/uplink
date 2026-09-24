@@ -69,6 +69,8 @@ slint::slint! {
         tint: int,
         favourite: bool,
         selected: bool,
+        // Just added: the row shimmers for a moment, so the eye lands on it.
+        fresh: bool,
     }
 
     // A relay the endpoint may use. `host` is what settings store, not what is shown: two relays
@@ -101,6 +103,7 @@ slint::slint! {
         out property <color> beacon: dark ? #58B6FF : #0A6FC2;
         // Rows are separated by a hairline, not by gaps between cards.
         out property <color> hairline: dark ? #2631408C : #E7ECF2;
+        out property <length> hairline-width: 1px;
 
         // Fixed: a call screen is dark in either theme.
         out property <color> video: #101720;
@@ -165,6 +168,15 @@ slint::slint! {
         out property <length> splash-gap: 20px;
         out property <length> splash-foot: 32px;
         out property <length> group-head: 30px;
+        // The copy-key button: a full touch target around a key-sized icon, and how long its
+        // check mark stays before it offers to copy again.
+        out property <length> copy-target: 48px;
+        out property <duration> copied-for: 1500ms;
+        // A just-added contact: a faint tint with a band of accent sweeping across it.
+        out property <duration> shimmer-sweep: 1400ms;
+        out property <float> shimmer-band: 0.45;
+        out property <color> shimmer-tint: beacon.with-alpha(0.08);
+        out property <color> shimmer-glint: beacon.with-alpha(0.22);
         // Settings: rows on inset surface groups, each with an icon tile. Drawn at 360dp in the
         // settings canvas, so these are dp as they stand.
         out property <length> setting-height: 68px;
@@ -677,6 +689,8 @@ slint::slint! {
 
     component PeoplePage inherits Rectangle {
         in property <[ContactItem]> contacts;
+        // Offset of a row to bring into view, from the top of the list; negative for none.
+        in property <length> reveal: -1px;
         in property <length> top-inset;
         in property <bool> online;
         in property <bool> selecting;
@@ -775,10 +789,27 @@ slint::slint! {
                     }
                 }
             }
-            if root.contacts.length > 0 : ScrollView {
+            if root.contacts.length > 0 : scroller := ScrollView {
                 vertical-stretch: 1;
                 // A finger drags the list itself; without this only the scrollbar moves it.
                 mouse-drag-pan-enabled: true;
+                // A row asked to be shown is centred when it can be, and the list stops at its
+                // ends when it cannot. Both on arrival and on a change while the page is up.
+                property <length> reveal: root.reveal;
+                function show-revealed() {
+                    if (self.reveal >= 0) {
+                        self.content-y = -clamp(
+                            self.reveal - (self.visible-height - Theme.row-height) / 2,
+                            0px,
+                            max(0px, self.content-height - self.visible-height));
+                    }
+                }
+                // Also once the layout has measured the rows: at `init` the content has no height
+                // yet, so the clamp above pins the list to the top and the reveal goes nowhere.
+                init => { self.show-revealed(); }
+                changed reveal => { self.show-revealed(); }
+                changed content-height => { self.show-revealed(); }
+                changed visible-height => { self.show-revealed(); }
                 VerticalLayout {
                     alignment: start;
                     // A flat list: rows are divided by a hairline, never boxed. The hairline is
@@ -799,7 +830,8 @@ slint::slint! {
                         }
                         // A hairline divides rows within a group; a heading already divides groups.
                         if index > 0 && contact.header == "" : Rectangle {
-                            height: 1px;
+                            // Rust counts this too, to know where a row sits.
+                            height: Theme.hairline-width;
                             background: Theme.hairline;
                         }
                         Rectangle {
@@ -823,6 +855,22 @@ slint::slint! {
                             accessible-role: button;
                             accessible-label: contact.name;
                             accessible-action-default => { root.open(contact.id); }
+                            // Under the row's contents, over its background.
+                            if contact.fresh : Rectangle {
+                                clip: true;
+                                background: Theme.shimmer-tint;
+                                // 0 to 1 across each sweep, for as long as the row is fresh.
+                                property <float> phase: mod(animation-tick() / 1ms, Theme.shimmer-sweep / 1ms)
+                                    / (Theme.shimmer-sweep / 1ms);
+                                Rectangle {
+                                    width: parent.width * Theme.shimmer-band;
+                                    x: -self.width + (parent.width + self.width) * parent.phase;
+                                    background: @linear-gradient(90deg,
+                                        Theme.shimmer-glint.with-alpha(0) 0%,
+                                        Theme.shimmer-glint 50%,
+                                        Theme.shimmer-glint.with-alpha(0) 100%);
+                                }
+                            }
                             HorizontalLayout {
                                 padding-left: Theme.edge;
                                 padding-right: Theme.edge;
@@ -940,6 +988,8 @@ slint::slint! {
         in property <string> key;
         in property <length> keyboard;
         in-out property <string> name;
+        // Why the last Add did not take, said under the field it concerns. Cleared by editing.
+        in-out property <string> error;
         callback add(string);
         callback cancel();
         background: #000000CC;
@@ -984,11 +1034,20 @@ slint::slint! {
                 LineEdit {
                     placeholder-text: "Their name";
                     text <=> root.name;
+                    edited => { root.error = ""; }
                     accepted => {
                         if (root.name != "") {
                             root.add(root.name);
                         }
                     }
+                }
+                if root.error != "" : Text {
+                    text: root.error;
+                    color: Theme.end;
+                    font-size: 0.8125rem;
+                    wrap: word-wrap;
+                    accessible-role: text;
+                    accessible-label: root.error;
                 }
                 Wide {
                     text: "Add";
@@ -1454,8 +1513,21 @@ slint::slint! {
         callback scan(bool);
         callback pick();
         callback share();
+        callback copy();
         callback add(string, string);
         background: Theme.ground;
+
+        // Shows the check for a moment after a copy, then goes back to offering another.
+        property <bool> copied: false;
+        function copy-key() {
+            root.copy();
+            root.copied = true;
+        }
+        Timer {
+            interval: Theme.copied-for;
+            running: root.copied;
+            triggered => { root.copied = false; }
+        }
 
         VerticalLayout {
             HorizontalLayout {
@@ -1528,16 +1600,46 @@ slint::slint! {
                     vertical-alignment: center;
                     wrap: word-wrap;
                 }
-                if !root.scanning : VerticalLayout {
-                    for line in root.fingerprint-lines : Text {
-                        text: line;
-                        color: Theme.muted;
-                        font-size: 0.9375rem;
-                        font-family: Theme.mono;
-                        letter-spacing: 0.6px;
-                        height: self.font-size * Theme.line-box;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                // The key, and a button that copies it: the CLI and chat both want text, not a
+                // picture. An empty box of the button's width on the other side keeps the key
+                // itself centred.
+                if !root.scanning : HorizontalLayout {
+                    alignment: center;
+                    spacing: Theme.gap;
+                    Rectangle { width: Theme.copy-target; }
+                    VerticalLayout {
+                        for line in root.fingerprint-lines : Text {
+                            text: line;
+                            color: Theme.muted;
+                            font-size: 0.9375rem;
+                            font-family: Theme.mono;
+                            letter-spacing: 0.6px;
+                            height: self.font-size * Theme.line-box;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: Theme.copy-target;
+                            height: self.width;
+                            border-radius: self.width / 2;
+                            background: copy-touch.pressed ? Theme.surface : transparent;
+                            accessible-role: button;
+                            accessible-label: root.copied ? "Key copied" : "Copy key";
+                            accessible-action-default => { root.copy-key(); }
+                            copy-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.copy-key(); }
+                            }
+                            Image {
+                                source: root.copied ? @image-url("icons/check.svg") : @image-url("icons/copy.svg");
+                                width: Theme.key-icon;
+                                height: self.width;
+                                colorize: root.copied ? Theme.answer : Theme.beacon;
+                            }
+                        }
                     }
                 }
 
@@ -2193,6 +2295,10 @@ slint::slint! {
         in-out property <bool> speaker-on: true;
         in-out property <string> peer-key;
         in-out property <string> new-name;
+        in-out property <string> add-error;
+        // Where in the People list a just-added contact sits, so the list opens on it; negative
+        // when there is nothing to show.
+        in property <length> contacts-reveal: -1px;
         in property <CallState> call-state: CallState.idle;
 
         callback call(string);
@@ -2207,6 +2313,10 @@ slint::slint! {
         callback remove-contact(string);
         callback pick-key();
         callback share-key();
+        callback copy-key();
+        // A key read off the camera, handed over from the decoding thread to be offered or
+        // said to be known already. Rust's own; no markup invokes it.
+        callback key-found(string);
         callback share-diagnostics();
         // Which relays the endpoint may use. The sheet edits this model in place; saving writes
         // it and rebinds, cancelling throws it away and reads the stored set back.
@@ -2319,6 +2429,7 @@ slint::slint! {
                         top-inset: root.safe-area-insets.top;
                         online: root.online;
                         contacts: root.contacts;
+                        reveal: root.contacts-reveal;
                         selecting: root.selecting;
                         selected-count: root.selected-count;
                         call(id) => { root.call(id); }
@@ -2347,6 +2458,7 @@ slint::slint! {
                         scan(on) => { root.scan(on); }
                         pick => { root.pick-key(); }
                         share => { root.share-key(); }
+                        copy => { root.copy-key(); }
                         add(name, key) => { root.add-contact(name, key); }
                     }
                     if root.screen == Screen.settings : SettingsPage {
@@ -2454,29 +2566,6 @@ slint::slint! {
                 }
             }
 
-            // Nothing here happens on the tap that asked for it.
-            if root.confirming != Confirm.none : ConfirmSheet {
-                title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
-                    : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
-                    : "Remove " + root.open-contact-name + "?";
-                body: root.confirming == Confirm.clear-calls
-                    ? "Every call is forgotten. It does not affect your contacts."
-                    : "Their key goes with them. You would need it again to call them, and they can still call you.";
-                confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
-                confirm => {
-                    if (root.confirming == Confirm.clear-calls) {
-                        root.clear-calls();
-                    } else if (root.confirming == Confirm.remove-selected) {
-                        root.remove-selected();
-                    } else {
-                        root.remove-contact(root.open-contact-id);
-                        root.open-contact-id = "";
-                    }
-                    root.confirming = Confirm.none;
-                }
-                cancel => { root.confirming = Confirm.none; }
-            }
-
             if root.editing-relays : RelaySheet {
                 relays: root.relays;
                 custom-relays: root.custom-relays;
@@ -2501,10 +2590,12 @@ slint::slint! {
                 key: root.peer-key;
                 keyboard: root.virtual-keyboard-size.height;
                 name <=> root.new-name;
+                error <=> root.add-error;
                 add(name) => { root.add-contact(name, root.peer-key); }
                 cancel => {
                     root.peer-key = "";
                     root.new-name = "";
+                    root.add-error = "";
                 }
             }
 
@@ -2523,6 +2614,31 @@ slint::slint! {
                 rename(name) => { root.rename-contact(root.open-contact-id, name); }
                 remove => { root.confirming = Confirm.remove-contact; }
                 close => { root.open-contact-id = ""; }
+            }
+
+            // Nothing here happens on the tap that asked for it. Above every page and sheet that
+            // can ask, since later siblings draw on top: under the contact page it was invisible,
+            // and closing the page to find it cleared the contact it was meant to remove.
+            if root.confirming != Confirm.none : ConfirmSheet {
+                title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
+                    : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
+                    : "Remove " + root.open-contact-name + "?";
+                body: root.confirming == Confirm.clear-calls
+                    ? "Every call is forgotten. It does not affect your contacts."
+                    : "Their key goes with them. You would need it again to call them, and they can still call you.";
+                confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
+                confirm => {
+                    if (root.confirming == Confirm.clear-calls) {
+                        root.clear-calls();
+                    } else if (root.confirming == Confirm.remove-selected) {
+                        root.remove-selected();
+                    } else {
+                        root.remove-contact(root.open-contact-id);
+                        root.open-contact-id = "";
+                    }
+                    root.confirming = Confirm.none;
+                }
+                cancel => { root.confirming = Confirm.none; }
             }
 
             // Nothing behind this is reachable until all three are granted.

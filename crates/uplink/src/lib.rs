@@ -41,7 +41,7 @@ use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
 use uplink_core::relays::{self, Relays};
 use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Command, EndReason, Event};
+use uplink_core::node::{Command, Event};
 use uplink_core::EndpointId;
 
 use crate::core::Core;
@@ -79,6 +79,8 @@ const QR_PIXELS: usize = 512;
 const SHARE_CAPTION: &str = "Scan to connect";
 const SHARE_TITLE: &str = "My uplink code";
 const SHARE_FILE: &str = "identity.png";
+/// What Android calls the copied key in its own confirmation.
+const COPY_LABEL: &str = "uplink key";
 const DIAGNOSTICS_FILE: &str = "uplink-logs.tar.gz";
 const DIAGNOSTICS_TITLE: &str = "uplink diagnostics";
 /// Shown on the call screen when the codecs did not come up: the call runs on audio, and saying
@@ -98,6 +100,8 @@ const VIDEO: VideoConfig = VideoConfig {
     keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
 };
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
+const FRESH_FOR: Duration = Duration::from_millis(3200);
 const PERCENT: f64 = 100.0;
 
 #[derive(Default)]
@@ -137,9 +141,12 @@ struct State {
     /// Contacts ticked for removal. Kept here rather than in the model, which is rebuilt whenever
     /// the list changes and would drop the ticks with it.
     selected: FxHashSet<EndpointId>,
-    /// The call in flight, so its outcome is known by the time it ends.
-    pending: Option<PendingCall>,
+    /// For the on-screen timer only; the call log is the core's to write.
     connected_at: Option<Instant>,
+    /// This phone's own key, which is never anyone to call or save.
+    me: EndpointId,
+    /// The contact just added, shimmering in the People list until [`FRESH_FOR`] has passed.
+    fresh: Option<EndpointId>,
     stats: Arc<FrameStats>,
     /// Commands to the endpoint, which this window borrows rather than owns — the endpoint
     /// belongs to the process and outlives every window it is shown in.
@@ -219,7 +226,7 @@ impl State {
     /// never expose. Only the luma plane is read — that is already the greyscale a decoder wants.
     fn open_scanner(&self) -> Result<ImageReader> {
         let mut reader = ImageReader::new(SCAN_WIDTH, SCAN_HEIGHT, ImageFormat::YUV_420_888, SCAN_MAX_IMAGES)?;
-        let (ui, runtime, busy) = (self.ui.clone(), self.runtime.clone(), Arc::clone(&self.scan_busy));
+        let (ui, runtime, busy, me) = (self.ui.clone(), self.runtime.clone(), Arc::clone(&self.scan_busy), self.me);
         reader.set_image_listener(Box::new(move |reader| {
             // The callback must stay quick and must never outlive the reader: it only copies the
             // frame, and decoding happens on a worker.
@@ -236,20 +243,24 @@ impl State {
                         // silent; a code that is not ours is worth saying, once, and scanning
                         // carries on so the next code still gets a chance.
                         let Some(text) = found else { return };
-                        let Some(key) = peer_key(&text) else {
-                            let _ = ui.upgrade_in_event_loop(|ui| {
-                                if ui.get_toast().is_empty() {
-                                    toast(&ui, "That code is not an uplink key");
-                                }
-                            });
-                            return;
+                        let key = match peer_key(&text, &me) {
+                            Ok(key) => key,
+                            Err(unusable) => {
+                                let _ = ui.upgrade_in_event_loop(move |ui| {
+                                    if ui.get_toast().is_empty() {
+                                        toast(&ui, unusable.message());
+                                    }
+                                });
+                                return;
+                            }
                         };
                         tracing::info!("scanned a key");
                         // `invoke_scan` runs the same handler the button does, so the camera
-                        // rebuilds without this reader.
+                        // rebuilds without this reader. The contacts live on the UI thread, so
+                        // whether this key is already one of them is decided there.
                         let _ = ui.upgrade_in_event_loop(move |ui| {
-                            ui.set_peer_key(key.to_string().into());
                             ui.invoke_scan(false);
+                            ui.invoke_key_found(key.to_string().into());
                         });
                     });
                 }
@@ -352,6 +363,15 @@ fn copy_luma(reader: &ImageReader) -> Result<Option<ScanFrame>> {
     Ok(Some(ScanFrame { luma: image.plane_data(LUMA_PLANE)?.to_vec(), width, height, stride }))
 }
 
+/// A key read from a code: named in the sheet if it is new, and said to be known if it is not —
+/// before the sheet, not as an error after it, since no name typed there could fix it.
+fn offer_key(state: &Rc<RefCell<State>>, ui: &App, key: EndpointId) {
+    match with_contacts(state, |contacts| contacts.name_of(&key).map(str::to_owned)).flatten() {
+        Some(name) => toast(ui, format!("{name} is already in your contacts")),
+        None => ui.set_peer_key(key.to_string().into()),
+    }
+}
+
 /// Asks for an image and reads the key out of it, for a code that arrived over chat.
 fn pick_key(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     let (state, platform) = (Rc::clone(state), Rc::clone(platform));
@@ -360,9 +380,9 @@ fn pick_key(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
         let Some(ui) = state.try_borrow().ok().and_then(|s| s.ui.upgrade()) else { return };
         match picked {
             Ok(Some(image)) => match qr::decode_luma(&image.pixels, image.width, image.height, image.width) {
-                Some(text) => match peer_key(&text) {
-                    Some(key) => ui.set_peer_key(key.to_string().into()),
-                    None => toast(&ui, "That code is not an uplink key"),
+                Some(text) => match peer_key(&text, &state.borrow().me) {
+                    Ok(key) => offer_key(&state, &ui, key),
+                    Err(unusable) => toast(&ui, unusable.message()),
                 },
                 None => toast(&ui, "No code in that image"),
             },
@@ -506,6 +526,51 @@ fn ratio(part: usize, whole: usize) -> f32 {
 }
 
 /// Contacts for the list, in the order they were added.
+/// Where the fresh row's top sits in the People list, in logical pixels, summed the way the
+/// markup stacks it: a heading above the first row of a group, a hairline above any other row.
+fn fresh_offset(ui: &App, items: &[ContactItem]) -> Option<f32> {
+    let theme = ui.global::<Theme>();
+    let (row, heading, hairline) = (theme.get_row_height(), theme.get_group_head(), theme.get_hairline_width());
+    let mut y = 0.0;
+    for (index, item) in items.iter().enumerate() {
+        y += if !item.header.is_empty() {
+            heading
+        } else if index > 0 {
+            hairline
+        } else {
+            0.0
+        };
+        if item.fresh {
+            return Some(y);
+        }
+        y += row;
+    }
+    None
+}
+
+/// A contact was just added: open People on it, and let it shimmer for a moment.
+fn show_added(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
+    with_state(state, |s| s.fresh = Some(peer));
+    show_contacts(state, ui);
+    ui.set_screen(Screen::People);
+    let (state, weak) = (Rc::clone(state), ui.as_weak());
+    Timer::single_shot(FRESH_FOR, move || {
+        // Only if it is still the same one: a second add in the meantime has its own timer.
+        let cleared = with_state_value(&state, |s| {
+            let same = s.fresh == Some(peer);
+            if same {
+                s.fresh = None;
+            }
+            same
+        });
+        if cleared == Some(true)
+            && let Some(ui) = weak.upgrade()
+        {
+            show_contacts(&state, &ui);
+        }
+    });
+}
+
 fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     let items = with_state_value(state, |s| {
         // The store already orders favourites first, so a group starts wherever the flag changes.
@@ -529,11 +594,13 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
                     tint: 0,
                     favourite: contact.favourite,
                     selected: selected.contains(&contact.id),
+                    fresh: s.fresh == Some(contact.id),
                 }
             })
             .collect::<Vec<_>>()
     });
     if let Some(items) = items {
+        ui.set_contacts_reveal(fresh_offset(ui, &items).unwrap_or(-1.0));
         ui.set_contacts(slint::ModelRc::new(slint::VecModel::from(items)));
     }
     let count = with_state_value(state, |s| i32::try_from(s.selected.len()).unwrap_or(i32::MAX));
@@ -644,35 +711,6 @@ fn clock_of(at: SystemTime) -> String {
     };
     let minutes_today = (since_epoch.as_secs() / 60) % (24 * 60);
     format!("{:02}:{:02}", minutes_today / 60, minutes_today % 60)
-}
-
-/// A call from the moment it starts until it ends, which is when the log can say what it was.
-struct PendingCall {
-    peer: EndpointId,
-    incoming: bool,
-    at: SystemTime,
-    answered: bool,
-}
-
-/// What an ending means, given which way the call went and whether it was ever picked up.
-const fn outcome_of(reason: &EndReason, call: &PendingCall) -> Outcome {
-    match reason {
-        EndReason::Busy | EndReason::Failed(_) => Outcome::Failed,
-        EndReason::DialTimeout => Outcome::Unreachable,
-        EndReason::NoAnswer => Outcome::NoAnswer,
-        EndReason::Declined => Outcome::Declined,
-        EndReason::Rejected => Outcome::Rejected,
-        EndReason::LocalHangup | EndReason::RemoteHangup => {
-            if call.answered {
-                Outcome::Answered
-            } else if call.incoming {
-                // They rang off, or we never picked up: either way nobody spoke.
-                Outcome::Missed
-            } else {
-                Outcome::Cancelled
-            }
-        }
-    }
 }
 
 /// Coarse on purpose: the second line of a contact row answers "recently?", not "when exactly?".
@@ -848,6 +886,7 @@ fn went_back(ui: &App) -> bool {
     } else if !ui.get_peer_key().is_empty() {
         ui.set_peer_key(Default::default());
         ui.set_new_name(Default::default());
+        ui.set_add_error(Default::default());
     } else if !ui.get_open_contact_id().is_empty() {
         ui.set_open_contact_id(Default::default());
     } else if ui.get_scanning() {
@@ -1171,8 +1210,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         contacts,
         log,
         selected: FxHashSet::default(),
-        pending: None,
         connected_at: None,
+        me: identity,
+        fresh: None,
         stats: Arc::default(),
         core: None,
     }));
@@ -1479,7 +1519,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
-    ui.on_call(move |key| match EndpointId::from_str(key.trim()) {
+    ui.on_call(move |key| match peer_key(&key, &identity) {
         Ok(peer) => {
             if send_call_command(&s, Command::Call(peer), &weak)
                 && let Some(ui) = weak.upgrade()
@@ -1490,7 +1530,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 set_peer(&ui, &name.flatten().unwrap_or_else(|| short(&peer)));
             }
         }
-        Err(e) => set_call_status(&weak, format!("that is not a key: {e}")),
+        Err(unusable) => {
+            if let Some(ui) = weak.upgrade() {
+                toast(&ui, unusable.message());
+            }
+        }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_accept(move || {
@@ -1537,18 +1581,30 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
-        let outcome = EndpointId::from_str(key.trim())
-            .map_err(|e| format!("that is not a key: {e}"))
-            .and_then(|id| save_contact(&s, |contacts| contacts.add(name.trim(), id)));
-        match outcome {
-            Ok(()) => {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_peer_key(Default::default());
-                    ui.set_new_name(Default::default());
-                    show_contacts(&s, &ui);
+        let Some(ui) = weak.upgrade() else { return };
+        let outcome = peer_key(&key, &identity)
+            .map_err(|unusable| unusable.message().to_owned())
+            .and_then(|id| {
+                // The same key is a different mistake from the same name, and the store's one
+                // error for both cannot say which: a new name would not fix this one.
+                match with_contacts(&s, |contacts| contacts.name_of(&id).map(str::to_owned)).flatten() {
+                    Some(saved) => Err(format!("Already saved as {saved}")),
+                    None => Ok(id),
                 }
+            })
+            .and_then(|id| save_contact(&s, |contacts| contacts.add(name.trim(), id)).map(|()| id));
+        match outcome {
+            Ok(id) => {
+                ui.set_peer_key(Default::default());
+                ui.set_new_name(Default::default());
+                ui.set_add_error(Default::default());
+                show_added(&s, &ui, id);
             }
-            Err(e) => set_call_status(&weak, e),
+            // Under the field, in the sheet that is still open: the user can fix it right there.
+            Err(e) => {
+                tracing::info!("adding a contact: {e}");
+                ui.set_add_error(e.into());
+            }
         }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
@@ -1580,6 +1636,15 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_key_found(move |key| {
+        let Some(ui) = weak.upgrade() else { return };
+        // Parsed on the scanning thread already; this only fails if the markup ever sends junk.
+        match EndpointId::from_str(&key) {
+            Ok(key) => offer_key(&s, &ui, key),
+            Err(e) => tracing::warn!("a found key that does not parse: {e}"),
+        }
+    });
     let (p, weak, dir) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf());
     let handle = runtime.clone();
     ui.on_share_key(move || {
@@ -1589,6 +1654,13 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         // the runtime's work, not this tap's.
         let card = write_identity_card(dir.clone(), ui.get_my_id().to_string());
         share_when_written(&handle, &p, &weak, SHARE_FILE, SHARE_TITLE, "Could not share your code", card);
+    });
+    let (p, weak) = (Rc::clone(&platform), ui.as_weak());
+    ui.on_copy_key(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if let Err(e) = p.copy_text(COPY_LABEL, &ui.get_my_id()) {
+            toast(&ui, format!("Could not copy your key: {e}"));
+        }
     });
     let (p, weak, dir, handle) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf(), runtime.clone());
     ui.on_share_diagnostics(move || {
@@ -1670,7 +1742,10 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             // Counted every second, written every few: the log is read by whoever is fixing a
             // call that has already happened, and a line a second would bury it.
             let text = stats_text(state, secs, cpu_percent);
-            if ticks.is_multiple_of(STATS_LOG_EVERY) {
+            // Only while there is something to measure: idle, it was a line every five seconds
+            // saying nothing, all day, into a log that rolls by size.
+            let busy = state.call.is_some() || state.session.is_some();
+            if busy && ticks.is_multiple_of(STATS_LOG_EVERY) {
                 tracing::info!("{text}");
             }
             let route = state.call.as_ref().map_or(Route::Unknown, |call| call.stats.route());
@@ -1705,10 +1780,33 @@ fn toast(ui: &App, message: impl Into<String>) {
     ui.set_toast(message.into());
 }
 
-/// A scanned or opened code only counts if it is actually one of our keys; anything else is some
-/// other app's QR and saying so beats silently filling the field with it.
-fn peer_key(text: &str) -> Option<EndpointId> {
-    EndpointId::from_str(text.trim()).ok()
+/// Why a code cannot be someone to call.
+#[derive(Clone, Copy, Debug)]
+enum Unusable {
+    /// Some other app's QR, or text that is not a key at all.
+    NotAKey,
+    /// This phone's own identity. Calling yourself is not a feature, and a contact that is you
+    /// would ring nothing.
+    Yours,
+}
+
+impl Unusable {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::NotAKey => "That code is not an uplink key",
+            Self::Yours => "That's your own code. Scan theirs instead",
+        }
+    }
+}
+
+/// A scanned, opened or pasted code only counts if it is one of our keys and not this phone's
+/// own; saying which beats silently filling the field with it.
+fn peer_key(text: &str, me: &EndpointId) -> Result<EndpointId, Unusable> {
+    let key = EndpointId::from_str(text.trim()).map_err(|_| Unusable::NotAKey)?;
+    if key == *me {
+        return Err(Unusable::Yours);
+    }
+    Ok(key)
 }
 
 fn set_call_status(ui: &slint::Weak<App>, status: String) {
@@ -1796,46 +1894,14 @@ async fn handle_node_events(
             let name = with_contacts(&state, |contacts| contacts.name_of(&peer).map(str::to_owned));
             set_peer(&ui, &name.flatten().unwrap_or_else(|| short(&peer)));
         }
-        // A call starts here and is only written to the log once it ends, because until then
-        // there is no outcome to write.
         match &event {
-            Event::Dialing { peer } | Event::Incoming { peer } => {
-                let incoming = matches!(event, Event::Incoming { .. });
-                // Whatever went wrong last time was about last time.
-                ui.set_call_trouble(Default::default());
+            // Whatever went wrong last time was about last time.
+            Event::Dialing { .. } | Event::Incoming { .. } => ui.set_call_trouble(Default::default()),
+            // The core has already written the call and stamped the contact; read both back.
+            Event::Ended { .. } => {
                 with_state(&state, |s| {
-                    s.pending = Some(PendingCall { peer: *peer, incoming, at: SystemTime::now(), answered: false });
-                });
-            }
-            Event::Connected { .. } => {
-                with_state(&state, |s| {
-                    if let Some(call) = s.pending.as_mut() {
-                        call.answered = true;
-                    }
-                });
-            }
-            Event::Ended { reason, .. } => {
-                let reason = reason.clone();
-                with_state(&state, |s| {
-                    let Some(call) = s.pending.take() else { return };
-                    let duration = s.connected_at.map(|since| since.elapsed());
-                    let record = CallRecord {
-                        peer: call.peer,
-                        incoming: call.incoming,
-                        outcome: outcome_of(&reason, &call),
-                        at: call.at,
-                        duration: call.answered.then_some(duration).flatten(),
-                    };
-                    if let Err(e) = s.log.record(&record) {
-                        tracing::warn!("recording the call: {e}");
-                    }
-                    // A contact's second line is the same fact, kept beside it so the list does
-                    // not have to query the log per row.
-                    if record.outcome == Outcome::Answered
-                        && s.contacts.contains(&call.peer)
-                        && let Err(e) = s.contacts.called(call.peer)
-                    {
-                        tracing::warn!("stamping the call: {e}");
+                    if let Err(e) = s.contacts.reload() {
+                        tracing::warn!("re-reading contacts: {e}");
                     }
                 });
                 show_calls(&state, &ui);

@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::params;
 
 use crate::db::Db;
+use crate::node::EndReason;
 use crate::{EndpointId, Error};
 /// Enough to look back over, and small enough that the screen never pages.
 const KEEP: i64 = 500;
@@ -32,6 +33,28 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// How a call that ended for `reason` goes in the log. A hang-up means different things
+    /// depending on which way the call went and whether anyone picked up; nothing else does.
+    pub const fn of(reason: &EndReason, incoming: bool, answered: bool) -> Self {
+        match reason {
+            EndReason::Busy | EndReason::Failed(_) => Self::Failed,
+            EndReason::DialTimeout => Self::Unreachable,
+            EndReason::NoAnswer => Self::NoAnswer,
+            EndReason::Declined => Self::Declined,
+            EndReason::Rejected => Self::Rejected,
+            EndReason::LocalHangup | EndReason::RemoteHangup => {
+                if answered {
+                    Self::Answered
+                } else if incoming {
+                    // They rang off, or their ring timed out: either way nobody spoke.
+                    Self::Missed
+                } else {
+                    Self::Cancelled
+                }
+            }
+        }
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
             Self::Answered => "answered",
@@ -168,6 +191,15 @@ mod tests {
 
     fn record(incoming: bool, outcome: Outcome, at: SystemTime) -> CallRecord {
         CallRecord { peer: SecretKey::generate().public(), incoming, outcome, at, duration: None }
+    }
+
+    /// The caller giving up is a hang-up on our side of the wire, and it is still a missed call.
+    #[test]
+    fn a_hang_up_reads_by_direction_and_answer() {
+        assert_eq!(Outcome::of(&EndReason::RemoteHangup, true, false), Outcome::Missed);
+        assert_eq!(Outcome::of(&EndReason::LocalHangup, false, false), Outcome::Cancelled);
+        assert_eq!(Outcome::of(&EndReason::RemoteHangup, true, true), Outcome::Answered);
+        assert_eq!(Outcome::of(&EndReason::Declined, true, false), Outcome::Declined);
     }
 
     #[test]

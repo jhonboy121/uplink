@@ -55,8 +55,8 @@ impl Contacts {
     }
 
     /// Favourites first, then whoever was called most recently, then by name — which is the order
-    /// the list is read in.
-    fn reload(&mut self) -> Result<(), Error> {
+    /// the list is read in. Public for a copy whose table another writer has changed under it.
+    pub fn reload(&mut self) -> Result<(), Error> {
         self.list = self.db.with(|db| {
             let mut statement = db.prepare(
                 "SELECT id, name, advertised, picture, favourite, last_called FROM contacts

@@ -154,6 +154,14 @@ run: apk
 logcat:
     adb logcat -v time -s uplink:V AndroidRuntime:E DEBUG:F
 
+[doc("Add COUNT random contacts to the app on the device over adb (debug build; restarts the app)")]
+seed count="20":
+    python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} seed {{count}}
+
+[doc("Save KEY as a contact on the device, e.g. the one the CLI prints (debug build; restarts the app)")]
+add-contact key name="CLI":
+    python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} add {{key}} "{{name}}"
+
 [doc('''
 Run the host CLI (uplink-core over iroh), e.g. `just cli --dir /tmp/a listen`.
 Two instances with different --dir can call each other.

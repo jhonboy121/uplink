@@ -131,8 +131,25 @@ impl AppContext {
         })
     }
 
+    /// Stops whatever is sounding for a call: the ringtone of an incoming one, or the ringback of
+    /// an outgoing one.
     pub fn stop_ringing(&self) -> Result<(), Error> {
         self.call(jni_str!("stopRinging"))
+    }
+
+    /// The tone a caller hears while the other phone rings, from our offer reaching them until
+    /// they answer or the call ends.
+    pub fn ringback(&self) -> Result<(), Error> {
+        self.call(jni_str!("ringback"))
+    }
+
+    /// A notification for a call nobody answered, when uplink is not in front to show it.
+    pub fn missed_call(&self, who: &str) -> Result<(), Error> {
+        self.with(|env, application| {
+            let who = env.new_string(who)?;
+            env.call_method(application, jni_str!("missedCall"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&who)])?;
+            Ok(())
+        })
     }
 
     /// A no-argument `void` method of the Application.
@@ -495,6 +512,20 @@ impl Platform {
             return Err(e);
         }
         rx.await.map_err(|_| Error::RequestAbandoned)
+    }
+
+    /// Puts text on the clipboard, under a label Android shows in its own copy confirmation.
+    pub fn copy_text(&self, label: &str, text: &str) -> Result<(), Error> {
+        self.with_context(|env, context| {
+            let (label, text) = (env.new_string(label)?, env.new_string(text)?);
+            env.call_method(
+                context,
+                jni_str!("copyText"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                &[JValue::Object(&label), JValue::Object(&text)],
+            )?;
+            Ok(())
+        })
     }
 
     /// Offers a file already written into [`Self::share_dir`] to the share sheet.

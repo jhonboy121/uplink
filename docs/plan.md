@@ -568,6 +568,48 @@ default); keep disk usage lean. Avoid build scripts.
   Groups, in order: reachability (it is what silently costs calls), appearance, call and network,
   diagnostics. The copy is shorter to fit beside the tiles: "Left to right" became LTR, and an
   unrestricted battery reads Allowed, like the lock-screen row.
+- **2026-09-24**: **the core keeps the call log, rings back, and refuses your own key.**
+  - **Every call is written by the core**, window or not. Its event loop notes a call on
+    Dialing or Incoming, marks it answered on Connected, and writes it on Ended *before* passing
+    the event on, so a window that re-reads finds it; the window keeps only the on-screen timer
+    and reloads its cached contacts. The outcome mapping moved to `calls::Outcome::of`, with a
+    test. A caller giving up is `RemoteHangup` on our side, which is what makes it Missed.
+  - **Missed-call notification** while uplink is not in front: one notification that counts
+    ("3 missed calls", "Latest from …"). The count resets when the app is opened, and when the
+    notification is swiped away or cleared (a delete intent to the Application's own receiver).
+  - **Ringback** from `Ringing` (our offer reached them) until Connected or Ended: the
+    platform's `ToneGenerator.TONE_SUP_RINGTONE`, stopped with the ringtone. **Not through AAudio,
+    as planned:** before a call connects no stream is open and the phone is not in call mode.
+    It plays on the **media stream**, because the voice-call stream outside call mode comes out
+    of the earpiece of a phone held at arm's length.
+  - **Your own key is refused** wherever a key comes in (camera scan, picked image, adding a
+    contact, calling) with "That's your own code. Scan theirs instead", distinct from "not an
+    uplink key".
+- **2026-09-24**: **adding someone lands on them.**
+  - **Errors are inline in the naming sheet**, under the field, and clear as you type. They used
+    to go to the call screen's status line, where nothing adding a contact could see them. A key
+    already saved says "Already saved as …", which a new name would not fix; a name clash keeps
+    the store's own message.
+  - **After Add**, the sheet closes, People opens, and the new row **shimmers** for 3.2 s: a
+    faint accent tint with a band sweeping across (`animation-tick`, 1.4 s a sweep). Rust
+    computes the row's offset the way the markup stacks it (a heading above a group's first row,
+    a `hairline-width` hairline above any other), and the list centres that row, clamped to its
+    ends. Nothing honours reduced motion yet; when something does, the shimmer should become the
+    tint alone.
+  - **Connect has a copy button** beside the key, which turns into a check for 1.5 s. Android's
+    `ClipboardManager`, since Slint has no public clipboard; the key is public, so it is not
+    marked sensitive and Android's own confirmation may show it.
+  - **`just seed [count]` and `just add-contact <key> [name]`** (`tools/devdb/devdb.py`, stdlib
+    only) edit the phone's database over adb on a debug build: stop the app, pull the database
+    and its WAL, edit, fold the WAL in, push, relaunch. Seeded keys are real Ed25519 points, since
+    iroh refuses random bytes about half the time. `add-contact` is for the CLI, which prints
+    a key and draws no code to scan.
+  - **A key already saved is a toast** when it is scanned or opened ("… is already in your
+    contacts"), not an error after naming it. The People list re-applies its reveal once the
+    layout has measured the rows: at `init` the content has no height, and the clamp pinned it to
+    the top. **The confirm sheet sits above the contact page**: beneath it, Remove showed nothing,
+    and closing the page to find the sheet cleared the contact it was meant to remove. The idle
+    stats line (every 5 s, all day) is only logged while a call or the camera is up.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
