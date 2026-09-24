@@ -16,7 +16,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
-use uplink_core::node::{Command, Event, Network, Node};
+use uplink_core::node::{Behind, Command, EndReason, Event, Network, Node};
 use uplink_core::relays::Relays;
 use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, identity, runtime};
@@ -24,6 +24,8 @@ use uplink_core::{EndpointId, identity, runtime};
 // mp4_atom warns about every vendor box in a phone recording (`smta`, `cami`, …); not our problem.
 const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info,mp4_atom=error";
 const DEFAULT_DIR: &str = ".local/share/uplink";
+/// What this build tells the other side of a call it is, for either side's "update" notice.
+const APP: &str = concat!("cli ", env!("CARGO_PKG_VERSION"));
 
 #[derive(Parser)]
 #[command(name = "uplink", about = "uplink peer-to-peer calls from the terminal")]
@@ -127,7 +129,7 @@ async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) ->
     // has off a phone, so a relay set that cannot be tried here cannot be tried at all.
     let relays = Relays::load(&Settings::open(db)?);
     let (node, mut events) =
-        Node::start(identity::load_or_create(dir).await?, Network::Public(relays)).await?;
+        Node::start(identity::load_or_create(dir).await?, Network::Public(relays), APP).await?;
     if let Some(peer) = call {
         node.send(Command::Call(peer)).await?;
     }
@@ -216,7 +218,15 @@ fn describe(event: &Event, contacts: &Contacts) -> String {
         Event::Connected { peer, key_exchange, .. } => format!("connected to {} [{key_exchange:?}]", name(contacts, peer)),
         Event::Ended { peer, reason } => {
             let who = peer.as_ref().map_or_else(|| "unknown peer".to_owned(), |p| name(contacts, p));
-            format!("call with {who} ended: {reason:?}")
+            match reason {
+                EndReason::Incompatible { behind: Behind::Us, theirs } => {
+                    format!("cannot call {who}: update uplink (they run {theirs}, this is {APP})")
+                }
+                EndReason::Incompatible { behind: Behind::Them, theirs } => {
+                    format!("cannot call {who}: they need to update uplink (they run {theirs}, this is {APP})")
+                }
+                reason => format!("call with {who} ended: {reason:?}"),
+            }
         }
     }
 }

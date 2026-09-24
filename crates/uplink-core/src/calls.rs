@@ -29,6 +29,8 @@ pub enum Outcome {
     NoAnswer,
     /// Never reached them at all — nothing listening on that key, or no route to it.
     Unreachable,
+    /// One side needs an update before the two can call.
+    Incompatible,
     /// The network gave out, or the call failed for a reason worth reporting.
     Failed,
 }
@@ -44,6 +46,7 @@ impl Outcome {
         }
         match reason {
             EndReason::Busy | EndReason::Failed(_) => Self::Failed,
+            EndReason::Incompatible { .. } => Self::Incompatible,
             EndReason::DialTimeout => Self::Unreachable,
             EndReason::NoAnswer => Self::NoAnswer,
             EndReason::Declined => Self::Declined,
@@ -70,6 +73,7 @@ impl Outcome {
             Self::Cancelled => "cancelled",
             Self::NoAnswer => "no-answer",
             Self::Unreachable => "unreachable",
+            Self::Incompatible => "incompatible",
             Self::Failed => "failed",
         }
     }
@@ -85,6 +89,7 @@ impl Outcome {
             "cancelled" => Self::Cancelled,
             "no-answer" => Self::NoAnswer,
             "unreachable" => Self::Unreachable,
+            "incompatible" => Self::Incompatible,
             _ => Self::Failed,
         }
     }
@@ -209,10 +214,7 @@ impl CallLog {
         let seconds = record.duration.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let signed = |bytes: u64| i64::try_from(bytes).unwrap_or(i64::MAX);
         let (sent, received) = record.traffic.map(|t| (signed(t.sent), signed(t.received))).unzip();
-        // A summary that will not encode is left out rather than costing the call its row.
-        let quality = record.quality.as_ref().and_then(|quality| {
-            quality.to_bytes().inspect_err(|e| tracing::warn!("encoding a call's quality: {e}")).ok()
-        });
+        let quality = record.quality.as_ref().map(Quality::to_bytes);
         self.db.with(|db| {
             db.execute(
                 "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality)

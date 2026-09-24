@@ -4,6 +4,8 @@
     devdb.py seed 20            twenty random contacts, some favourites, some called lately
     devdb.py add <key> [name]   a key saved as a contact — the one the CLI prints, say, which
                                 has no code to scan
+    devdb.py sql "<statement>"  one statement, for a hand migration: prints any rows it returns
+                                and how many it changed
 
 Works over adb on a debug build (`run-as`), with the standard library only. The app is stopped
 first: the database is pulled whole, edited here and pushed back, and a running app would write
@@ -140,6 +142,12 @@ def add(db: sqlite3.Connection, key: str, name: str):
     print(f"saved {key[:8]}… as {name}")
 
 
+def run_sql(db: sqlite3.Connection, statement: str):
+    for row in db.execute(statement).fetchall():
+        print(row)
+    print(f"{db.total_changes} rows changed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--package", required=True)
@@ -151,6 +159,8 @@ def main():
     adding = commands.add_parser("add", help="save a key as a contact")
     adding.add_argument("key")
     adding.add_argument("name", nargs="?", default="CLI")
+    running = commands.add_parser("sql", help="run one statement")
+    running.add_argument("statement")
     args = parser.parse_args()
 
     device = Device(args.package, args.user)
@@ -162,6 +172,8 @@ def main():
         with db:
             if args.command == "seed":
                 seed(db, args.count)
+            elif args.command == "sql":
+                run_sql(db, args.statement)
             else:
                 add(db, args.key, args.name)
         # Everything into the one file: the app reopens it in WAL mode by itself.

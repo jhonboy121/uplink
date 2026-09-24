@@ -15,8 +15,11 @@ use rustls::NamedGroup;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+/// Part of [`EndReason::Incompatible`], so it is ours to hand out; the rest of the wire stays in.
+pub use crate::protocol::Behind;
 use crate::protocol::{
-    self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL, CLOSE_REJECTED, Signal,
+    self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_INCOMPATIBLE, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL,
+    CLOSE_REJECTED, Hello, Signal,
 };
 use crate::media::{self, MediaSession};
 use crate::relays::Relays;
@@ -75,6 +78,9 @@ pub enum EndReason {
     DialTimeout,
     /// Reached them and rang, but nobody picked up.
     NoAnswer,
+    /// One side needs something the other cannot do, so the two cannot call until one updates.
+    /// `theirs` is the other side's app version, for the notice that says so.
+    Incompatible { behind: Behind, theirs: String },
     Failed(String),
 }
 
@@ -89,7 +95,13 @@ pub struct Node {
 }
 
 impl Node {
-    pub async fn start(secret: SecretKey, network: Network) -> Result<(Self, mpsc::Receiver<Event>), Error> {
+    /// `app` is this build's version as people see it; it goes to the other side of every call, so
+    /// that whichever phone is too old can say what it is next to what it should be.
+    pub async fn start(
+        secret: SecretKey,
+        network: Network,
+        app: &str,
+    ) -> Result<(Self, mpsc::Receiver<Event>), Error> {
         let endpoint = bind(secret, &network).await?;
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
@@ -102,7 +114,8 @@ impl Node {
             Network::Local(lookup) => lookup.add_endpoint_info(loopback_addr(&endpoint)),
         }
         let (finished, finished_rx) = mpsc::channel(CONTROL_QUEUE);
-        let engine = Engine { endpoint, events, call: None, next_call: 0, finished, finished_rx };
+        let engine =
+            Engine { endpoint, events, call: None, next_call: 0, finished, finished_rx, hello: Hello::ours(app) };
         Ok((Self { commands, engine: tokio::spawn(engine.run(commands_rx)) }, events_rx))
     }
 
@@ -309,6 +322,8 @@ struct Engine {
     next_call: u64,
     finished: mpsc::Sender<u64>,
     finished_rx: mpsc::Receiver<u64>,
+    /// What this build says about itself in every offer and answer.
+    hello: Hello,
 }
 
 impl Engine {
@@ -344,7 +359,7 @@ impl Engine {
         match (command, &self.call) {
             (Command::Call(peer), None) => {
                 let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
-                let task = outgoing(self.endpoint.clone(), peer, control_rx, self.events.clone());
+                let task = outgoing(self.endpoint.clone(), peer, control_rx, self.events.clone(), self.hello.clone());
                 self.spawn_call(control, Some(peer), task);
             }
             // Refused, and said only in the log. It used to go out as `Ended`, which every listener
@@ -365,7 +380,7 @@ impl Engine {
             return;
         }
         let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
-        let task = answer(incoming, control_rx, self.events.clone());
+        let task = answer(incoming, control_rx, self.events.clone(), self.hello.clone());
         self.spawn_call(control, None, task);
     }
 
@@ -427,8 +442,22 @@ async fn outgoing(
     peer: EndpointId,
     control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
+    hello: Hello,
 ) -> (Option<EndpointId>, Result<EndReason, Error>) {
-    (Some(peer), dial(endpoint, peer, control, events).await)
+    (Some(peer), dial(endpoint, peer, control, events, hello).await)
+}
+
+/// Ends a call the two sides cannot have, telling the other why, and says which side is behind.
+async fn incompatible(
+    connection: &Connection,
+    send: &mut SendStream,
+    ours: &Hello,
+    theirs: &Hello,
+    behind: Behind,
+) -> Result<EndReason, Error> {
+    tracing::warn!(?behind, ours = ours.app, theirs = theirs.app, "cannot call: one side needs an update");
+    finish(connection, send, Signal::Incompatible(ours.clone()), CLOSE_INCOMPATIBLE).await?;
+    Ok(EndReason::Incompatible { behind, theirs: theirs.app.clone() })
 }
 
 async fn dial(
@@ -436,6 +465,7 @@ async fn dial(
     peer: EndpointId,
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
+    hello: Hello,
 ) -> Result<EndReason, Error> {
     emit(&events, Event::Dialing { peer }).await;
     // Dialling a key nobody is listening on has no natural end: iroh keeps trying relays and
@@ -449,7 +479,7 @@ async fn dial(
     };
     let key_exchange = secure(&connection)?;
     let (mut send, recv) = connection.open_bi().await?;
-    protocol::send(&mut send, Signal::Offer).await?;
+    protocol::send(&mut send, Signal::Offer(hello.clone())).await?;
     let mut signals = spawn_reader(recv);
     emit(&events, Event::Ringing { peer }).await;
     // Reached them, so now it is a question of whether anyone picks up. Hanging up properly on
@@ -463,13 +493,25 @@ async fn dial(
                 return Ok(EndReason::NoAnswer);
             }
             signal = signals.recv() => return match signal {
-                Some(Ok(Signal::Accept)) => {
-                    active(&connection, peer, key_exchange, send, signals, &mut control, &events).await
+                // Their answer carries what they need; the check is ours to make, since only we
+                // know whether we can do it.
+                Some(Ok(Signal::Accept(theirs))) => match protocol::behind(&hello, &theirs) {
+                    Some(behind) => incompatible(&connection, &mut send, &hello, &theirs, behind).await,
+                    None => active(&connection, peer, key_exchange, send, signals, &mut control, &events).await,
+                },
+                // They could not take our offer. Which of us is behind is in the two hellos.
+                Some(Ok(Signal::Incompatible(theirs))) => {
+                    let behind = protocol::behind(&hello, &theirs).unwrap_or(Behind::Them);
+                    Ok(EndReason::Incompatible { behind, theirs: theirs.app })
                 }
                 Some(Ok(Signal::Reject)) => Ok(EndReason::Rejected),
                 Some(Ok(Signal::Busy)) => Ok(EndReason::Busy),
                 Some(Ok(Signal::Hangup)) | None => Ok(EndReason::RemoteHangup),
-                Some(Ok(Signal::Offer | Signal::KeyframeRequest)) => {
+                Some(Ok(Signal::Unknown)) => {
+                    tracing::debug!("ignored a signal from a newer build");
+                    continue;
+                }
+                Some(Ok(Signal::Offer(_) | Signal::KeyframeRequest)) => {
                     protocol_error(&connection, "unexpected signal while ringing")
                 }
                 Some(Err(e)) => Err(e),
@@ -489,13 +531,14 @@ async fn answer(
     incoming: Incoming,
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
+    hello: Hello,
 ) -> (Option<EndpointId>, Result<EndReason, Error>) {
     let connection = match accept_connection(incoming).await {
         Ok(connection) => connection,
         Err(e) => return (None, Err(e)),
     };
     let peer = connection.remote_id();
-    (Some(peer), ring(connection, peer, &mut control, events).await)
+    (Some(peer), ring(connection, peer, &mut control, events, &hello).await)
 }
 
 async fn accept_connection(incoming: Incoming) -> Result<Connection, Error> {
@@ -507,33 +550,47 @@ async fn ring(
     peer: EndpointId,
     control: &mut mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
+    hello: &Hello,
 ) -> Result<EndReason, Error> {
     let key_exchange = secure(&connection)?;
     let (mut send, recv) = connection.accept_bi().await?;
     let mut signals = spawn_reader(recv);
-    match signals.recv().await {
-        Some(Ok(Signal::Offer)) => {}
-        Some(Err(e)) => return Err(e),
-        Some(Ok(_)) | None => return protocol_error(&connection, "expected offer"),
+    let theirs = loop {
+        match signals.recv().await {
+            Some(Ok(Signal::Offer(theirs))) => break theirs,
+            Some(Ok(Signal::Unknown)) => tracing::debug!("ignored a signal from a newer build"),
+            Some(Err(e)) => return Err(e),
+            Some(Ok(_)) | None => return protocol_error(&connection, "expected offer"),
+        }
+    };
+    // Checked before anything rings: a call that cannot happen should not ring, only say why.
+    if let Some(behind) = protocol::behind(hello, &theirs) {
+        return incompatible(&connection, &mut send, hello, &theirs, behind).await;
     }
-    tracing::info!(%peer, "incoming call");
+    tracing::info!(%peer, protocol = theirs.protocol, app = theirs.app, "incoming call");
     emit(&events, Event::Incoming { peer }).await;
-    tokio::select! {
-        signal = signals.recv() => match signal {
-            Some(Ok(Signal::Hangup)) | None => Ok(EndReason::RemoteHangup),
-            Some(Ok(_)) => protocol_error(&connection, "unexpected signal while ringing"),
-            Some(Err(e)) => Err(e),
-        },
-        command = control.recv() => match command {
-            Some(Control::Answer(true)) => {
-                protocol::send(&mut send, Signal::Accept).await?;
-                active(&connection, peer, key_exchange, send, signals, control, &events).await
-            }
-            Some(Control::Answer(false) | Control::Hangup) | None => {
-                finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
-                Ok(EndReason::Declined)
-            }
-        },
+    loop {
+        tokio::select! {
+            signal = signals.recv() => return match signal {
+                Some(Ok(Signal::Hangup)) | None => Ok(EndReason::RemoteHangup),
+                Some(Ok(Signal::Unknown)) => {
+                    tracing::debug!("ignored a signal from a newer build");
+                    continue;
+                }
+                Some(Ok(_)) => protocol_error(&connection, "unexpected signal while ringing"),
+                Some(Err(e)) => Err(e),
+            },
+            command = control.recv() => return match command {
+                Some(Control::Answer(true)) => {
+                    protocol::send(&mut send, Signal::Accept(hello.clone())).await?;
+                    active(&connection, peer, key_exchange, send, signals, control, &events).await
+                }
+                Some(Control::Answer(false) | Control::Hangup) | None => {
+                    finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
+                    Ok(EndReason::Declined)
+                }
+            },
+        }
     }
 }
 
@@ -562,6 +619,7 @@ async fn active(
                     connection.close(CLOSE_HANGUP, b"");
                     return Ok(EndReason::RemoteHangup);
                 }
+                Some(Ok(Signal::Unknown)) => tracing::debug!("ignored a signal from a newer build"),
                 Some(Ok(_)) => return protocol_error(connection, "unexpected signal in call"),
                 Some(Err(e)) => return Err(e),
             },
@@ -617,7 +675,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn classical_key_exchange_is_refused() -> anyhow::Result<()> {
         let lookup = MemoryLookup::new();
-        let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone())).await?;
+        let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone()), "test").await?;
         let Some(Event::Ready { id }) = events.recv().await else { bail!("node not ready") };
 
         let classical = Arc::new(CryptoProvider {

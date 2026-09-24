@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, SendDatagramError};
 use opus_sys as ffi;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::media::MediaStats;
+use crate::protocol::{AudioHeader, DatagramHeader, DatagramKind};
 use crate::{Error, protocol};
 
 pub const SAMPLE_RATE: i32 = 48_000;
@@ -36,12 +36,6 @@ const PREBUFFER_FRAMES: usize = 3;
 const MAX_BUFFERED_FRAMES: usize = 10;
 /// After this much consecutive concealment (200 ms) playout stops and re-buffers.
 const MAX_CONCEALED_RUN: u32 = 10;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct AudioHeader {
-    sequence: u64,
-    capture_micros: u64,
-}
 
 fn check(code: c_int) -> Result<c_int, Error> {
     if code >= 0 {
@@ -147,9 +141,10 @@ impl AudioSender {
     /// A full datagram buffer drops the frame: late audio is worse than lost audio.
     pub fn send(&mut self, pcm: &Pcm, capture_micros: u64) -> Result<(), Error> {
         let len = self.encoder.encode(pcm, &mut self.packet)?;
-        let header = AudioHeader { sequence: self.sequence, capture_micros };
+        let header =
+            DatagramHeader { kind: Some(DatagramKind::Audio(AudioHeader { sequence: self.sequence, capture_micros })) };
         self.sequence += 1;
-        let mut datagram = protocol::encode(&header)?;
+        let mut datagram = protocol::encode(&header);
         datagram.extend_from_slice(self.packet.get(..len).unwrap_or_default());
         let bytes = u64::try_from(datagram.len()).unwrap_or(u64::MAX);
         match self.connection.send_datagram(datagram.into()) {
@@ -224,8 +219,13 @@ pub(crate) fn start(connection: &Connection, stats: &Arc<MediaStats>) -> Result<
 /// Hands each datagram to the receiver until the connection ends.
 async fn receive(connection: Connection, deliver: mpsc::Sender<(u64, Vec<u8>)>, stats: Arc<MediaStats>) {
     while let Ok(datagram) = connection.read_datagram().await {
-        let (header, packet) = match protocol::split_message::<AudioHeader>(&datagram) {
-            Ok(parts) => parts,
+        let (header, packet) = match protocol::split_message::<DatagramHeader>(&datagram) {
+            Ok((DatagramHeader { kind: Some(DatagramKind::Audio(header)) }, packet)) => (header, packet),
+            // From a newer build, carrying something this one does not handle.
+            Ok((DatagramHeader { kind: None }, _)) => {
+                tracing::debug!("a datagram of a kind this build does not know");
+                continue;
+            }
             Err(e) => {
                 tracing::debug!("bad audio datagram: {e}");
                 continue;

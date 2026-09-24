@@ -29,7 +29,7 @@ pub enum Error {
     #[error(transparent)]
     Read(#[from] iroh::endpoint::ReadExactError),
     #[error(transparent)]
-    Encoding(#[from] postcard::Error),
+    Decoding(#[from] prost::DecodeError),
     #[error("signal frame of {0} bytes exceeds the limit")]
     FrameTooLarge(usize),
     #[error("unexpected signal: {0}")]

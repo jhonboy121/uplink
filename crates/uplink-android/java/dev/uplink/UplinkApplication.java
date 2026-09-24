@@ -58,6 +58,8 @@ public class UplinkApplication extends Application {
     private static final int RING_NOTIFICATION_ID = 3;
     private static final String MISSED_CHANNEL = "missed";
     private static final int MISSED_NOTIFICATION_ID = 4;
+    private static final String UPDATE_CHANNEL = "update";
+    private static final int UPDATE_NOTIFICATION_ID = 5;
     /** Our own broadcast for the ringing notification's Decline, sent only to ourselves. */
     private static final String ACTION_RING = "dev.uplink.RING_ACTION";
     /** The missed-call notification was swiped away or cleared. */
@@ -72,6 +74,7 @@ public class UplinkApplication extends Application {
     private static final int REQUEST_ANSWER = 11;
     private static final int REQUEST_DECLINE = 12;
     private static final int REQUEST_MISSED = 13;
+    private static final int REQUEST_UPDATE = 14;
 
     /**
      * Phone makers' own lists of apps they may stop in the background, beside Android's. None of
@@ -210,6 +213,52 @@ public class UplinkApplication extends Application {
 
     Uri packageUri() {
         return Uri.fromParts("package", getPackageName(), null);
+    }
+
+    /**
+     * This build's version as people see it — the manifest's versionName. It goes to the other
+     * side of every call, so whichever phone is too old for the other can say so with both.
+     */
+    String appVersion() {
+        try {
+            String name = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return name != null ? name : "";
+        } catch (PackageManager.NameNotFoundException e) {
+            log(Log.WARN, "reading our own version: " + e);
+            return "";
+        }
+    }
+
+    /**
+     * A call that could not happen because one of the two phones needs a newer uplink. Shown only
+     * while the app is not in front; in front, the app says it on screen. The words are Rust's, so
+     * the notification and the screen say the same thing.
+     */
+    void updateNeeded(final String title, final String text) {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (inFront) {
+                    return;
+                }
+                NotificationManager notifications = getSystemService(NotificationManager.class);
+                notifications.createNotificationChannel(new NotificationChannel(
+                        UPDATE_CHANNEL, "Updates needed", NotificationManager.IMPORTANCE_DEFAULT));
+                Intent open = new Intent(UplinkApplication.this, UplinkActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                PendingIntent tap = PendingIntent.getActivity(UplinkApplication.this, REQUEST_UPDATE, open,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                Notification notification = new Notification.Builder(UplinkApplication.this, UPDATE_CHANNEL)
+                        .setSmallIcon(drawable("notification"))
+                        .setContentTitle(title)
+                        .setContentText(text)
+                        .setStyle(new Notification.BigTextStyle().bigText(text))
+                        .setContentIntent(tap)
+                        .setAutoCancel(true)
+                        .build();
+                notifications.notify(UPDATE_NOTIFICATION_ID, notification);
+            }
+        });
     }
 
     /**

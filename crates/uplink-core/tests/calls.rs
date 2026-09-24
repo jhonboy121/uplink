@@ -20,7 +20,7 @@ struct Peer {
 
 impl Peer {
     async fn start(lookup: &MemoryLookup) -> Result<Self> {
-        let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone())).await?;
+        let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone()), "test").await?;
         let id = match next(&mut events).await? {
             Event::Ready { id } => id,
             other => bail!("expected Ready, got {other:?}"),
@@ -129,14 +129,19 @@ async fn third_caller_gets_busy() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn second_outgoing_call_fails_while_in_a_call() -> Result<()> {
+async fn a_second_outgoing_call_is_refused_without_ending_the_first() -> Result<()> {
     let lookup = MemoryLookup::new();
     let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
     let carol = Peer::start(&lookup).await?;
     connect(&mut alice, &mut bob).await?;
 
+    // Refused quietly: it once went out as `Ended`, which every listener took for the end of the
+    // call that was up. Commands are taken in order, so if the refusal still said anything, it
+    // would be the first end Alice hears — not her own hang-up.
     alice.node.send(Command::Call(carol.id)).await?;
-    assert!(matches!(alice.ended().await?, EndReason::Failed(_)));
+    alice.node.send(Command::Hangup).await?;
+    assert!(matches!(alice.ended().await?, EndReason::LocalHangup));
+    assert!(matches!(bob.ended().await?, EndReason::RemoteHangup));
     Ok(())
 }
 

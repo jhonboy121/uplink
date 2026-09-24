@@ -2,18 +2,22 @@
 //! round trip spread across the call, and what each side sent, received, lost and repaired.
 //!
 //! Telemetry adds a sample each interval while the call runs; the counts are read once, when it
-//! ends. Stored as postcard in one column, so the log's schema does not grow a column per figure.
-//! Postcard is not self-describing: a row written by a build with a different shape reads back as
-//! no summary at all, which is the honest answer for it.
+//! ends. Stored as one protobuf message in one column, so the log's schema does not grow a column
+//! per figure, and a figure added later is a new tag that older rows simply read as zero — the
+//! same rules as the wire (`docs/ref/wire.md`): tags are never reused or renumbered.
 
-use serde::{Deserialize, Serialize};
+use prost::Message;
 
 /// Least, most and mean of a value sampled through a call.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Message)]
 pub struct Spread {
+    #[prost(double, tag = "1")]
     pub min: f64,
+    #[prost(double, tag = "2")]
     pub max: f64,
+    #[prost(double, tag = "3")]
     total: f64,
+    #[prost(uint32, tag = "4")]
     samples: u32,
 }
 
@@ -35,54 +39,80 @@ impl Spread {
 }
 
 /// The video a call was set up to send, whatever the network then allowed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Message)]
 pub struct VideoTarget {
+    #[prost(uint32, tag = "1")]
     pub width: u32,
+    #[prost(uint32, tag = "2")]
     pub height: u32,
+    #[prost(uint32, tag = "3")]
     pub fps: u32,
+    #[prost(uint32, tag = "4")]
     pub kbps: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Message)]
 pub struct VideoCounts {
+    #[prost(uint64, tag = "1")]
     pub sent: u64,
+    #[prost(uint64, tag = "2")]
     pub received: u64,
     /// Ours, reset after missing their deadline.
+    #[prost(uint64, tag = "3")]
     pub late: u64,
     /// Ours, never sent: too many already in flight.
+    #[prost(uint64, tag = "4")]
     pub congested: u64,
     /// Theirs, arrived but useless: stale, or after a gap.
+    #[prost(uint64, tag = "5")]
     pub discarded: u64,
+    #[prost(uint64, tag = "6")]
     pub keyframe_asks_sent: u64,
+    #[prost(uint64, tag = "7")]
     pub keyframe_asks_received: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Message)]
 pub struct AudioCounts {
+    #[prost(uint64, tag = "1")]
     pub sent: u64,
+    #[prost(uint64, tag = "2")]
     pub received: u64,
     /// Ours, never sent: the datagram buffer was full.
+    #[prost(uint64, tag = "3")]
     pub not_sent: u64,
     /// Theirs, after their playout time.
+    #[prost(uint64, tag = "4")]
     pub late: u64,
     /// Theirs, lost and rebuilt from the next packet's FEC.
+    #[prost(uint64, tag = "5")]
     pub rebuilt: u64,
     /// Theirs, lost and filled in by Opus.
+    #[prost(uint64, tag = "6")]
     pub concealed: u64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Message)]
 pub struct Quality {
+    #[prost(message, optional, tag = "1")]
     pub target: Option<VideoTarget>,
+    #[prost(message, required, tag = "2")]
     pub fps_out: Spread,
+    #[prost(message, required, tag = "3")]
     pub fps_in: Spread,
     /// On the wire, overhead and all: what the network carried, not what the codecs made.
+    #[prost(message, required, tag = "4")]
     pub kbps_up: Spread,
+    #[prost(message, required, tag = "5")]
     pub kbps_down: Spread,
+    #[prost(message, required, tag = "6")]
     pub rtt_ms: Spread,
     /// Samples taken while the path was a relay; a share of `rtt_ms`'s samples.
+    #[prost(uint32, tag = "7")]
     pub relayed_samples: u32,
+    #[prost(message, required, tag = "8")]
     pub video: VideoCounts,
+    #[prost(message, required, tag = "9")]
     pub audio: AudioCounts,
 }
 
@@ -92,12 +122,12 @@ impl Quality {
         (self.rtt_ms.samples > 0).then(|| f64::from(self.relayed_samples) / f64::from(self.rtt_ms.samples))
     }
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>, postcard::Error> {
-        postcard::to_allocvec(self)
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.encode_to_vec()
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
-        postcard::from_bytes(bytes)
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, prost::DecodeError> {
+        Self::decode(bytes)
     }
 }
 
@@ -117,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn a_summary_survives_the_round_trip() -> Result<(), postcard::Error> {
+    fn a_summary_survives_the_round_trip() -> Result<(), prost::DecodeError> {
         let mut quality = Quality {
             target: Some(VideoTarget { width: 1280, height: 720, fps: 30, kbps: 2000 }),
             relayed_samples: 1,
@@ -127,7 +157,7 @@ mod tests {
         quality.rtt_ms.add(113.0);
         quality.rtt_ms.add(618.0);
         quality.audio.rebuilt = 12;
-        assert_eq!(Quality::from_bytes(&quality.to_bytes()?)?, quality);
+        assert_eq!(Quality::from_bytes(&quality.to_bytes())?, quality);
         assert_eq!(quality.relayed_share(), Some(0.5));
         Ok(())
     }

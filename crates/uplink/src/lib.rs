@@ -42,7 +42,7 @@ use uplink_core::qr;
 use uplink_core::quality::{Quality, Spread};
 use uplink_core::relays::{self, Relays};
 use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Command, Event};
+use uplink_core::node::{Command, EndReason, Event};
 use uplink_core::EndpointId;
 
 use crate::core::Core;
@@ -703,6 +703,7 @@ const fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Cancelled => "Cancelled",
         Outcome::NoAnswer => "No answer",
         Outcome::Unreachable => "Couldn't reach them",
+        Outcome::Incompatible => "Needs an update",
         Outcome::Failed => "Did not connect",
     }
 }
@@ -1054,7 +1055,10 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 /// the background when there is nothing left to close. Java hands every press here rather than
 /// finishing the activity, because finishing it takes the endpoint with it.
 fn went_back(ui: &App) -> bool {
-    if ui.get_confirming() != Confirm::None {
+    if !ui.get_notice_title().is_empty() {
+        ui.set_notice_title(Default::default());
+        ui.set_notice_body(Default::default());
+    } else if ui.get_confirming() != Confirm::None {
         ui.set_confirming(Confirm::None);
     } else if ui.get_battery_ask() && !ui.get_gate() {
         // Back out of the explainer is "Not now", which is also what it would mean in person.
@@ -2199,7 +2203,7 @@ async fn handle_node_events(
             // Whatever went wrong last time was about last time.
             Event::Dialing { .. } | Event::Incoming { .. } => ui.set_call_trouble(Default::default()),
             // The core has already written the call and stamped the contact; read both back.
-            Event::Ended { .. } => {
+            Event::Ended { peer, reason } => {
                 with_state(&state, |s| {
                     if let Err(e) = s.contacts.reload() {
                         tracing::warn!("re-reading contacts: {e}");
@@ -2207,6 +2211,15 @@ async fn handle_node_events(
                 });
                 show_calls(&state, &ui);
                 show_contacts(&state, &ui);
+                // In front, the notice is on screen; the core's notification is for when it is not.
+                if let (Some(peer), EndReason::Incompatible { behind, theirs }) = (peer, reason) {
+                    let name = with_contacts(&state, |contacts| contacts.name_of(peer).map(str::to_owned));
+                    let name = name.flatten().unwrap_or_else(|| short(peer));
+                    let ours = state.borrow().core.as_ref().map(|core| core.app().to_owned()).unwrap_or_default();
+                    let (title, body) = core::update_notice(*behind, &name, theirs, &ours);
+                    ui.set_notice_title(title.into());
+                    ui.set_notice_body(body.into());
+                }
             }
             _ => {}
         }

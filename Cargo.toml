@@ -37,6 +37,11 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # refuses an APK whose resources.arsc is compressed or unaligned.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false }
+# The wire. Protobuf for its evolution rules — tagged fields, unknown ones skipped, a `oneof` kind
+# an older build does not know read as none — written as derived Rust structs, so no `.proto`,
+# no `protoc`, no build script. The format is a spec, not this crate: Google's own Rust protobuf
+# reads the same bytes, should prost (in maintenance, fixes only) ever need replacing.
+prost = "0.14"
 # `metrics` is how a backgrounded endpoint is observable at all: the socket counters are the only
 # record of what it did overnight with no window and nothing in the log. Without the feature they
 # compile to no-ops, which is why the heartbeat had nothing to report.
@@ -50,7 +55,6 @@ noq-proto = { version = "1.3", default-features = false }
 # Locks without poisoning: a panic under a lock here is a bug to fix, not a state every caller
 # has to unwrap past. Smaller and faster uncontended than std's, which is what ours always are.
 parking_lot = "0.12"
-postcard = { version = "1", default-features = false, features = ["use-std"] }
 qrcode = { version = "0.14", default-features = false }
 rqrr = { version = "0.9", default-features = false }
 rtrb = "0.4"

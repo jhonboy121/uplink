@@ -709,6 +709,32 @@ default); keep disk usage lean. Avoid build scripts.
     peer that cannot answer it. Voice-only is the exception: it is an offer with no video
     stream opened, which an old build would read as a video call whose picture never arrives —
     so it too waits for capabilities.
+- **2026-09-24**: **the wire is protobuf, and settled** (a deliberate break: ALPN `uplink/1`,
+  both phones must update). Rules, messages, tags and the capability registry are in
+  [docs/ref/wire.md](ref/wire.md). Chosen over the alternatives on evolution, size and toolchain:
+  postcard is positional (no evolution); MessagePack evolves only with field names in every
+  message; Fory's compatible mode shares type metadata across a stream of messages, which our
+  independent frames and datagrams do not form; Cap'n Proto and FlatBuffers need a compiler and
+  pad small messages (~8 kbps more on voice alone); rkyv has no evolution and changes format
+  between releases. Protobuf is tagged, ~as small as postcard, and a spec rather than a library —
+  on `prost` (derive macros, no `protoc`, no build script), which is in maintenance, so Google's
+  own Rust protobuf can replace it later without touching a byte on the wire.
+  - **Framing:** every message is length-delimited (varint length). Signalling is `Signal`s;
+    each video frame's stream opens with a `StreamHeader`, each voice datagram with a
+    `DatagramHeader`, so new kinds of stream and datagram need no new ALPN.
+  - **Handshake:** the offer and its answer carry a `Hello` (protocol, app version, capabilities
+    supported and required). If either side requires what the other cannot do, the call ends as
+    **Incompatible** — before ringing, before media — and both phones say which one needs an
+    update, naming both versions: a sheet in the app, a notification when it is not in front,
+    and "Needs an update" in the call log. Nothing is required yet; a test drives it with a
+    made-up capability.
+  - **Unknown is never an error:** a signal of an unknown kind is ignored, an unknown stream is
+    stopped, an unknown datagram dropped.
+  - **Stored data too:** the call-quality summary is protobuf in the same `quality` column;
+    postcard is gone from the workspace. The two postcard rows on the one phone that had any were
+    cleared by hand (`just db-sql`), rather than carrying migration code for them.
+  - Also found: `tools/ui-preview` had not compiled since the call-log fields were added — only
+    the app's crates were being checked. Fixed, and the host tools are now part of every check.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

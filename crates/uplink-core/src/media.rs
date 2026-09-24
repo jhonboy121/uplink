@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
-use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 
 use crate::audio::{self, AudioReceiver, AudioSender};
 use crate::quality::{AudioCounts, Quality, VideoCounts};
+use crate::protocol::{FrameHeader, StreamHeader, StreamKind};
 use crate::{Error, protocol, telemetry};
 
 /// Longest a frame may take to arrive before it is useless for live playback.
@@ -42,15 +42,6 @@ pub struct Frame {
     /// Quarter turns the receiver applies to show the picture upright.
     pub turns: u8,
     pub data: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct FrameHeader {
-    sequence: u64,
-    capture_micros: u64,
-    keyframe: bool,
-    config: bool,
-    turns: u8,
 }
 
 /// How a call is getting there. A relayed call and a direct one behave nothing alike — the same
@@ -128,7 +119,7 @@ impl MediaStats {
     /// once at the end of a call, for the log.
     pub fn summary(&self) -> Quality {
         let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        let mut quality = self.quality.lock().clone();
+        let mut quality = *self.quality.lock();
         quality.video = VideoCounts {
             sent: count(&self.frames_sent),
             received: count(&self.frames_received),
@@ -195,12 +186,14 @@ impl VideoSender {
 }
 
 async fn send_frame(connection: &Connection, sequence: u64, frame: Frame) -> Result<(), Error> {
-    let header = FrameHeader {
-        sequence,
-        capture_micros: frame.capture_micros,
-        keyframe: frame.keyframe,
-        config: frame.config,
-        turns: frame.turns,
+    let header = StreamHeader {
+        kind: Some(StreamKind::Video(FrameHeader {
+            sequence,
+            capture_micros: frame.capture_micros,
+            keyframe: frame.keyframe,
+            config: frame.config,
+            turns: u32::from(frame.turns),
+        })),
     };
     let mut stream =
         tokio::time::timeout(FRAME_DEADLINE, connection.open_uni()).await.map_err(|_| Error::FrameLate)??;
@@ -217,7 +210,7 @@ async fn send_frame(connection: &Connection, sequence: u64, frame: Frame) -> Res
     }
 }
 
-async fn write_frame(stream: &mut SendStream, header: &FrameHeader, data: &[u8]) -> Result<(), Error> {
+async fn write_frame(stream: &mut SendStream, header: &StreamHeader, data: &[u8]) -> Result<(), Error> {
     protocol::write_message(stream, header).await?;
     stream.write_all(data).await?;
     Ok(())
@@ -323,7 +316,11 @@ async fn sleep_until(deadline: Option<Instant>) {
 
 async fn read_frame(mut stream: RecvStream, arrived: mpsc::Sender<(u64, Frame)>, stats: Arc<MediaStats>) {
     let read = async {
-        let header: FrameHeader = protocol::read_message(&mut stream).await?;
+        let header: StreamHeader = protocol::read_message(&mut stream).await?;
+        // The only kind of stream so far; any other is from a newer build and not for this one.
+        let Some(StreamKind::Video(header)) = header.kind else {
+            return Err(Error::Protocol("a stream of a kind this build does not know"));
+        };
         let data = stream.read_to_end(MAX_FRAME_BYTES).await?;
         Ok::<_, Error>((header, data))
     };
@@ -335,7 +332,8 @@ async fn read_frame(mut stream: RecvStream, arrived: mpsc::Sender<(u64, Frame)>,
                 capture_micros: header.capture_micros,
                 keyframe: header.keyframe,
                 config: header.config,
-                turns: header.turns,
+                // Quarter turns, so 0–3; anything else is a sender's bug, shown upright.
+                turns: u8::try_from(header.turns).unwrap_or_default(),
                 data,
             };
             if arrived.send((header.sequence, frame)).await.is_err() {

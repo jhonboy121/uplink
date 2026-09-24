@@ -1033,6 +1033,46 @@ slint::slint! {
     }
 
     // Anything that cannot be undone asks first. A tap is cheap and a key may be gone for good.
+    // Something the user has to know and nothing to decide: one button, which only closes it.
+    component NoticeSheet inherits Rectangle {
+        in property <string> title;
+        in property <string> body;
+        callback close();
+        background: #000000CC;
+
+        TouchArea { }
+
+        Rectangle {
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+            height: notice-layout.preferred-height;
+            border-radius: Theme.wide-radius;
+            background: Theme.ground;
+            notice-layout := VerticalLayout {
+                padding: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-family: Theme.display;
+                    font-size: 1.1875rem;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.body;
+                    color: Theme.muted;
+                    font-size: 0.875rem;
+                    wrap: word-wrap;
+                }
+                Wide {
+                    text: "OK";
+                    primary: true;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+    }
+
     component ConfirmSheet inherits Rectangle {
         in property <string> title;
         in property <string> body;
@@ -2617,6 +2657,9 @@ slint::slint! {
         in property <bool> online: false;
         in-out property <string> toast;
         in-out property <Confirm> confirming: Confirm.none;
+        // Shown while the title is set; OK or Back empties both.
+        in-out property <string> notice-title;
+        in-out property <string> notice-body;
         in-out property <bool> selecting: false;
         in property <int> selected-count: 0;
         // The call log's own selection, apart from the contacts': the two lists are different
@@ -3031,6 +3074,17 @@ slint::slint! {
                     root.confirming = Confirm.none;
                 }
                 cancel => { root.confirming = Confirm.none; }
+            }
+
+            // A notice over everything the user might be doing: a call that could not happen
+            // is news whichever screen it arrives on.
+            if root.notice-title != "" : NoticeSheet {
+                title: root.notice-title;
+                body: root.notice-body;
+                close => {
+                    root.notice-title = "";
+                    root.notice-body = "";
+                }
             }
 
             // Nothing behind this is reachable until all three are granted.

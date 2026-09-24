@@ -158,6 +158,10 @@ logcat:
 seed count="20":
     python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} seed {{count}}
 
+[doc("Run one SQL STATEMENT against the app's database on the device, for a hand migration (debug build; restarts the app)")]
+db-sql statement:
+    python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} sql "{{statement}}"
+
 [doc("Save KEY as a contact on the device, e.g. the one the CLI prints (debug build; restarts the app)")]
 add-contact key name="CLI":
     python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} add {{key}} "{{name}}"

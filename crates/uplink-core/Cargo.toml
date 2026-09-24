@@ -15,7 +15,7 @@ image = { workspace = true, features = ["png"] }
 iroh.workspace = true
 noq-proto.workspace = true
 opus-sys.workspace = true
-postcard.workspace = true
+prost.workspace = true
 qrcode.workspace = true
 rqrr.workspace = true
 rusqlite.workspace = true

@@ -143,6 +143,30 @@ impl AppContext {
         self.call(jni_str!("ringback"))
     }
 
+    /// This build's version as people see it (the manifest's versionName).
+    pub fn app_version(&self) -> Result<String, Error> {
+        self.with(|env, application| {
+            let name =
+                env.call_method(application, jni_str!("appVersion"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+            java_string(env, name)
+        })
+    }
+
+    /// A notification that a call could not happen until one phone updates, when uplink is not in
+    /// front to say it on screen.
+    pub fn update_needed(&self, title: &str, text: &str) -> Result<(), Error> {
+        self.with(|env, application| {
+            let (title, text) = (env.new_string(title)?, env.new_string(text)?);
+            env.call_method(
+                application,
+                jni_str!("updateNeeded"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                &[JValue::Object(&title), JValue::Object(&text)],
+            )?;
+            Ok(())
+        })
+    }
+
     /// A notification for a call nobody answered, when uplink is not in front to show it.
     pub fn missed_call(&self, who: &str) -> Result<(), Error> {
         self.with(|env, application| {

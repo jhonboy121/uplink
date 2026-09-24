@@ -209,21 +209,23 @@ fn populate(app: &App) -> Result<()> {
             tint: 0,
             favourite,
             selected: false,
+            fresh: false,
         })
         .collect();
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(contacts)));
 
     // One of each ending, so the screen is reviewed against every state it can show.
     let log = [
-        ("Noor", "Missed · 23:04", "TODAY", true, true),
-        ("Ammar", "4:12 · 22:15", "", false, false),
-        ("Noor", "Cancelled · 19:40", "YESTERDAY", false, false),
-        ("7d19 2bb4", "Declined · 11:02", "", false, true),
+        ("Noor", "Missed · 23:04", "TODAY", true, true, false),
+        ("Ammar", "4:12 · 22:15", "", false, false, true),
+        ("Noor", "Cancelled · 19:40", "YESTERDAY", false, false, false),
+        ("7d19 2bb4", "Declined · 11:02", "", false, true, false),
     ];
     let calls: Vec<CallItem> = log
         .iter()
         .zip(keys.iter().cycle())
-        .map(|((name, detail, header, missed, incoming), (_, key))| CallItem {
+        .enumerate()
+        .map(|(row, ((name, detail, header, missed, incoming, answered), (_, key)))| CallItem {
             initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
             name: (*name).into(),
             id: (*key).into(),
@@ -232,6 +234,9 @@ fn populate(app: &App) -> Result<()> {
             tint: 0,
             missed: *missed,
             incoming: *incoming,
+            answered: *answered,
+            entry: row.to_string().into(),
+            selected: false,
         })
         .collect();
     app.set_calls(slint::ModelRc::new(slint::VecModel::from(calls)));

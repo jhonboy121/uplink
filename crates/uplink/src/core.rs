@@ -37,7 +37,7 @@ use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
 use uplink_core::media::MediaStats;
 use uplink_core::quality::{Quality, VideoTarget};
-use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
+use uplink_core::node::{Behind, Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::relays::Relays;
 use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, SecretKey, identity};
@@ -95,10 +95,32 @@ struct Inbox {
 struct Ringer {
     context: AppContext,
     db: Db,
+    /// This build's version, for the notice when one phone is too old for the other.
+    app: String,
+}
+
+/// What to tell someone whose call could not happen, as a title and a line: which phone needs
+/// updating, and both versions. One wording, for the notification and the screen alike.
+pub fn update_notice(behind: Behind, name: &str, theirs: &str, ours: &str) -> (String, String) {
+    let unnamed = |version: &str| if version.is_empty() { "an unknown version".to_owned() } else { version.to_owned() };
+    let (theirs, ours) = (unnamed(theirs), unnamed(ours));
+    match behind {
+        Behind::Us => (
+            "Update uplink".to_owned(),
+            format!("{name} has a newer uplink ({theirs}) than yours ({ours}). Update yours to call each other."),
+        ),
+        Behind::Them => (
+            format!("{name} needs to update uplink"),
+            format!("Their uplink ({theirs}) is older than yours ({ours}). You can call each other once they update."),
+        ),
+    }
 }
 
 impl Ringer {
     fn follow(&self, event: &Event) {
+        if let Event::Ended { peer: Some(peer), reason: EndReason::Incompatible { behind, theirs } } = event {
+            self.update_needed(peer, *behind, theirs);
+        }
         let outcome = match event {
             Event::Incoming { peer } => self.context.ring(&self.name_of(peer)),
             // From the moment we dial, not only once their phone rings: someone offline never
@@ -117,6 +139,14 @@ impl Ringer {
     fn missed(&self, peer: &EndpointId) {
         if let Err(e) = self.context.missed_call(&self.name_of(peer)) {
             tracing::warn!("missed-call notification: {e}");
+        }
+    }
+
+    /// A call that could not happen until one phone updates. As `missed`: only when not in front.
+    fn update_needed(&self, peer: &EndpointId, behind: Behind, theirs: &str) {
+        let (title, text) = update_notice(behind, &self.name_of(peer), theirs, &self.app);
+        if let Err(e) = self.context.update_needed(&title, &text) {
+            tracing::warn!("update notification: {e}");
         }
     }
 
@@ -183,7 +213,15 @@ impl Ledger {
                     tracing::warn!(peer = %ended.fmt_short(), "an end for a call that is not the one in progress");
                     return None;
                 }
-                let call = self.pending.take()?;
+                // An incoming call the two phones could not have never rang, so nothing was noted
+                // for it; it is still a call someone tried to make.
+                let call = match (self.pending.take(), reason, peer) {
+                    (Some(call), ..) => call,
+                    (None, EndReason::Incompatible { .. }, Some(peer)) => {
+                        Pending { peer: *peer, incoming: true, at: SystemTime::now(), connected: None, stats: None }
+                    }
+                    (None, ..) => return None,
+                };
                 let record = CallRecord {
                     peer: call.peer,
                     incoming: call.incoming,
@@ -306,9 +344,14 @@ impl Core {
         // Read before binding: the relay map is fixed for the life of the endpoint, so a change
         // made on the settings screen lands the next time the process starts.
         let relays = Relays::load(&Settings::open(db.clone())?);
-        let (node, events) = runtime.block_on(Node::start(secret.clone(), Network::Public(relays)))?;
+        // Unknown is said as such rather than failing the start: it only ever appears in a notice.
+        let app = context.app_version().unwrap_or_else(|e| {
+            tracing::warn!("reading this build's version: {e}");
+            String::new()
+        });
+        let (node, events) = runtime.block_on(Node::start(secret.clone(), Network::Public(relays), &app))?;
         let inbox = Arc::<Mutex<Inbox>>::default();
-        let ringer = Ringer { context, db: db.clone() };
+        let ringer = Ringer { context, db: db.clone(), app };
         runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone()));
         tracing::info!(%id, "core up");
         Ok(Self {
@@ -322,6 +365,11 @@ impl Core {
             runtime,
             logging,
         })
+    }
+
+    /// This build's version, as the other side of a call is told it.
+    pub fn app(&self) -> &str {
+        &self.ringer.app
     }
 
     /// For a thread that wants to log through the one subscriber this process has.
@@ -345,7 +393,7 @@ impl Core {
         if let Some(previous) = previous {
             previous.shutdown().await;
         }
-        let started = Node::start(self.secret.clone(), Network::Public(relays)).await;
+        let started = Node::start(self.secret.clone(), Network::Public(relays), &self.ringer.app).await;
         let (node, events) = match started {
             Ok(started) => started,
             // Left with no endpoint at all: say so rather than let the UI keep claiming we are
