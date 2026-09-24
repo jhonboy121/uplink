@@ -80,6 +80,8 @@ slint::slint! {
         speed-down: string,
         round-trip: string,
         path: string,
+        // What happened with IPv6 on this call; empty for one from before it was recorded.
+        ipv6: string,
     }
 
     export enum CallState { idle, dialing, ringing, incoming, connected }
@@ -1687,6 +1689,7 @@ slint::slint! {
                     if root.call.audio-repaired != "" : StatRow { title: "Repaired"; value: root.call.audio-repaired; }
                     if root.call.round-trip != "" : SectionHead { text: "NETWORK"; }
                     if root.call.path != "" : StatRow { title: "Path"; value: root.call.path; }
+                    if root.call.ipv6 != "" : StatRow { title: "IPv6"; value: root.call.ipv6; }
                     if root.call.speed-up != "" : StatRow { title: "Upload"; value: root.call.speed-up; }
                     if root.call.speed-down != "" : StatRow { title: "Download"; value: root.call.speed-down; }
                     if root.call.round-trip != "" : StatRow { title: "Round trip"; value: root.call.round-trip; }

@@ -380,7 +380,7 @@ impl Engine {
             return;
         }
         let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
-        let task = answer(incoming, control_rx, self.events.clone(), self.hello.clone());
+        let task = answer(incoming, self.endpoint.clone(), control_rx, self.events.clone(), self.hello.clone());
         self.spawn_call(control, None, task);
     }
 
@@ -497,7 +497,7 @@ async fn dial(
                 // know whether we can do it.
                 Some(Ok(Signal::Accept(theirs))) => match protocol::behind(&hello, &theirs) {
                     Some(behind) => incompatible(&connection, &mut send, &hello, &theirs, behind).await,
-                    None => active(&connection, peer, key_exchange, send, signals, &mut control, &events).await,
+                    None => active(&connection, &endpoint, key_exchange, send, signals, &mut control, &events).await,
                 },
                 // They could not take our offer. Which of us is behind is in the two hellos.
                 Some(Ok(Signal::Incompatible(theirs))) => {
@@ -529,6 +529,7 @@ async fn dial(
 
 async fn answer(
     incoming: Incoming,
+    endpoint: Endpoint,
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: Hello,
@@ -538,7 +539,7 @@ async fn answer(
         Err(e) => return (None, Err(e)),
     };
     let peer = connection.remote_id();
-    (Some(peer), ring(connection, peer, &mut control, events, &hello).await)
+    (Some(peer), ring(connection, &endpoint, &mut control, events, &hello).await)
 }
 
 async fn accept_connection(incoming: Incoming) -> Result<Connection, Error> {
@@ -547,11 +548,12 @@ async fn accept_connection(incoming: Incoming) -> Result<Connection, Error> {
 
 async fn ring(
     connection: Connection,
-    peer: EndpointId,
+    endpoint: &Endpoint,
     control: &mut mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: &Hello,
 ) -> Result<EndReason, Error> {
+    let peer = connection.remote_id();
     let key_exchange = secure(&connection)?;
     let (mut send, recv) = connection.accept_bi().await?;
     let mut signals = spawn_reader(recv);
@@ -583,7 +585,7 @@ async fn ring(
             command = control.recv() => return match command {
                 Some(Control::Answer(true)) => {
                     protocol::send(&mut send, Signal::Accept(hello.clone())).await?;
-                    active(&connection, peer, key_exchange, send, signals, control, &events).await
+                    active(&connection, endpoint, key_exchange, send, signals, control, &events).await
                 }
                 Some(Control::Answer(false) | Control::Hangup) | None => {
                     finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
@@ -596,15 +598,16 @@ async fn ring(
 
 async fn active(
     connection: &Connection,
-    peer: EndpointId,
+    endpoint: &Endpoint,
     key_exchange: NamedGroup,
     mut send: SendStream,
     mut signals: mpsc::Receiver<Result<Signal, Error>>,
     control: &mut mpsc::Receiver<Control>,
     events: &mpsc::Sender<Event>,
 ) -> Result<EndReason, Error> {
+    let peer = connection.remote_id();
     tracing::info!(%peer, ?key_exchange, "call connected");
-    let (media, mut links) = media::start(connection)?;
+    let (media, mut links) = media::start(connection, endpoint)?;
     emit(events, Event::Connected { peer, key_exchange, media: Box::new(media) }).await;
     loop {
         tokio::select! {

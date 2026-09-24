@@ -736,6 +736,28 @@ default); keep disk usage lean. Avoid build scripts.
     cleared by hand (`just db-sql`), rather than carrying migration code for them.
   - Also found: `tools/ui-preview` had not compiled since the call-log fields were added — only
     the app's crates were being checked. Fixed, and the host tools are now part of every check.
+- **2026-09-24**: **how a call finds its way, recorded** — the groundwork for why calls with the
+  other phone are relayed (113 ms direct against 618 ms relayed, same two phones). Holepunching is
+  iroh's QUIC-NAT-Traversal over multipath: both sides learn their public address from their
+  relay, exchange candidates, and send at once; iroh quotes ~90% success and keeps the
+  lowest-latency path. It fails behind **hard NAT on both sides** (one hard side works since
+  1.0-rc.1), and it does not advertise deprecated IPv6 addresses. The peer's carrier NAT is hard, and
+  this side's wifi advertised no public IPv4, so IPv6 is the likely way to direct.
+  - Each call now logs **candidates** (`call candidates`: ours from the endpoint, theirs from
+    `remote_info`, whether each side had a *global* IPv6 address — link-local and unique-local
+    do not count) when it connects and when it ends, and **every path** as it opens, is selected
+    and closes (`path opened/selected/closed`, family, addresses, and a closed path's RTT, bytes
+    and losses).
+  - The call's summary gains, as new protobuf tags under the wire rules: time direct over IPv4,
+    direct over IPv6 and relayed; whether each side offered IPv6; whether a path of each family
+    ever opened; and `paths_recorded`, so an older call reads as unknown rather than "no IPv6".
+    The details page shows the breakdown ("IPv6 72% · relay 28%") and what happened with IPv6.
+  - **Next:** two test calls with the other phone, both on mobile data and then the other on wifi, and
+    both logs read together. Then the fix for whichever it is: an address not offered
+    (configurable external addresses), offered but not tried (ours or iroh's — reported with both
+    logs), tried and dropped (port mapping / their router), or opened and not kept (path
+    selection). Relayed calls are made good regardless: bitrate that follows the path, and relays
+    placed near both ends.
 - **2026-09-24**: **to do — roadmap 7f.** Not started. In order:
   - **A call that survives the network dropping out.** Today a lost connection ends the call as
     `Failed("connection lost")`, and a phone moving from wifi to cellular, through a lift or a

@@ -757,6 +757,7 @@ struct QualityText {
     speed_down: String,
     round_trip: String,
     path: String,
+    ipv6: String,
 }
 
 fn quality_text(quality: Option<&Quality>) -> QualityText {
@@ -767,12 +768,8 @@ fn quality_text(quality: Option<&Quality>) -> QualityText {
     let target = q.target.map_or_else(String::new, |t| {
         format!("{}p · {} fps · {:.1} Mbps", t.height, t.fps, f64::from(t.kbps) / KBPS_PER_MBPS)
     });
-    let path = match q.relayed_share() {
-        None => String::new(),
-        Some(share) if share <= 0.0 => "Direct".to_owned(),
-        Some(share) if share >= 1.0 => "Relayed".to_owned(),
-        Some(share) => format!("Relayed {:.0}% of the call", share * PERCENT),
-    };
+    let path = if q.paths_recorded { path_breakdown(q) } else { relayed_or_not(q) };
+    let ipv6 = if q.paths_recorded { ipv6_story(q) } else { String::new() };
     let (video, audio) = (&q.video, &q.audio);
     QualityText {
         target,
@@ -786,7 +783,47 @@ fn quality_text(quality: Option<&Quality>) -> QualityText {
         speed_down: spread_text(&q.kbps_down, KBPS_PER_MBPS, ONE_PLACE, "Mbps"),
         round_trip: spread_text(&q.rtt_ms, 1.0, WHOLE, "ms"),
         path,
+        ipv6,
     }
+}
+
+/// For a call from before paths were recorded by family: only relayed or not.
+fn relayed_or_not(q: &Quality) -> String {
+    match q.relayed_share() {
+        None => String::new(),
+        Some(share) if share <= 0.0 => "Direct".to_owned(),
+        Some(share) if share >= 1.0 => "Relayed".to_owned(),
+        Some(share) => format!("Relayed {:.0}% of the call", share * PERCENT),
+    }
+}
+
+/// "IPv6 72% · relay 28%", or the one way it went when it went only one way.
+fn path_breakdown(q: &Quality) -> String {
+    let (Some((v4, v6)), Some(relay)) = (q.direct_shares(), q.relayed_share()) else { return String::new() };
+    let parts: Vec<(&str, f64)> = [("IPv6", v6), ("IPv4", v4), ("relay", relay)]
+        .into_iter()
+        .filter(|&(_, share)| share > 0.0)
+        .collect();
+    match parts.as_slice() {
+        [] => String::new(),
+        [(name, _)] if *name == "relay" => "Relayed".to_owned(),
+        [(name, _)] => format!("Direct over {name}"),
+        _ => parts.iter().map(|(name, share)| format!("{name} {:.0}%", share * PERCENT)).collect::<Vec<_>>().join(" · "),
+    }
+}
+
+/// What happened with IPv6: used, or where it stopped — the question a relayed call raises.
+fn ipv6_story(q: &Quality) -> String {
+    let used = q.direct_shares().is_some_and(|(_, v6)| v6 > 0.0);
+    match (q.we_offered_v6, q.they_offered_v6, q.v6_path_opened) {
+        _ if used => "Used",
+        (_, _, true) => "Opened, not used",
+        (true, true, false) => "Both had it, never opened",
+        (true, false, _) => "They had none",
+        (false, true, _) => "You had none",
+        (false, false, _) => "Neither side had it",
+    }
+    .to_owned()
 }
 
 /// Everything the call details page shows, formatted.
@@ -826,6 +863,7 @@ fn call_detail(state: &Rc<RefCell<State>>, logged: &Logged) -> CallDetail {
         speed_down: q.speed_down.into(),
         round_trip: q.round_trip.into(),
         path: q.path.into(),
+        ipv6: q.ipv6.into(),
     }
 }
 

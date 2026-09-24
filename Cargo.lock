@@ -7132,6 +7132,7 @@ dependencies = [
  "flate2",
  "image",
  "iroh",
+ "n0-future",
  "noq-proto",
  "opus-sys",
  "parking_lot",

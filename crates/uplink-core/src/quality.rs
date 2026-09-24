@@ -114,12 +114,41 @@ pub struct Quality {
     pub video: VideoCounts,
     #[prost(message, required, tag = "9")]
     pub audio: AudioCounts,
+    /// Set by builds that record the fields below, so a call from before them reads as unknown
+    /// rather than as "no IPv6" — a missing field reads as its default, and false is not unknown.
+    #[prost(bool, tag = "10")]
+    pub paths_recorded: bool,
+    /// Samples taken while the path was direct, by address family; with `relayed_samples`, a
+    /// share of `rtt_ms`'s samples.
+    #[prost(uint32, tag = "11")]
+    pub direct_v4_samples: u32,
+    #[prost(uint32, tag = "12")]
+    pub direct_v6_samples: u32,
+    /// Whether each side had a global IPv6 address to offer the other.
+    #[prost(bool, tag = "13")]
+    pub we_offered_v6: bool,
+    #[prost(bool, tag = "14")]
+    pub they_offered_v6: bool,
+    /// Whether a direct path of each family ever opened, used or not.
+    #[prost(bool, tag = "15")]
+    pub v4_path_opened: bool,
+    #[prost(bool, tag = "16")]
+    pub v6_path_opened: bool,
 }
 
 impl Quality {
     /// How much of the call went through a relay, from 0 to 1; `None` if it was never sampled.
     pub fn relayed_share(&self) -> Option<f64> {
-        (self.rtt_ms.samples > 0).then(|| f64::from(self.relayed_samples) / f64::from(self.rtt_ms.samples))
+        self.share(self.relayed_samples)
+    }
+
+    /// How much of the call went direct over IPv4, and over IPv6, from 0 to 1.
+    pub fn direct_shares(&self) -> Option<(f64, f64)> {
+        Some((self.share(self.direct_v4_samples)?, self.share(self.direct_v6_samples)?))
+    }
+
+    fn share(&self, samples: u32) -> Option<f64> {
+        (self.rtt_ms.samples > 0).then(|| f64::from(samples) / f64::from(self.rtt_ms.samples))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {

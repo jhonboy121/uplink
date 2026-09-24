@@ -42,6 +42,9 @@ image = { version = "0.25", default-features = false }
 # no `protoc`, no build script. The format is a spec, not this crate: Google's own Rust protobuf
 # reads the same bytes, should prost (in maintenance, fixes only) ever need replacing.
 prost = "0.14"
+# `StreamExt`, for iroh's own streams (a connection's path events): the crate iroh itself uses,
+# already in the tree through it.
+n0-future = "0.3"
 # `metrics` is how a backgrounded endpoint is observable at all: the socket counters are the only
 # record of what it did overnight with no window and nothing in the log. Without the feature they
 # compile to no-ops, which is why the heartbeat had nothing to report.

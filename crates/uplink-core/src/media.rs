@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
+use iroh::Endpoint;
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, mpsc};
@@ -245,14 +246,15 @@ pub(crate) struct MediaLinks {
     pub stats: Arc<MediaStats>,
 }
 
-pub(crate) fn start(connection: &Connection) -> Result<(MediaSession, MediaLinks), Error> {
+/// `endpoint` is for telemetry, which asks it what each side could offer for a direct path.
+pub(crate) fn start(connection: &Connection, endpoint: &Endpoint) -> Result<(MediaSession, MediaLinks), Error> {
     let stats = Arc::<MediaStats>::default();
     let (audio, incoming_audio) = audio::start(connection, &stats)?;
     let (incoming_tx, incoming_video) = mpsc::channel(INCOMING_FRAME_QUEUE);
     let (request_tx, request_keyframe) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     let (keyframe_requested, keyframe_requests) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     tokio::spawn(receive_video(connection.clone(), incoming_tx, request_tx, Arc::clone(&stats)));
-    tokio::spawn(telemetry::run(connection.clone(), Arc::clone(&stats)));
+    tokio::spawn(telemetry::run(connection.clone(), endpoint.clone(), Arc::clone(&stats)));
     let video = VideoSender {
         connection: connection.clone(),
         runtime: Handle::current(),
