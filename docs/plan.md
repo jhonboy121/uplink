@@ -627,6 +627,12 @@ default); keep disk usage lean. Avoid build scripts.
   tap. The timeout is read from `ViewConfiguration.getLongPressTimeout`, since "Touch and hold
   delay" is the user's accessibility setting; it gets the platform's haptic tick. **To do:**
   TalkBack has no way in yet — Slint exposes no custom accessibility action for it.
+- **2026-09-24**: **ringback from the dial, and WhatsApp-style call-log arrows.** Ringback now
+  starts on `Dialing`, not `Ringing`: someone offline never rings, and silence until the dial
+  times out read as the app having hung. In the call log, direction is a 45° arrow (↙ in, ↗ out)
+  instead of ↓/↑ text, in the accent when the call was answered and red for any other ending —
+  the user's choice, widening "red means end" to "ended without a call". The words stay muted,
+  and say the ending themselves; "They declined" is now "Declined", since the arrow says whose.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

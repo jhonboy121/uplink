@@ -663,6 +663,7 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
                     tint: 0,
                     missed: record.outcome == Outcome::Missed,
                     incoming: record.incoming,
+                    answered: record.outcome == Outcome::Answered,
                     header: header.into(),
                 }
             })
@@ -682,7 +683,8 @@ fn describe_call(record: &CallRecord) -> String {
         },
         Outcome::Missed => "Missed".to_owned(),
         Outcome::Declined => "Declined".to_owned(),
-        Outcome::Rejected => "They declined".to_owned(),
+        // Which of us declined is the arrow's to say, as for every other outcome.
+        Outcome::Rejected => "Declined".to_owned(),
         Outcome::Cancelled => "Cancelled".to_owned(),
         Outcome::NoAnswer => "No answer".to_owned(),
         Outcome::Unreachable => "Couldn't reach them".to_owned(),

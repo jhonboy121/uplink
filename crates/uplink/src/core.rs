@@ -98,9 +98,10 @@ impl Ringer {
     fn follow(&self, event: &Event) {
         let outcome = match event {
             Event::Incoming { peer } => self.context.ring(&self.name_of(peer)),
-            // Our offer reached them and their phone is ringing: until now there was nothing to
-            // hear, since a dial that never lands is not ringing anywhere.
-            Event::Ringing { .. } => self.context.ringback(),
+            // From the moment we dial, not only once their phone rings: someone offline never
+            // rings, and silence until the dial times out reads as the app having hung. Starting
+            // it again on Ringing does nothing.
+            Event::Dialing { .. } | Event::Ringing { .. } => self.context.ringback(),
             Event::Connected { .. } | Event::Ended { .. } => self.context.stop_ringing(),
             _ => return,
         };

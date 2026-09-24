@@ -33,12 +33,14 @@ slint::slint! {
     export struct CallItem {
         name: string,
         id: string,
-        // "Missed · 20 minutes ago", and the mark that says which way it went.
+        // "Missed · 20:51". Which way it went is the arrow's to say, not the text's.
         detail: string,
         initial: string,
         tint: int,
         missed: bool,
         incoming: bool,
+        // Whether anyone talked: the arrow is the accent if so, red for every other ending.
+        answered: bool,
         // Set when this row is the first of a day, so the list can date its groups.
         header: string,
     }
@@ -149,6 +151,9 @@ slint::slint! {
         out property <length> mini-edge: 12px;
         // How far a finger may wander and still count as a tap. Android's own touch slop.
         out property <length> drag-slop: 8px;
+        // The call log's direction arrow, sized to its line of text.
+        out property <length> call-arrow: 15px;
+        out property <length> call-arrow-gap: 4px;
         // How long a press has to be held to count as a long press. Android's default until the
         // app reads the user's own setting ("Touch and hold delay") from `ViewConfiguration`.
         in-out property <duration> long-press: 400ms;
@@ -1502,13 +1507,33 @@ slint::slint! {
                                         vertical-alignment: center;
                                         overflow: elide;
                                     }
-                                    Text {
-                                        text: (entry.incoming ? "↓ " : "↑ ") + entry.detail;
-                                        color: Theme.muted;
-                                        font-size: 0.8125rem;
-                                        height: self.font-size * Theme.line-box;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                                    // The arrow carries direction by its tilt and the ending by
+                                    // its colour; the words say the ending too, so colour is
+                                    // never the only telling of it.
+                                    HorizontalLayout {
+                                        spacing: Theme.call-arrow-gap;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Image {
+                                                source: entry.incoming
+                                                    ? @image-url("icons/call-in.svg")
+                                                    : @image-url("icons/call-out.svg");
+                                                width: Theme.call-arrow;
+                                                height: self.width;
+                                                colorize: entry.answered ? Theme.beacon : Theme.end;
+                                                accessible-role: image;
+                                                accessible-label: entry.incoming ? "Incoming" : "Outgoing";
+                                            }
+                                        }
+                                        Text {
+                                            text: entry.detail;
+                                            color: Theme.muted;
+                                            font-size: 0.8125rem;
+                                            height: self.font-size * Theme.line-box;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
                                     }
                                 }
                                 VerticalLayout {
