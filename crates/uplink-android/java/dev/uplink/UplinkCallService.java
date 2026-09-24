@@ -84,7 +84,10 @@ public class UplinkCallService extends Service {
             // Names the person and owns the hang-up itself; the mute rides along beside it.
             Person who = new Person.Builder().setName(peer).setImportant(true).build();
             builder.setStyle(Notification.CallStyle.forOngoingCall(who, pending(UplinkActivity.ACTION_HANGUP)))
-                    .addAction(mute);
+                    .addAction(mute)
+                    // A call's controls are no use ten seconds after the call starts, which is
+                    // how long the system may otherwise sit on a foreground service's notification.
+                    .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         } else {
             // loadLabel, not getString(labelRes): our manifest has a literal label, no resources.
             builder.setContentTitle(peer.isEmpty() ? getApplicationInfo().loadLabel(getPackageManager()) : peer)

@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -54,13 +55,20 @@ public class UplinkListenService extends Service {
         Intent open = new Intent(this, UplinkActivity.class);
         PendingIntent tap = PendingIntent.getActivity(
                 this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new Notification.Builder(this, CHANNEL)
+        Notification.Builder builder = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(getResources().getIdentifier("notification", "drawable", getPackageName()))
                 .setContentTitle("Ready for calls")
                 .setContentText("uplink is reachable")
                 .setContentIntent(tap)
-                .setOngoing(true)
-                .build();
+                .setOngoing(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android holds a foreground service's notification back for up to ten seconds, so
+            // that a service which starts and finishes in that time never flashes one up. This
+            // one lives as long as the app does, and the wait reads as uplink taking that long
+            // to come online when it has in fact been reachable the whole time.
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
+        return builder.build();
     }
 
     @Override
