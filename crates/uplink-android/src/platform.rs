@@ -152,6 +152,26 @@ impl AppContext {
         })
     }
 
+    /// Seconds east of UTC in this phone's timezone at that moment, daylight saving included —
+    /// asked of Android, since Rust's standard library knows no zones and bionic's is private.
+    pub fn utc_offset(&self, at: std::time::SystemTime) -> Result<i64, Error> {
+        const MILLIS_PER_SECOND: i64 = 1000;
+        let since_epoch = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let millis = jlong::try_from(since_epoch.as_millis())?;
+        self.with(|env, _| {
+            let zone = env
+                .call_static_method(
+                    jni_str!("java/util/TimeZone"),
+                    jni_str!("getDefault"),
+                    jni_sig!("()Ljava/util/TimeZone;"),
+                    &[],
+                )?
+                .l()?;
+            let offset = env.call_method(&zone, jni_str!("getOffset"), jni_sig!("(J)I"), &[JValue::Long(millis)])?.i()?;
+            Ok(i64::from(offset) / MILLIS_PER_SECOND)
+        })
+    }
+
     /// A no-argument `void` method of the Application.
     fn call(&self, method: &JNIStr) -> Result<(), Error> {
         self.with(|env, application| {
@@ -193,6 +213,9 @@ pub enum PlatformEvent {
     ToggleMic,
     /// Answer was tapped on the ringing notification, which opened this window to take it.
     Answer,
+    /// The zone changed, the clock was set, or it went past midnight: times on screen may be
+    /// wrong, and "today" may be yesterday.
+    ClockChanged,
 }
 
 impl PlatformEvent {
@@ -201,6 +224,7 @@ impl PlatformEvent {
             0 => Some(Self::Hangup),
             1 => Some(Self::ToggleMic),
             2 => Some(Self::Answer),
+            3 => Some(Self::ClockChanged),
             _ => None,
         }
     }
@@ -258,6 +282,11 @@ impl Platform {
         // [`Self::sdk`].
         let activity = ArcSwapOption::from(Some(Arc::new(activity)));
         Ok((Self { context, activity, inner, sdk }, incoming))
+    }
+
+    /// The window-free half, for whatever outlives this window or runs off its thread.
+    pub fn context(&self) -> AppContext {
+        self.context.clone()
     }
 
     /// Anything that only needs a `Context`, which is everything the app does when nobody is

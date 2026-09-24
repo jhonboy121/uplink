@@ -20,7 +20,7 @@ use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, Model as _, RenderingState, Timer, TimerMode};
@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
-use uplink_android::platform::{Permission, Platform, PlatformEvent};
+use uplink_android::platform::{AppContext, Permission, Platform, PlatformEvent};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
@@ -151,6 +151,8 @@ struct State {
     me: EndpointId,
     /// The contact just added, shimmering in the People list until [`FRESH_FOR`] has passed.
     fresh: Option<EndpointId>,
+    /// The phone's own time of day, for every time the app shows.
+    clock: LocalClock,
     stats: Arc<FrameStats>,
     /// Commands to the endpoint, which this window borrows rather than owns — the endpoint
     /// belongs to the process and outlives every window it is shown in.
@@ -651,7 +653,7 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
             .iter()
             .map(|logged| {
                 let record = &logged.call;
-                let day = day_of(record.at);
+                let day = s.clock.day_of(record.at);
                 let header = if day == previous { String::new() } else { day.clone() };
                 previous = day;
                 // A name we chose, else what they called themselves, else the key itself.
@@ -664,7 +666,7 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
                     initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
                     name: name.into(),
                     id: record.peer.to_string().into(),
-                    detail: describe_call(record).into(),
+                    detail: describe_call(record, &s.clock).into(),
                     tint: 0,
                     missed: record.outcome == Outcome::Missed,
                     incoming: record.incoming,
@@ -683,13 +685,13 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
     ui.set_selected_calls_count(count.unwrap_or_default());
 }
 
-/// "Missed · 20 minutes ago", or "4:12 · Tuesday" for one that was answered.
-fn describe_call(record: &CallRecord) -> String {
+/// "Missed · 21:04", or "4:12 · 21:04" for one that was answered; the day is the group's.
+fn describe_call(record: &CallRecord, clock: &LocalClock) -> String {
     let what = match (record.outcome, record.duration) {
         (Outcome::Answered, Some(duration)) => minutes_seconds(duration),
         (outcome, _) => outcome_name(outcome).to_owned(),
     };
-    format!("{what} · {}", clock_of(record.at))
+    format!("{what} · {}", clock.clock_of(record.at))
 }
 
 const fn outcome_name(outcome: Outcome) -> &'static str {
@@ -797,7 +799,9 @@ fn call_detail(state: &Rc<RefCell<State>>, logged: &Logged) -> CallDetail {
         status: outcome_name(record.outcome).into(),
         incoming: record.incoming,
         answered: record.outcome == Outcome::Answered,
-        when: format!("{} · {}", day_label(record.at), clock_of(record.at)).into(),
+        when: with_state_value(state, |s| format!("{} · {}", s.clock.day_label(record.at), s.clock.clock_of(record.at)))
+            .unwrap_or_default()
+            .into(),
         duration: record.duration.map(minutes_seconds).unwrap_or_default().into(),
         sent: sent.into(),
         received: received.into(),
@@ -815,33 +819,78 @@ fn call_detail(state: &Rc<RefCell<State>>, logged: &Logged) -> CallDetail {
     }
 }
 
-/// The day heading, in sentence case for a line of prose rather than a group label.
-fn day_label(at: SystemTime) -> String {
-    let heading = day_of(at);
-    let mut chars = heading.chars();
-    chars.next().map(|first| first.to_string() + &chars.as_str().to_lowercase()).unwrap_or(heading)
+const SECONDS_PER_HOUR: i64 = 3_600;
+const SECONDS_PER_DAY: i64 = 86_400;
+const DAYS_PER_WEEK: i64 = 7;
+
+/// Times as the phone's own clock shows them. The log keeps UTC, and the time of day and the day
+/// boundaries both depend on where the phone is — its zone asked of Android for each moment, so a
+/// call from before a daylight-saving change still reads the way the clock read then.
+struct LocalClock {
+    context: AppContext,
+    /// Offsets already asked for, by UTC hour: a list of a hundred calls would otherwise cross
+    /// into Java three times a row. Daylight saving needs nothing more — each hour keeps the
+    /// offset that was right for it — so only a change of zone empties this ([`Self::forget`]).
+    /// Near enough: nearly every zone changes offset on the hour, and the few that do not could
+    /// show a time half an hour off in that one hour of the year.
+    offsets: RefCell<FxHashMap<i64, i64>>,
 }
 
-/// The day a call happened, as the heading above its group.
-fn day_of(at: SystemTime) -> String {
-    let Ok(ago) = SystemTime::now().duration_since(at) else {
-        return "TODAY".to_owned();
-    };
-    match ago.as_secs() / 60 / 60 / 24 {
-        0 => "TODAY".to_owned(),
-        1 => "YESTERDAY".to_owned(),
-        days if days < 7 => format!("{days} DAYS AGO"),
-        days => format!("{} WEEKS AGO", days / 7),
+impl LocalClock {
+    fn new(context: AppContext) -> Self {
+        Self { context, offsets: RefCell::default() }
     }
-}
 
-/// Time of day is what a log row wants; the group heading already carries the date.
-fn clock_of(at: SystemTime) -> String {
-    let Ok(since_epoch) = at.duration_since(UNIX_EPOCH) else {
-        return "just now".to_owned();
-    };
-    let minutes_today = (since_epoch.as_secs() / 60) % (24 * 60);
-    format!("{:02}:{:02}", minutes_today / 60, minutes_today % 60)
+    /// The phone moved to another zone, or its clock was set: every cached offset may be wrong.
+    fn forget(&self) {
+        self.offsets.borrow_mut().clear();
+    }
+
+    /// Seconds since the epoch as a wall clock here reads them. UTC if the zone cannot be read,
+    /// which is wrong by the offset but never by more.
+    fn local_seconds(&self, at: SystemTime) -> i64 {
+        let epoch = match at.duration_since(UNIX_EPOCH) {
+            Ok(since) => i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+            Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
+        };
+        let hour = epoch.div_euclid(SECONDS_PER_HOUR);
+        let cached = self.offsets.borrow().get(&hour).copied();
+        let offset = cached.unwrap_or_else(|| {
+            let offset = self.context.utc_offset(at).unwrap_or_else(|e| {
+                tracing::warn!("reading the timezone: {e}");
+                0
+            });
+            self.offsets.borrow_mut().insert(hour, offset);
+            offset
+        });
+        epoch.saturating_add(offset)
+    }
+
+    /// The day a call happened, as the heading above its group: calendar days here, so a call at
+    /// 23:00 is yesterday by the next morning, not today for another fourteen hours.
+    fn day_of(&self, at: SystemTime) -> String {
+        let day = |moment| self.local_seconds(moment).div_euclid(SECONDS_PER_DAY);
+        match day(SystemTime::now()) - day(at) {
+            ..=0 => "TODAY".to_owned(),
+            1 => "YESTERDAY".to_owned(),
+            days if days < DAYS_PER_WEEK => format!("{days} DAYS AGO"),
+            days => format!("{} WEEKS AGO", days / DAYS_PER_WEEK),
+        }
+    }
+
+    /// The day heading, in sentence case for a line of prose rather than a group label.
+    fn day_label(&self, at: SystemTime) -> String {
+        let heading = self.day_of(at);
+        let mut chars = heading.chars();
+        chars.next().map(|first| first.to_string() + &chars.as_str().to_lowercase()).unwrap_or(heading)
+    }
+
+    /// Time of day is what a log row wants; the group heading already carries the date.
+    fn clock_of(&self, at: SystemTime) -> String {
+        const MINUTES_PER_HOUR: i64 = 60;
+        let minutes = self.local_seconds(at).rem_euclid(SECONDS_PER_DAY) / (SECONDS_PER_HOUR / MINUTES_PER_HOUR);
+        format!("{:02}:{:02}", minutes / MINUTES_PER_HOUR, minutes % MINUTES_PER_HOUR)
+    }
 }
 
 /// Coarse on purpose: the second line of a contact row answers "recently?", not "when exactly?".
@@ -1349,6 +1398,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         connected_at: None,
         me: identity,
         fresh: None,
+        clock: LocalClock::new(platform.context()),
         stats: Arc::default(),
         core: None,
     }));
@@ -1711,7 +1761,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     // What the platform did unasked: the window shrinking into picture-in-picture, and the taps
     // on the buttons that window carries. The receiver needs no reactor, so the UI loop owns it.
-    let (weak, mut events) = (ui.as_weak(), platform_events);
+    let (weak, mut events, s) = (ui.as_weak(), platform_events, Rc::clone(&state));
     spawn_ui(async move {
         while let Some(event) = events.recv().await {
             let Some(ui) = weak.upgrade() else { break };
@@ -1720,6 +1770,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 PlatformEvent::Hangup => ui.invoke_hangup(),
                 PlatformEvent::ToggleMic => ui.invoke_toggle_mic(),
                 PlatformEvent::Answer => ui.invoke_accept(),
+                // The only times on screen are the call log's; the contacts' are relative.
+                PlatformEvent::ClockChanged => {
+                    with_state(&s, |state| state.clock.forget());
+                    show_calls(&s, &ui);
+                }
             }
         }
     });

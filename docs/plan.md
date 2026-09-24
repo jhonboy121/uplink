@@ -670,9 +670,15 @@ default); keep disk usage lean. Avoid build scripts.
     as a hang-up (media torn down). The node now only logs it, the ledger only closes the call an
     `Ended` names, the app says "You're already in a call" instead of dialling, and an answered
     call stays Answered however it ends.
-  - **Found, not fixed — times are UTC.** `clock_of` takes the time of day from the Unix epoch
-    with no timezone, so the Calls list is off by the local UTC offset. Needs the local offset
-    (bionic's `localtime_r`, or `TimeZone` over JNI) before anyone reads a time off it.
+  - **Times were UTC; fixed.** `clock_of` took the time of day from the Unix epoch with no
+    timezone, so the Calls list was off by the local UTC offset, and "today" meant "the last 24
+    hours". Times now go through `LocalClock`, which asks Android for the offset at each moment
+    (`TimeZone.getDefault().getOffset`, daylight saving included) and compares calendar days
+    here. Offsets are cached per UTC hour, so a list of a hundred calls is not three hundred JNI
+    calls; daylight saving needs no invalidation, since each hour keeps the offset right for it.
+    The activity listens for `ACTION_TIMEZONE_CHANGED`, `ACTION_TIME_CHANGED` and
+    `ACTION_DATE_CHANGED` (midnight), and each one empties the cache and redraws the call log —
+    otherwise a list left open overnight kept calling yesterday "today".
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

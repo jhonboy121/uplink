@@ -47,6 +47,8 @@ public class UplinkActivity extends NativeActivity {
     static final int ACTION_HANGUP = 0;
     static final int ACTION_MIC = 1;
     static final int ACTION_ANSWER = 2;
+    /** Not a call action, but the same one-way path to the window: the time shown may be wrong. */
+    static final int ACTION_CLOCK = 3;
     /** Why the activity was opened for a call, from the ringing notification. */
     static final String EXTRA_CALL = "call";
     static final int CALL_SHOW = 1;
@@ -83,15 +85,38 @@ public class UplinkActivity extends NativeActivity {
         }
     };
 
+    /**
+     * The times on screen are the phone's own: a new zone changes every one of them, and midnight
+     * or a clock set by hand changes which day is "today". Daylight saving needs nothing, since
+     * each moment keeps the offset it had. System broadcasts, delivered even to a receiver that is
+     * not exported.
+     */
+    private final BroadcastReceiver clockChanges = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            log(Log.INFO, "clock changed: " + intent.getAction());
+            long handle = nativeHandle;
+            if (handle != 0) {
+                nativeCallAction(handle, ACTION_CLOCK);
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         IntentFilter filter = new IntentFilter(ACTION_CALL);
+        IntentFilter clock = new IntentFilter(Intent.ACTION_TIMEZONE_CHANGED);
+        clock.addAction(Intent.ACTION_TIME_CHANGED);
+        clock.addAction(Intent.ACTION_DATE_CHANGED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Required from 33, and right at any version: these are ours to send.
+            // Required from 33. The call actions are ours to send; the clock ones are the
+            // system's, which reach a receiver that is not exported all the same.
             registerReceiver(callActions, filter, Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(clockChanges, clock, Context.RECEIVER_NOT_EXPORTED);
         } else {
             registerReceiver(callActions, filter);
+            registerReceiver(clockChanges, clock);
         }
         takeCallIntent(getIntent());
     }
@@ -475,6 +500,7 @@ public class UplinkActivity extends NativeActivity {
     @Override
     protected void onDestroy() {
         unregisterReceiver(callActions);
+        unregisterReceiver(clockChanges);
         long handle = nativeHandle;
         nativeHandle = 0;
         if (handle != 0) {
