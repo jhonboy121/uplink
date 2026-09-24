@@ -347,9 +347,11 @@ impl Engine {
                 let task = outgoing(self.endpoint.clone(), peer, control_rx, self.events.clone());
                 self.spawn_call(control, Some(peer), task);
             }
+            // Refused, and said only in the log. It used to go out as `Ended`, which every listener
+            // read as the end of the call that *is* up: the app logged that call as failed and
+            // tore its media down while it carried on.
             (Command::Call(peer), Some(_)) => {
-                let reason = EndReason::Failed("already in a call".into());
-                emit(&self.events, Event::Ended { peer: Some(peer), reason }).await;
+                tracing::warn!(peer = %peer.fmt_short(), "refused a call while one is up");
             }
             (Command::Answer(accept), Some(call)) => forward(call, Control::Answer(accept)).await,
             (Command::Hangup, Some(call)) => forward(call, Control::Hangup).await,

@@ -48,6 +48,40 @@ slint::slint! {
         // Set when this row is the first of a day, so the list can date its groups.
         header: string,
     }
+    // One call, opened from the log. The strings are ready to show; Rust does the formatting.
+    export struct CallDetail {
+        // The log row, which is what Remove takes.
+        entry: string,
+        // Their key, which is what Call and Add take.
+        peer: string,
+        name: string,
+        initial: string,
+        // Saved as a contact already, so Add has nothing to do.
+        known: bool,
+        fingerprint: [string],
+        status: string,
+        incoming: bool,
+        answered: bool,
+        when: string,
+        // Empty when there is nothing to say: unanswered, or logged before it was recorded.
+        duration: string,
+        sent: string,
+        received: string,
+        // How it went, each empty when unknown: a call too short to sample, or logged before
+        // any of this was kept.
+        target: string,
+        fps-out: string,
+        fps-in: string,
+        frames: string,
+        frames-lost: string,
+        audio-packets: string,
+        audio-repaired: string,
+        speed-up: string,
+        speed-down: string,
+        round-trip: string,
+        path: string,
+    }
+
     export enum CallState { idle, dialing, ringing, incoming, connected }
 
     // A call cannot happen without all three, so the gate is not dismissable. `blocked` is the
@@ -55,7 +89,7 @@ slint::slint! {
     export enum Grant { needed, granted, blocked }
 
     // What is waiting on a yes. `none` is the usual state.
-    export enum Confirm { none, remove-contact, remove-selected, clear-calls, remove-selected-calls }
+    export enum Confirm { none, remove-contact, remove-selected, clear-calls, remove-selected-calls, remove-call }
 
     export struct PermissionItem {
         name: string,
@@ -158,6 +192,8 @@ slint::slint! {
         // The call log's direction arrow, sized to its line of text.
         out property <length> call-arrow: 15px;
         out property <length> call-arrow-gap: 4px;
+        // A line of figures on a call's details: tighter than a list row, which carries two lines.
+        out property <length> stat-height: 40px;
         // How long a press has to be held to count as a long press. Android's default until the
         // app reads the user's own setting ("Touch and hold delay") from `ViewConfiguration`.
         in-out property <duration> long-press: 400ms;
@@ -220,6 +256,23 @@ slint::slint! {
         in-out property <bool> rtl: false;
     }
 
+    // A tap, as Android means one: a press released where it started, within the touch slop.
+    // `clicked` fires on any release, and Slint delivers a *cancelled* touch as a release (its own
+    // tests say so). Android cancels the touch under an edge swipe the moment it takes the swipe
+    // for Back — by then the finger has travelled past the slop — so a bare `clicked` pressed the
+    // Call pill, or unfolded the call, under every Back that started on one. Every button in
+    // this file takes its taps from here.
+    component Tap inherits TouchArea {
+        callback tapped();
+        mouse-cursor: pointer;
+        clicked => {
+            if (abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+                && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
+                root.tapped();
+            }
+        }
+    }
+
     component Avatar inherits Rectangle {
         in property <string> initial;
         in property <int> tint;
@@ -264,9 +317,8 @@ slint::slint! {
             height: Theme.key-icon;
             colorize: danger || positive ? #FFFFFF : on ? Theme.under-video : Theme.on-video;
         }
-        touch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.clicked(); }
+        touch := Tap {
+            tapped => { root.clicked(); }
         }
         states [
             pressed when touch.pressed : { opacity: 0.6; }
@@ -323,9 +375,9 @@ slint::slint! {
             height: self.font-size * Theme.line-box;
             vertical-alignment: center;
         }
-        touch := TouchArea {
+        touch := Tap {
             mouse-cursor: root.enabled ? pointer : default;
-            clicked => {
+            tapped => {
                 if (root.enabled) {
                     root.clicked();
                 }
@@ -576,9 +628,8 @@ slint::slint! {
                     font-size: 0.85rem;
                     color: root.screen == tab.screen ? Theme.beacon : Theme.muted;
                 }
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.screen = tab.screen; }
+                Tap {
+                    tapped => { root.screen = tab.screen; }
                 }
                 animate background { duration: 160ms; easing: ease-out; }
             }
@@ -607,9 +658,9 @@ slint::slint! {
             color: root.accent;
             font-size: 0.8125rem;
         }
-        touch := TouchArea {
+        touch := Tap {
             mouse-cursor: root.enabled ? pointer : default;
-            clicked => {
+            tapped => {
                 if (root.enabled) {
                     root.clicked();
                 }
@@ -643,8 +694,11 @@ slint::slint! {
                 self.holding = false;
             }
         }
+        // As `Tap` does: a release that travelled is a scroll or a cancelled Back, not a tap.
         clicked => {
-            if (!self.long-pressed) {
+            if (!self.long-pressed
+                && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+                && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
                 root.tapped();
             }
         }
@@ -682,9 +736,9 @@ slint::slint! {
             height: 1px;
             background: Theme.hairline;
         }
-        touch := TouchArea {
+        touch := Tap {
             mouse-cursor: root.tappable ? pointer : default;
-            clicked => {
+            tapped => {
                 if (root.tappable) {
                     root.clicked();
                 }
@@ -1158,9 +1212,8 @@ slint::slint! {
                 accessible-role: button;
                 accessible-label: "Remove " + root.relay.name;
                 accessible-action-default => { root.remove(); }
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.remove(); }
+                Tap {
+                    tapped => { root.remove(); }
                 }
             }
         }
@@ -1419,6 +1472,184 @@ slint::slint! {
     }
 
     // What happened, and with whom. A missed call is the only thing here worth a colour.
+    // The label over a group of figures, in the People list's heading style.
+    component SectionHead inherits HorizontalLayout {
+        in property <string> text;
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        Text {
+            text: root.text;
+            color: Theme.muted;
+            font-family: Theme.mono;
+            font-size: 0.6875rem;
+            letter-spacing: 1.6px;
+            height: Theme.group-head;
+            vertical-alignment: bottom;
+        }
+    }
+
+    // One figure: what it is, and its value in the monospace face so columns of numbers line up.
+    component StatRow inherits Rectangle {
+        in property <string> title;
+        in property <string> value;
+        height: Theme.stat-height;
+        accessible-role: text;
+        accessible-label: root.title + ": " + root.value;
+        HorizontalLayout {
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            spacing: Theme.value-gap;
+            Text {
+                text: root.title;
+                color: Theme.muted;
+                font-size: 0.875rem;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: root.value;
+                color: Theme.text;
+                font-family: Theme.mono;
+                font-size: 0.8125rem;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+    }
+
+    // One call from the log, laid out as a contact is: who, then what you can do, then the facts.
+    // A caller not saved yet can be added from here, which is the only way to keep someone who
+    // rang you without their code.
+    component CallPage inherits Rectangle {
+        in property <CallDetail> call;
+        in property <length> top-inset;
+        in property <length> bottom-inset;
+        callback call-back();
+        callback add();
+        callback remove();
+        callback close();
+        background: Theme.ground;
+
+        VerticalLayout {
+            HorizontalLayout {
+                vertical-stretch: 0;
+                padding-top: root.top-inset + Theme.bar-top;
+                padding-left: Theme.edge;
+                padding-right: Theme.edge;
+                padding-bottom: Theme.bar-bottom;
+                spacing: Theme.gap;
+                PageTitle {
+                    text: root.call.name;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Done";
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                mouse-drag-pan-enabled: true;
+                VerticalLayout {
+                    alignment: start;
+                    padding-bottom: root.bottom-inset + Theme.gap-large;
+                    VerticalLayout {
+                        padding-left: Theme.edge;
+                        padding-right: Theme.edge;
+                        spacing: Theme.stack-gap;
+                        HorizontalLayout {
+                            alignment: center;
+                            Avatar {
+                                initial: root.call.initial;
+                                tint: 0;
+                                size: Theme.peer-avatar;
+                            }
+                        }
+                        // The key is who this is, whatever the name says; for a caller not saved
+                        // it is the only thing to go on.
+                        VerticalLayout {
+                            for line in root.call.fingerprint : Text {
+                                text: line;
+                                color: Theme.muted;
+                                font-size: 0.9375rem;
+                                font-family: Theme.mono;
+                                letter-spacing: 0.6px;
+                                height: self.font-size * Theme.line-box;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Wide {
+                            text: "Call back";
+                            primary: true;
+                            clicked => { root.call-back(); }
+                        }
+                        if !root.call.known : Wide {
+                            text: "Add to contacts";
+                            clicked => { root.add(); }
+                        }
+                    }
+
+                    Rectangle { height: Theme.stack-top; }
+                    DetailRow {
+                        title: root.call.incoming ? "Incoming call" : "Outgoing call";
+                        detail: root.call.when;
+                        value: root.call.status;
+                        tappable: false;
+                    }
+                    if root.call.duration != "" : DetailRow {
+                        title: "Duration";
+                        detail: "From answer to hang-up";
+                        value: root.call.duration;
+                        tappable: false;
+                    }
+                    if root.call.sent != "" : DetailRow {
+                        title: "Sent";
+                        detail: "Your video and voice";
+                        value: root.call.sent;
+                        tappable: false;
+                    }
+                    if root.call.received != "" : DetailRow {
+                        title: "Received";
+                        detail: "Their video and voice";
+                        value: root.call.received;
+                        tappable: false;
+                    }
+                    // Above the figures, so it is not something to scroll past them for.
+                    DetailRow {
+                        title: "Remove from log";
+                        detail: "Only this call; nobody else's log changes";
+                        icon: @image-url("icons/close.svg");
+                        danger: true;
+                        clicked => { root.remove(); }
+                    }
+
+                    // How it went. A spread reads "average · lowest–highest" over the call's
+                    // samples, one every few seconds; a call shorter than that has none.
+                    if root.call.target != "" : SectionHead { text: "VIDEO"; }
+                    if root.call.target != "" : StatRow { title: "Set up for"; value: root.call.target; }
+                    if root.call.fps-out != "" : StatRow { title: "Frame rate sent"; value: root.call.fps-out; }
+                    if root.call.fps-in != "" : StatRow { title: "Frame rate received"; value: root.call.fps-in; }
+                    if root.call.frames != "" : StatRow { title: "Frames"; value: root.call.frames; }
+                    if root.call.frames-lost != "" : StatRow { title: "Frames lost"; value: root.call.frames-lost; }
+                    if root.call.audio-packets != "" : SectionHead { text: "VOICE"; }
+                    if root.call.audio-packets != "" : StatRow { title: "Packets"; value: root.call.audio-packets; }
+                    if root.call.audio-repaired != "" : StatRow { title: "Repaired"; value: root.call.audio-repaired; }
+                    if root.call.round-trip != "" : SectionHead { text: "NETWORK"; }
+                    if root.call.path != "" : StatRow { title: "Path"; value: root.call.path; }
+                    if root.call.speed-up != "" : StatRow { title: "Upload"; value: root.call.speed-up; }
+                    if root.call.speed-down != "" : StatRow { title: "Download"; value: root.call.speed-down; }
+                    if root.call.round-trip != "" : StatRow { title: "Round trip"; value: root.call.round-trip; }
+                }
+            }
+        }
+    }
+
     component CallsPage inherits Rectangle {
         in property <[CallItem]> calls;
         in property <length> top-inset;
@@ -1428,6 +1659,7 @@ slint::slint! {
         in property <int> selected-count;
         callback call(string);
         callback clear();
+        callback open(string);
         callback select(string);
         callback start-selecting();
         callback long-pressed();
@@ -1514,12 +1746,13 @@ slint::slint! {
                         }
                         Rectangle {
                             height: Theme.row-height;
-                            // A tap only means something while selecting; outside it the row is
-                            // read, and the pill is what calls.
+                            // A tap opens the call, or ticks it while selecting; the pill calls.
                             call-touch := HoldArea {
                                 tapped => {
                                     if (root.selecting) {
                                         root.select(entry.entry);
+                                    } else {
+                                        root.open(entry.entry);
                                     }
                                 }
                                 held => {
@@ -1531,7 +1764,7 @@ slint::slint! {
                                 }
                             }
                             background: entry.selected ? Theme.raised
-                                : call-touch.pressed && root.selecting ? Theme.surface
+                                : call-touch.pressed ? Theme.surface
                                 : transparent;
                             animate background { duration: 160ms; easing: ease-out; }
                             HorizontalLayout {
@@ -1740,9 +1973,8 @@ slint::slint! {
                             accessible-role: button;
                             accessible-label: root.copied ? "Key copied" : "Copy key";
                             accessible-action-default => { root.copy-key(); }
-                            copy-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.copy-key(); }
+                            copy-touch := Tap {
+                                tapped => { root.copy-key(); }
                             }
                             Image {
                                 source: root.copied ? @image-url("icons/check.svg") : @image-url("icons/copy.svg");
@@ -1819,10 +2051,10 @@ slint::slint! {
                 root.clicked();
             }
         }
-        touch := TouchArea {
+        touch := Tap {
             enabled: root.tappable;
             mouse-cursor: root.tappable ? pointer : default;
-            clicked => { root.clicked(); }
+            tapped => { root.clicked(); }
         }
         background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
         animate background { duration: 160ms; easing: ease-out; }
@@ -2090,8 +2322,12 @@ slint::slint! {
                     root.pos-y = root.y + self.mouse-y - self.pressed-y;
                 }
             }
+            // Checked at the release too, not only by `moved`: a cancelled Back arrives as a
+            // release far from the press with no move in between, which `dragged` never sees.
             clicked => {
-                if (!root.dragged) {
+                if (!root.dragged
+                    && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+                    && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
                     root.restore();
                 }
             }
@@ -2156,8 +2392,8 @@ slint::slint! {
                 source: root.swapped ? root.remote-frame : root.frame;
                 image-fit: cover;
             }
-            TouchArea {
-                clicked => { root.swapped = !root.swapped; }
+            Tap {
+                tapped => { root.swapped = !root.swapped; }
             }
             animate x, y, width, height, border-radius { duration: 620ms; easing: ease-out-quint; }
         }
@@ -2390,6 +2626,11 @@ slint::slint! {
         callback toggle-call-selected(string);
         callback remove-selected-calls();
         callback clear-call-selection();
+        // The call whose details are open, while `call-open` says so.
+        in property <CallDetail> open-call;
+        in-out property <bool> call-open: false;
+        callback show-call(string);
+        callback remove-call(string);
         // The contact being looked at. Empty means none, which is also how it is dismissed.
         in-out property <string> open-contact-id;
         in property <string> open-contact-name;
@@ -2567,6 +2808,7 @@ slint::slint! {
                         call(id) => { root.call(id); }
                         clear => { root.confirming = Confirm.clear-calls; }
                         select(entry) => { root.toggle-call-selected(entry); }
+                        open(entry) => { root.show-call(entry); }
                         start-selecting => { root.selecting-calls = true; }
                         long-pressed => { root.long-pressed(); }
                         remove-selected => { root.confirming = Confirm.remove-selected-calls; }
@@ -2710,6 +2952,21 @@ slint::slint! {
                 }
             }
 
+            // One call from the log, over the tabs. Under the naming sheet, which Add opens, and
+            // under the confirm sheet, which Remove opens.
+            if root.call-open : CallPage {
+                top-inset: root.safe-area-insets.top;
+                bottom-inset: root.safe-area-insets.bottom;
+                call: root.open-call;
+                call-back => {
+                    root.call-open = false;
+                    root.call(root.open-call.peer);
+                }
+                add => { root.peer-key = root.open-call.peer; }
+                remove => { root.confirming = Confirm.remove-call; }
+                close => { root.call-open = false; }
+            }
+
             // A key that has arrived and has no name yet, over everything below it.
             if root.peer-key != "" : NameSheet {
                 key: root.peer-key;
@@ -2746,19 +3003,23 @@ slint::slint! {
             // and closing the page to find it cleared the contact it was meant to remove.
             if root.confirming != Confirm.none : ConfirmSheet {
                 title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
+                    : root.confirming == Confirm.remove-call ? "Remove this call?"
                     : root.confirming == Confirm.remove-selected-calls
                         ? "Remove " + root.selected-calls-count + (root.selected-calls-count == 1 ? " call?" : " calls?")
                     : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
                     : "Remove " + root.open-contact-name + "?";
                 body: root.confirming == Confirm.clear-calls
                     ? "Every call is forgotten. It does not affect your contacts."
-                    : root.confirming == Confirm.remove-selected-calls
-                    ? "They leave the call log. It does not affect your contacts."
+                    : root.confirming == Confirm.remove-selected-calls || root.confirming == Confirm.remove-call
+                    ? "It leaves the call log. It does not affect your contacts."
                     : "Their key goes with them. You would need it again to call them, and they can still call you.";
                 confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
                 confirm => {
                     if (root.confirming == Confirm.clear-calls) {
                         root.clear-calls();
+                    } else if (root.confirming == Confirm.remove-call) {
+                        root.remove-call(root.open-call.entry);
+                        root.call-open = false;
                     } else if (root.confirming == Confirm.remove-selected-calls) {
                         root.remove-selected-calls();
                     } else if (root.confirming == Confirm.remove-selected) {

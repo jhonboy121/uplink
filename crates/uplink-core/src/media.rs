@@ -16,6 +16,7 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 
 use crate::audio::{self, AudioReceiver, AudioSender};
+use crate::quality::{AudioCounts, Quality, VideoCounts};
 use crate::{Error, protocol, telemetry};
 
 /// Longest a frame may take to arrive before it is useless for live playback.
@@ -88,6 +89,8 @@ pub struct MediaStats {
     /// and read by the UI, which is the only way the call screen can say which one it has.
     route: AtomicU8,
     pub frames_sent: AtomicU64,
+    /// Media payload each way, video frames and audio packets both: what a call carried, as the
+    /// log reports it, without QUIC's own overhead.
     pub bytes_sent: AtomicU64,
     /// Not sent: too many frames already in flight.
     pub frames_dropped_congested: AtomicU64,
@@ -111,11 +114,39 @@ pub struct MediaStats {
     pub audio_concealed: AtomicU64,
     /// Buffered packets skipped to keep latency bounded.
     pub audio_skipped: AtomicU64,
+    /// How rates spread across the call, sampled by telemetry each interval. The counts are
+    /// filled in by [`Self::summary`] when someone asks.
+    pub(crate) quality: parking_lot::Mutex<Quality>,
 }
 
 impl MediaStats {
     pub(crate) fn count(counter: &AtomicU64, amount: u64) {
         counter.fetch_add(amount, Ordering::Relaxed);
+    }
+
+    /// How the call went so far: the sampled spreads, and every count as it stands now. Read
+    /// once at the end of a call, for the log.
+    pub fn summary(&self) -> Quality {
+        let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+        let mut quality = self.quality.lock().clone();
+        quality.video = VideoCounts {
+            sent: count(&self.frames_sent),
+            received: count(&self.frames_received),
+            late: count(&self.frames_late),
+            congested: count(&self.frames_dropped_congested),
+            discarded: count(&self.frames_dropped_received),
+            keyframe_asks_sent: count(&self.keyframe_requests_sent),
+            keyframe_asks_received: count(&self.keyframe_requests_received),
+        };
+        quality.audio = AudioCounts {
+            sent: count(&self.audio_sent),
+            received: count(&self.audio_received),
+            not_sent: count(&self.audio_send_dropped),
+            late: count(&self.audio_late),
+            rebuilt: count(&self.audio_fec_recovered),
+            concealed: count(&self.audio_concealed),
+        };
+        quality
     }
 
     pub fn route(&self) -> Route {

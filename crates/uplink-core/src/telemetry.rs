@@ -165,6 +165,18 @@ pub(crate) async fn run(connection: Connection, media: Arc<MediaStats>) {
         rtt_total += p.rtt;
         rtt_max = rtt_max.max(p.rtt);
         samples += 1;
+        // The same figures the line below logs, kept as a spread for the call's own record.
+        {
+            let mut quality = media.quality.lock();
+            quality.fps_out.add(rate(delta.frames_sent, over));
+            quality.fps_in.add(rate(delta.frames_received, over));
+            quality.kbps_up.add(float(kbps(delta.bytes_up, over)));
+            quality.kbps_down.add(float(kbps(delta.bytes_down, over)));
+            quality.rtt_ms.add(float(u64::try_from(p.rtt.as_millis()).unwrap_or(u64::MAX)));
+            if p.kind == RELAY {
+                quality.relayed_samples = quality.relayed_samples.saturating_add(1);
+            }
+        }
         tracing::info!(
             path = p.kind,
             rtt_ms = p.rtt.as_millis(),

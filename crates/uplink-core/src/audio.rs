@@ -151,8 +151,12 @@ impl AudioSender {
         self.sequence += 1;
         let mut datagram = protocol::encode(&header)?;
         datagram.extend_from_slice(self.packet.get(..len).unwrap_or_default());
+        let bytes = u64::try_from(datagram.len()).unwrap_or(u64::MAX);
         match self.connection.send_datagram(datagram.into()) {
-            Ok(()) => MediaStats::count(&self.stats.audio_sent, 1),
+            Ok(()) => {
+                MediaStats::count(&self.stats.audio_sent, 1);
+                MediaStats::count(&self.stats.bytes_sent, bytes);
+            }
             Err(SendDatagramError::ConnectionLost(e)) => return Err(e.into()),
             Err(e) => {
                 tracing::debug!("audio packet dropped: {e}");
@@ -228,6 +232,7 @@ async fn receive(connection: Connection, deliver: mpsc::Sender<(u64, Vec<u8>)>, 
             }
         };
         MediaStats::count(&stats.audio_received, 1);
+        MediaStats::count(&stats.bytes_received, u64::try_from(datagram.len()).unwrap_or(u64::MAX));
         // The receiver drains every 20 ms; a full queue means playback stalled.
         if deliver.try_send((header.sequence, packet.to_vec())).is_err() {
             MediaStats::count(&stats.audio_late, 1);

@@ -17,6 +17,7 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
@@ -34,6 +35,8 @@ use tokio::sync::mpsc;
 use uplink_core::calls::{self, CallLog, CallRecord};
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
+use uplink_core::media::MediaStats;
+use uplink_core::quality::{Quality, VideoTarget};
 use uplink_core::node::{Command, Event, Network, Node, NodeHandle};
 use uplink_core::relays::Relays;
 use uplink_core::settings::Settings;
@@ -136,6 +139,8 @@ struct Pending {
     incoming: bool,
     at: SystemTime,
     connected: Option<Instant>,
+    /// The call's own counters, from the moment it connects; read once more when it ends.
+    stats: Option<Arc<MediaStats>>,
 }
 
 /// Writes every call to the log as it ends, window or no window. A call that rang with nobody
@@ -159,16 +164,25 @@ impl Ledger {
         match event {
             Event::Dialing { peer } | Event::Incoming { peer } => {
                 let incoming = matches!(event, Event::Incoming { .. });
-                self.pending = Some(Pending { peer: *peer, incoming, at: SystemTime::now(), connected: None });
+                self.pending =
+                    Some(Pending { peer: *peer, incoming, at: SystemTime::now(), connected: None, stats: None });
                 None
             }
-            Event::Connected { .. } => {
+            Event::Connected { media, .. } => {
                 if let Some(call) = self.pending.as_mut() {
                     call.connected = Some(Instant::now());
+                    call.stats = Some(Arc::clone(&media.stats));
                 }
                 None
             }
-            Event::Ended { reason, .. } => {
+            Event::Ended { peer, reason } => {
+                // Only the call it names: an end for someone else is not the end of this one.
+                if let (Some(ended), Some(call)) = (peer, &self.pending)
+                    && *ended != call.peer
+                {
+                    tracing::warn!(peer = %ended.fmt_short(), "an end for a call that is not the one in progress");
+                    return None;
+                }
                 let call = self.pending.take()?;
                 let record = CallRecord {
                     peer: call.peer,
@@ -176,6 +190,11 @@ impl Ledger {
                     outcome: calls::Outcome::of(reason, call.incoming, call.connected.is_some()),
                     at: call.at,
                     duration: call.connected.map(|since| since.elapsed()),
+                    traffic: call.stats.as_ref().map(|stats| calls::Traffic {
+                        sent: stats.bytes_sent.load(Ordering::Relaxed),
+                        received: stats.bytes_received.load(Ordering::Relaxed),
+                    }),
+                    quality: call.stats.map(|stats| Quality { target: Some(video_target()), ..stats.summary() }),
                 };
                 self.write(&record);
                 Some(record)
@@ -204,6 +223,19 @@ impl Ledger {
             Ok(_) => {}
             Err(e) => tracing::warn!("reading contacts to stamp the call: {e}"),
         }
+    }
+}
+
+/// What this build sets a call's video up to send, as the log keeps it. One setting today; when
+/// quality becomes a choice, the one in force for the call goes here instead.
+fn video_target() -> VideoTarget {
+    const BITS_PER_KBIT: i32 = 1000;
+    let unsigned = |value: i32| u32::try_from(value).unwrap_or_default();
+    VideoTarget {
+        width: unsigned(crate::VIDEO.width),
+        height: unsigned(crate::VIDEO.height),
+        fps: unsigned(crate::VIDEO.fps),
+        kbps: unsigned(crate::VIDEO.bitrate / BITS_PER_KBIT),
     }
 }
 

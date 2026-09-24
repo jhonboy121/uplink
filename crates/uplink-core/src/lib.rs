@@ -12,6 +12,7 @@ pub mod logs;
 pub mod media;
 pub mod node;
 pub mod qr;
+pub mod quality;
 pub mod relays;
 mod protocol;
 pub mod runtime;

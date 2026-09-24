@@ -33,12 +33,13 @@ use uplink_android::platform::{Permission, Platform, PlatformEvent};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
-use uplink_core::calls::{CallId, CallLog, CallRecord, Outcome};
+use uplink_core::calls::{CallId, CallLog, CallRecord, Logged, Outcome};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
+use uplink_core::quality::{Quality, Spread};
 use uplink_core::relays::{self, Relays};
 use uplink_core::media::{MediaSession, Route};
 use uplink_core::node::{Command, Event};
@@ -48,8 +49,8 @@ use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, RelayItem, Screen,
-    Theme,
+    App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, RelayItem,
+    Screen, Theme,
 };
 use crate::video::{CallVideo, VideoParts};
 
@@ -100,6 +101,7 @@ const VIDEO: VideoConfig = VideoConfig {
     keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
 };
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
+const SECONDS_PER_MINUTE: u64 = 60;
 /// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
 const FRESH_FOR: Duration = Duration::from_millis(3200);
 const PERCENT: f64 = 100.0;
@@ -313,7 +315,6 @@ impl State {
     /// mm:ss since the call connected.
     fn call_timer(&self) -> String {
         let elapsed = self.connected_at.map(|at| at.elapsed().as_secs()).unwrap_or_default();
-        const SECONDS_PER_MINUTE: u64 = 60;
         format!("{:02}:{:02}", elapsed / SECONDS_PER_MINUTE, elapsed % SECONDS_PER_MINUTE)
     }
 
@@ -684,21 +685,141 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
 
 /// "Missed · 20 minutes ago", or "4:12 · Tuesday" for one that was answered.
 fn describe_call(record: &CallRecord) -> String {
-    let what = match record.outcome {
-        Outcome::Answered => match record.duration {
-            Some(d) => format!("{}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
-            None => "Answered".to_owned(),
-        },
-        Outcome::Missed => "Missed".to_owned(),
-        Outcome::Declined => "Declined".to_owned(),
-        // Which of us declined is the arrow's to say, as for every other outcome.
-        Outcome::Rejected => "Declined".to_owned(),
-        Outcome::Cancelled => "Cancelled".to_owned(),
-        Outcome::NoAnswer => "No answer".to_owned(),
-        Outcome::Unreachable => "Couldn't reach them".to_owned(),
-        Outcome::Failed => "Did not connect".to_owned(),
+    let what = match (record.outcome, record.duration) {
+        (Outcome::Answered, Some(duration)) => minutes_seconds(duration),
+        (outcome, _) => outcome_name(outcome).to_owned(),
     };
     format!("{what} · {}", clock_of(record.at))
+}
+
+const fn outcome_name(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Answered => "Answered",
+        Outcome::Missed => "Missed",
+        // Which of us declined is the arrow's to say, as for every other outcome.
+        Outcome::Declined | Outcome::Rejected => "Declined",
+        Outcome::Cancelled => "Cancelled",
+        Outcome::NoAnswer => "No answer",
+        Outcome::Unreachable => "Couldn't reach them",
+        Outcome::Failed => "Did not connect",
+    }
+}
+
+fn minutes_seconds(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{}:{:02}", seconds / SECONDS_PER_MINUTE, seconds % SECONDS_PER_MINUTE)
+}
+
+/// Bytes the way a phone's data usage says them: decimal units, one decimal place past a KB.
+fn data_size(bytes: u64) -> String {
+    const UNITS: [(u64, &str); 3] = [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")];
+    const TENTHS: u64 = 10;
+    for (unit, name) in UNITS {
+        if bytes >= unit {
+            // Whole tenths by integer division, so no float rounding decides the last digit.
+            let tenths = bytes.saturating_mul(TENTHS) / unit;
+            return format!("{}.{} {name}", tenths / TENTHS, tenths % TENTHS);
+        }
+    }
+    format!("{bytes} B")
+}
+
+/// "28 avg · 12–30 fps": the mean, then the range, over a call's samples; empty with none.
+fn spread_text(spread: &Spread, scale: f64, decimals: usize, unit: &str) -> String {
+    let Some(mean) = spread.mean() else { return String::new() };
+    let (mean, min, max) = (mean / scale, spread.min / scale, spread.max / scale);
+    format!("{mean:.decimals$} avg · {min:.decimals$}–{max:.decimals$} {unit}")
+}
+
+/// The call-quality half of a call's details; every field empty for a call with no summary.
+#[derive(Default)]
+struct QualityText {
+    target: String,
+    fps_out: String,
+    fps_in: String,
+    frames: String,
+    frames_lost: String,
+    audio_packets: String,
+    audio_repaired: String,
+    speed_up: String,
+    speed_down: String,
+    round_trip: String,
+    path: String,
+}
+
+fn quality_text(quality: Option<&Quality>) -> QualityText {
+    const KBPS_PER_MBPS: f64 = 1000.0;
+    const WHOLE: usize = 0;
+    const ONE_PLACE: usize = 1;
+    let Some(q) = quality else { return QualityText::default() };
+    let target = q.target.map_or_else(String::new, |t| {
+        format!("{}p · {} fps · {:.1} Mbps", t.height, t.fps, f64::from(t.kbps) / KBPS_PER_MBPS)
+    });
+    let path = match q.relayed_share() {
+        None => String::new(),
+        Some(share) if share <= 0.0 => "Direct".to_owned(),
+        Some(share) if share >= 1.0 => "Relayed".to_owned(),
+        Some(share) => format!("Relayed {:.0}% of the call", share * PERCENT),
+    };
+    let (video, audio) = (&q.video, &q.audio);
+    QualityText {
+        target,
+        fps_out: spread_text(&q.fps_out, 1.0, WHOLE, "fps"),
+        fps_in: spread_text(&q.fps_in, 1.0, WHOLE, "fps"),
+        frames: format!("{} sent · {} received", video.sent, video.received),
+        frames_lost: format!("{} late · {} held back · {} discarded", video.late, video.congested, video.discarded),
+        audio_packets: format!("{} sent · {} received", audio.sent, audio.received),
+        audio_repaired: format!("{} rebuilt · {} filled in · {} late", audio.rebuilt, audio.concealed, audio.late),
+        speed_up: spread_text(&q.kbps_up, KBPS_PER_MBPS, ONE_PLACE, "Mbps"),
+        speed_down: spread_text(&q.kbps_down, KBPS_PER_MBPS, ONE_PLACE, "Mbps"),
+        round_trip: spread_text(&q.rtt_ms, 1.0, WHOLE, "ms"),
+        path,
+    }
+}
+
+/// Everything the call details page shows, formatted.
+fn call_detail(state: &Rc<RefCell<State>>, logged: &Logged) -> CallDetail {
+    let record = &logged.call;
+    let q = quality_text(record.quality.as_ref());
+    let saved = with_contacts(state, |contacts| contacts.name_of(&record.peer).map(str::to_owned)).flatten();
+    let name = saved.clone().unwrap_or_else(|| short(&record.peer));
+    let (sent, received) = record
+        .traffic
+        .map(|t| (data_size(t.sent), data_size(t.received)))
+        .unwrap_or_default();
+    CallDetail {
+        entry: logged.id.to_string().into(),
+        peer: record.peer.to_string().into(),
+        initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+        name: name.into(),
+        known: saved.is_some(),
+        fingerprint: fingerprint_lines(&record.peer),
+        status: outcome_name(record.outcome).into(),
+        incoming: record.incoming,
+        answered: record.outcome == Outcome::Answered,
+        when: format!("{} · {}", day_label(record.at), clock_of(record.at)).into(),
+        duration: record.duration.map(minutes_seconds).unwrap_or_default().into(),
+        sent: sent.into(),
+        received: received.into(),
+        target: q.target.into(),
+        fps_out: q.fps_out.into(),
+        fps_in: q.fps_in.into(),
+        frames: q.frames.into(),
+        frames_lost: q.frames_lost.into(),
+        audio_packets: q.audio_packets.into(),
+        audio_repaired: q.audio_repaired.into(),
+        speed_up: q.speed_up.into(),
+        speed_down: q.speed_down.into(),
+        round_trip: q.round_trip.into(),
+        path: q.path.into(),
+    }
+}
+
+/// The day heading, in sentence case for a line of prose rather than a group label.
+fn day_label(at: SystemTime) -> String {
+    let heading = day_of(at);
+    let mut chars = heading.chars();
+    chars.next().map(|first| first.to_string() + &chars.as_str().to_lowercase()).unwrap_or(heading)
 }
 
 /// The day a call happened, as the heading above its group.
@@ -899,6 +1020,8 @@ fn went_back(ui: &App) -> bool {
         ui.set_add_error(Default::default());
     } else if !ui.get_open_contact_id().is_empty() {
         ui.set_open_contact_id(Default::default());
+    } else if ui.get_call_open() {
+        ui.set_call_open(false);
     } else if ui.get_scanning() {
         ui.invoke_scan(false);
     } else if ui.get_call_state() != CallState::Idle && !ui.get_call_folded() {
@@ -1342,6 +1465,34 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             show_calls(&s, &ui);
         }
     });
+    // A call's details, read fresh from the log rather than from the list's model, which only
+    // carries what a row shows.
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_show_call(move |entry| {
+        let Some(ui) = weak.upgrade() else { return };
+        let Ok(id) = entry.parse::<CallId>() else { return };
+        match with_state_value(&s, |state| state.log.get(id)) {
+            Some(Ok(Some(logged))) => {
+                ui.set_open_call(call_detail(&s, &logged));
+                ui.set_call_open(true);
+            }
+            // Removed or trimmed since the list was drawn: the list is what is stale.
+            Some(Ok(None)) => show_calls(&s, &ui),
+            Some(Err(e)) => toast(&ui, format!("Could not open that call: {e}")),
+            None => {}
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_remove_call(move |entry| {
+        let Ok(id) = entry.parse::<CallId>() else { return };
+        let removed = with_state_value(&s, |state| state.log.remove(&[id]));
+        if let Some(ui) = weak.upgrade() {
+            show_calls(&s, &ui);
+            if let Some(Err(e)) = removed {
+                toast(&ui, format!("Could not remove that call: {e}"));
+            }
+        }
+    });
     // Selecting calls works as selecting contacts does, on its own set of ticks.
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_toggle_call_selected(move |entry| {
@@ -1590,6 +1741,13 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_call(move |key| match peer_key(&key, &identity) {
+        // One call at a time, said here rather than dialled and refused: the node refusing is
+        // silent, and the optimistic Dialing below would have renamed the call that is up.
+        Ok(_) if weak.upgrade().is_some_and(|ui| ui.get_call_state() != CallState::Idle) => {
+            if let Some(ui) = weak.upgrade() {
+                toast(&ui, "You're already in a call");
+            }
+        }
         Ok(peer) => {
             if send_call_command(&s, Command::Call(peer), &weak)
                 && let Some(ui) = weak.upgrade()
@@ -1674,6 +1832,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 ui.set_peer_key(Default::default());
                 ui.set_new_name(Default::default());
                 ui.set_add_error(Default::default());
+                // Added from a call's details, perhaps: that page has done its job.
+                ui.set_call_open(false);
                 show_added(&s, &ui, id);
             }
             // Under the field, in the sheet that is still open: the user can fix it right there.

@@ -5,10 +5,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::db::Db;
 use crate::node::EndReason;
+use crate::quality::Quality;
 use crate::{EndpointId, Error};
 /// Enough to look back over, and small enough that the screen never pages.
 const KEEP: i64 = 500;
@@ -36,6 +37,11 @@ impl Outcome {
     /// How a call that ended for `reason` goes in the log. A hang-up means different things
     /// depending on which way the call went and whether anyone picked up; nothing else does.
     pub const fn of(reason: &EndReason, incoming: bool, answered: bool) -> Self {
+        // A call someone picked up was answered, however it ended: a connection dropped a minute
+        // in is not a call that "did not connect".
+        if answered {
+            return Self::Answered;
+        }
         match reason {
             EndReason::Busy | EndReason::Failed(_) => Self::Failed,
             EndReason::DialTimeout => Self::Unreachable,
@@ -92,6 +98,17 @@ pub struct CallRecord {
     pub at: SystemTime,
     /// Only for a call that was answered.
     pub duration: Option<Duration>,
+    /// Only for a call that was answered, and only on calls logged since this was recorded.
+    pub traffic: Option<Traffic>,
+    /// How it went, for an answered call; see [`crate::quality`].
+    pub quality: Option<Quality>,
+}
+
+/// What a call carried each way: media payload, video and audio, without QUIC's own overhead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traffic {
+    pub sent: u64,
+    pub received: u64,
 }
 
 /// One row of the log, so a screen can point back at it: selecting calls to remove, for one.
@@ -123,6 +140,39 @@ pub struct CallLog {
     db: Db,
 }
 
+/// What every read selects, in the order [`read_row`] takes it.
+const COLUMNS: &str = "id, peer, incoming, outcome, at, seconds, sent, received, quality";
+
+/// Columns added after the table first shipped, with their types. `CREATE TABLE IF NOT EXISTS`
+/// leaves an existing table as it was, so these are added to it on open when missing.
+const ADDED: [(&str, &str); 3] = [("sent", "INTEGER"), ("received", "INTEGER"), ("quality", "BLOB")];
+
+/// A row as [`COLUMNS`] reads it, or `None` for one whose key no longer parses.
+fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
+    let peer = row.get::<_, String>(1)?;
+    let Ok(peer_id) = peer.parse::<EndpointId>() else {
+        tracing::warn!(peer, "a logged key no longer parses; skipping");
+        return Ok(None);
+    };
+    let unsigned = |value: Option<i64>| value.and_then(|v| u64::try_from(v).ok());
+    let (sent, received) = (unsigned(row.get(6)?), unsigned(row.get(7)?));
+    let quality = row.get::<_, Option<Vec<u8>>>(8)?.and_then(|bytes| {
+        Quality::from_bytes(&bytes)
+            .inspect_err(|e| tracing::debug!("a call's quality summary no longer reads: {e}"))
+            .ok()
+    });
+    let call = CallRecord {
+        peer: peer_id,
+        incoming: row.get(2)?,
+        outcome: Outcome::parse(&row.get::<_, String>(3)?),
+        at: UNIX_EPOCH + Duration::from_secs(unsigned(Some(row.get(4)?)).unwrap_or_default()),
+        duration: unsigned(row.get(5)?).map(Duration::from_secs),
+        traffic: sent.zip(received).map(|(sent, received)| Traffic { sent, received }),
+        quality,
+    };
+    Ok(Some(Logged { id: CallId(row.get(0)?), call }))
+}
+
 impl CallLog {
     pub fn open(db: Db) -> Result<Self, Error> {
         db.with(|db| {
@@ -133,10 +183,22 @@ impl CallLog {
                      incoming INTEGER NOT NULL,
                      outcome  TEXT NOT NULL,
                      at       INTEGER NOT NULL,
-                     seconds  INTEGER
+                     seconds  INTEGER,
+                     sent     INTEGER,
+                     received INTEGER,
+                     quality  BLOB
                  );
                  CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)",
             )?;
+            let existing = db
+                .prepare("SELECT name FROM pragma_table_info('calls')")?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (column, kind) in ADDED {
+                if !existing.iter().any(|name| name == column) {
+                    db.execute_batch(&format!("ALTER TABLE calls ADD COLUMN {column} {kind}"))?;
+                }
+            }
             Ok(())
         })?;
         Ok(Self { db })
@@ -145,10 +207,26 @@ impl CallLog {
     pub fn record(&self, record: &CallRecord) -> Result<(), Error> {
         let at = i64::try_from(record.at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(i64::MAX);
         let seconds = record.duration.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let signed = |bytes: u64| i64::try_from(bytes).unwrap_or(i64::MAX);
+        let (sent, received) = record.traffic.map(|t| (signed(t.sent), signed(t.received))).unzip();
+        // A summary that will not encode is left out rather than costing the call its row.
+        let quality = record.quality.as_ref().and_then(|quality| {
+            quality.to_bytes().inspect_err(|e| tracing::warn!("encoding a call's quality: {e}")).ok()
+        });
         self.db.with(|db| {
             db.execute(
-                "INSERT INTO calls (peer, incoming, outcome, at, seconds) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![record.peer.to_string(), record.incoming, record.outcome.as_str(), at, seconds],
+                "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    record.peer.to_string(),
+                    record.incoming,
+                    record.outcome.as_str(),
+                    at,
+                    seconds,
+                    sent,
+                    received,
+                    quality
+                ],
             )?;
             // Trimmed here rather than on a timer: the log only grows when a call ends.
             db.execute(
@@ -162,36 +240,24 @@ impl CallLog {
     /// Most recent first.
     pub fn recent(&self, limit: i64) -> Result<Vec<Logged>, Error> {
         self.db.with(|db| {
-            let mut statement = db.prepare(
-                "SELECT id, peer, incoming, outcome, at, seconds FROM calls ORDER BY at DESC, id DESC LIMIT ?1",
-            )?;
-            let rows = statement.query_map(params![limit], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, bool>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                ))
-            })?;
+            let mut statement =
+                db.prepare(&format!("SELECT {COLUMNS} FROM calls ORDER BY at DESC, id DESC LIMIT ?1"))?;
+            let rows = statement.query_map(params![limit], read_row)?;
             let mut out = Vec::new();
             for row in rows {
-                let (id, peer, incoming, outcome, at, seconds) = row?;
-                let Ok(peer) = peer.parse::<EndpointId>() else {
-                    tracing::warn!(peer, "a logged key no longer parses; skipping");
-                    continue;
-                };
-                let call = CallRecord {
-                    peer,
-                    incoming,
-                    outcome: Outcome::parse(&outcome),
-                    at: UNIX_EPOCH + Duration::from_secs(u64::try_from(at).unwrap_or_default()),
-                    duration: seconds.and_then(|s| u64::try_from(s).ok()).map(Duration::from_secs),
-                };
-                out.push(Logged { id: CallId(id), call });
+                out.extend(row?);
             }
             Ok(out)
+        })
+    }
+
+    /// One call, for its details page; `None` once it has been removed or trimmed.
+    pub fn get(&self, id: CallId) -> Result<Option<Logged>, Error> {
+        self.db.with(|db| {
+            let found = db
+                .query_row(&format!("SELECT {COLUMNS} FROM calls WHERE id = ?1"), params![id.0], read_row)
+                .optional()?;
+            Ok(found.flatten())
         })
     }
 
@@ -229,7 +295,15 @@ mod tests {
     use super::*;
 
     fn record(incoming: bool, outcome: Outcome, at: SystemTime) -> CallRecord {
-        CallRecord { peer: SecretKey::generate().public(), incoming, outcome, at, duration: None }
+        CallRecord {
+            peer: SecretKey::generate().public(),
+            incoming,
+            outcome,
+            at,
+            duration: None,
+            traffic: None,
+            quality: None,
+        }
     }
 
     /// The caller giving up is a hang-up on our side of the wire, and it is still a missed call.
@@ -239,6 +313,7 @@ mod tests {
         assert_eq!(Outcome::of(&EndReason::LocalHangup, false, false), Outcome::Cancelled);
         assert_eq!(Outcome::of(&EndReason::RemoteHangup, true, true), Outcome::Answered);
         assert_eq!(Outcome::of(&EndReason::Declined, true, false), Outcome::Declined);
+        assert_eq!(Outcome::of(&EndReason::Failed("connection lost".into()), false, true), Outcome::Answered);
     }
 
     #[test]
@@ -253,6 +328,47 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].call.at, new);
         assert!(!recent[0].call.incoming);
+        Ok(())
+    }
+
+    #[test]
+    fn traffic_survives_the_round_trip() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
+        let mut call = record(true, Outcome::Answered, SystemTime::now());
+        call.traffic = Some(Traffic { sent: 12_345_678, received: 9_876 });
+        let mut quality = Quality::default();
+        quality.fps_in.add(24.0);
+        call.quality = Some(quality);
+        log.record(&call)?;
+        let logged = log.recent(1)?;
+        assert_eq!(logged[0].call.traffic, call.traffic);
+        assert_eq!(logged[0].call.quality, call.quality);
+        let one = log.get(logged[0].id)?.map(|found| found.call.traffic);
+        assert_eq!(one, Some(call.traffic));
+        Ok(())
+    }
+
+    /// A log from before traffic was recorded gains the columns on open and keeps its rows.
+    #[test]
+    fn an_older_log_is_brought_up_to_date() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Db::open(dir.path())?;
+        db.with(|db| {
+            db.execute_batch(
+                "CREATE TABLE calls (id INTEGER PRIMARY KEY AUTOINCREMENT, peer TEXT NOT NULL,
+                     incoming INTEGER NOT NULL, outcome TEXT NOT NULL, at INTEGER NOT NULL, seconds INTEGER);",
+            )?;
+            db.execute(
+                "INSERT INTO calls (peer, incoming, outcome, at) VALUES (?1, 1, 'missed', 1)",
+                params![SecretKey::generate().public().to_string()],
+            )?;
+            Ok(())
+        })?;
+        let log = CallLog::open(db)?;
+        let old = log.recent(10)?;
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].call.traffic, None);
         Ok(())
     }
 

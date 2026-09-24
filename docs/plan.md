@@ -637,6 +637,42 @@ default); keep disk usage lean. Avoid build scripts.
   selection; Remove (confirmed) takes the ticked calls in one transaction; unticking the last one
   or Back ends it; Clear stays for the whole log. The log now hands back each row's id
   (`calls::CallId`, `Logged`), and the long press is one `HoldArea` component both lists use.
+- **2026-09-24**: **a call has a details page, and the log keeps how it went.** Tapping a call
+  opens who (name or short key, and the key's fingerprint), Call back, **Add to contacts** for a
+  caller not saved (the naming sheet, then People as any add), direction, status, when,
+  duration, data each way, and Remove from log. Under that, for an answered call: the video it
+  was set up for (720p · 30 fps · 2.0 Mbps today), frame rate sent and received, upload,
+  download and round trip as *average · lowest–highest*, frames sent/received/late/held
+  back/discarded, voice packets and repairs (FEC-rebuilt, concealed, late), and whether the path
+  was direct or relayed and for how much of the call.
+  - Data each way is **media payload**, video and audio (`MediaStats.bytes_*` now count audio
+    too), in its own `sent`/`received` columns. The rest is `quality::Quality`: telemetry adds a
+    sample each interval (the figures it already logs), the counts are read when the call ends,
+    and the whole is one postcard `quality` column, so the schema does not grow per figure.
+    Columns added since the table shipped are added on open (`ADDED`), which a test checks.
+    Postcard is not self-describing: a row from a build with another shape reads as no summary.
+  - **Deferred — a timeline**: a graph of the call over time (frame rate, quality, speed, round
+    trip at each point). The samples are taken already; keeping them as a series next to the
+    summary is the storage half.
+  - **Back from the call screen was flaky, and once cost a call.** With gesture navigation a
+    touch that starts in the edge reaches the app as a press; when Android takes the swipe for
+    Back it cancels the touch, and Slint 1.18 delivers a cancelled single touch as a release —
+    deliberately, its own `single_finger_cancel` test says so — which `clicked` takes for a tap.
+    So an edge swipe tapped whatever was under it: the folded call in the bottom-right corner
+    (fold, flash, unfold), or a contact's Call pill mid-call, which placed a second call. **Fix,
+    on our side:** a tap is a release within `drag-slop` of its press, as Android means it
+    (`Tap`, and the same check in `HoldArea` and the folded call); a Back swipe has always
+    travelled past the slop by the time it is cancelled. Not a Slint patch: the behaviour is theirs
+    by design, and the missing piece was ours.
+  - **A refused second call ended the first.** The node answered a dial during a call with
+    `Ended { peer: <the new one>, Failed("already in a call") }`, which the ledger took for the
+    end of the call that was up (logged as "did not connect", with its stats) and the window took
+    as a hang-up (media torn down). The node now only logs it, the ledger only closes the call an
+    `Ended` names, the app says "You're already in a call" instead of dialling, and an answered
+    call stays Answered however it ends.
+  - **Found, not fixed — times are UTC.** `clock_of` takes the time of day from the Unix epoch
+    with no timezone, so the Calls list is off by the local UTC offset. Needs the local offset
+    (bionic's `localtime_r`, or `TimeZone` over JNI) before anyone reads a time off it.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
