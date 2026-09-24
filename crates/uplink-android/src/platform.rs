@@ -431,6 +431,26 @@ impl Platform {
         self.context.call(jni_str!("openMakerList"))
     }
 
+    /// The haptic tick of a long press, as the platform gives it; nothing if the user turned
+    /// touch feedback off.
+    pub fn long_press_feedback(&self) -> Result<(), Error> {
+        self.with_activity(|env, activity| {
+            env.call_method(activity, jni_str!("longPressFeedback"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
+    /// How long this user needs a press held before it is a long press. It is an accessibility
+    /// setting ("Touch and hold delay"), so it is read rather than assumed.
+    pub fn long_press_timeout(&self) -> Result<std::time::Duration, Error> {
+        self.with_context(|env, _| {
+            let millis = env
+                .call_static_method(jni_str!("android/view/ViewConfiguration"), jni_str!("getLongPressTimeout"), jni_sig!("()I"), &[])?
+                .i()?;
+            Ok(std::time::Duration::from_millis(u64::try_from(millis)?))
+        })
+    }
+
     /// Steps the app behind whatever else is on screen, without tearing it down — the process has
     /// to stay up, because an endpoint that is gone cannot be rung.
     pub fn move_to_background(&self) -> Result<(), Error> {

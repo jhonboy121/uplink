@@ -19,6 +19,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Rational;
+import android.view.HapticFeedbackConstants;
 import android.view.WindowInsetsController;
 
 import java.io.InputStream;
@@ -228,6 +229,16 @@ public class UplinkActivity extends NativeActivity {
                     log(Log.WARN, "no battery exemption dialog: " + e);
                     startActivityForResult(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), requestCode);
                 }
+            }
+        });
+    }
+
+    /** The tick a long press gets everywhere else on Android, through the window's own view. */
+    void longPressFeedback() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                getWindow().getDecorView().performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
             }
         });
     }

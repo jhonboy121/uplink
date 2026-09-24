@@ -621,6 +621,12 @@ default); keep disk usage lean. Avoid build scripts.
     dialling, so leaving mid-ring shrinks the call as leaving mid-call does.
   - **A refusal is survivable:** the service falls back to `specialUse` (now also declared on it),
     logs it, and the call stays up with the camera and microphone quiet until the app is back.
+- **2026-09-24**: **selecting contacts starts with a long press**; the Select pill is gone. Slint
+  1.18's `TouchArea` has no long press, so a row builds one: a press held within `drag-slop` for
+  `Theme.long-press` starts selection with that row, and the release that ends it is not also a
+  tap. The timeout is read from `ViewConfiguration.getLongPressTimeout`, since "Touch and hold
+  delay" is the user's accessibility setting; it gets the platform's haptic tick. **To do:**
+  TalkBack has no way in yet — Slint exposes no custom accessibility action for it.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386

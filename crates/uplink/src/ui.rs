@@ -149,6 +149,9 @@ slint::slint! {
         out property <length> mini-edge: 12px;
         // How far a finger may wander and still count as a tap. Android's own touch slop.
         out property <length> drag-slop: 8px;
+        // How long a press has to be held to count as a long press. Android's default until the
+        // app reads the user's own setting ("Touch and hold delay") from `ViewConfiguration`.
+        in-out property <duration> long-press: 400ms;
         // The tab bar's own height, without the gesture inset it adds underneath. Named because
         // the folded call has to stay off it.
         out property <length> tab-height: 64px;
@@ -699,8 +702,9 @@ slint::slint! {
         callback open(string);
         callback connect();
         callback select(string);
+        // A row was held long enough to count; the feel of it is the platform's.
+        callback long-pressed();
         callback start-selecting();
-        callback stop-selecting();
         callback remove-selected();
         background: Theme.ground;
 
@@ -726,13 +730,6 @@ slint::slint! {
                         clicked => { root.remove-selected(); }
                     }
                 }
-                if root.selecting : VerticalLayout {
-                    alignment: center;
-                    Pill {
-                        text: "Done";
-                        clicked => { root.stop-selecting(); }
-                    }
-                }
                 // Reachability, not diagnostics: whether someone could call you right now.
                 if !root.selecting : VerticalLayout {
                     alignment: center;
@@ -748,13 +745,6 @@ slint::slint! {
                             color: root.online ? Theme.answer : Theme.muted;
                             font-size: 0.8125rem;
                         }
-                    }
-                }
-                if !root.selecting && root.contacts.length > 0 : VerticalLayout {
-                    alignment: center;
-                    Pill {
-                        text: "Select";
-                        clicked => { root.start-selecting(); }
                     }
                 }
                 Brand { }
@@ -837,15 +827,50 @@ slint::slint! {
                         Rectangle {
                             height: Theme.row-height;
                             // The pill calls; the rest of the row opens them, because a contact
-                            // now has more to do to it than one button can carry.
+                            // now has more to do to it than one button can carry. Holding a row
+                            // starts selecting with it, which is the only way into selection.
+                            property <bool> holding: false;
+                            // The release that ends a long press is not also a tap.
+                            property <bool> long-pressed: false;
                             open-touch := TouchArea {
                                 mouse-cursor: pointer;
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down) {
+                                        parent.long-pressed = false;
+                                        parent.holding = true;
+                                    } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                        parent.holding = false;
+                                    }
+                                }
+                                // A finger that wanders is scrolling the list, not holding a row.
+                                moved => {
+                                    if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+                                        || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+                                        parent.holding = false;
+                                    }
+                                }
                                 clicked => {
+                                    if (parent.long-pressed) {
+                                        return;
+                                    }
                                     if (root.selecting) {
                                         root.select(contact.id);
                                     } else {
                                         root.open(contact.id);
                                     }
+                                }
+                            }
+                            Timer {
+                                interval: Theme.long-press;
+                                running: parent.holding;
+                                triggered => {
+                                    parent.holding = false;
+                                    parent.long-pressed = true;
+                                    root.long-pressed();
+                                    if (!root.selecting) {
+                                        root.start-selecting();
+                                    }
+                                    root.select(contact.id);
                                 }
                             }
                             background: contact.selected ? Theme.raised
@@ -2350,6 +2375,7 @@ slint::slint! {
         callback open-contact(string);
         callback set-favourite(string, bool);
         callback toggle-selected(string);
+        callback long-pressed();
         callback clear-selection();
         callback remove-selected();
         // The system back gesture, already accepted by `back-stop`. Whoever handles it closes the
@@ -2437,7 +2463,7 @@ slint::slint! {
                         connect => { root.screen = Screen.connect; }
                         select(id) => { root.toggle-selected(id); }
                         start-selecting => { root.selecting = true; }
-                        stop-selecting => { root.clear-selection(); }
+                        long-pressed => { root.long-pressed(); }
                         remove-selected => { root.confirming = Confirm.remove-selected; }
                     }
                     if root.screen == Screen.calls : CallsPage {

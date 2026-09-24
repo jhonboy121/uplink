@@ -1256,12 +1256,18 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_toggle_selected(move |id| {
         let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
-        with_state(&s, |state| {
+        let empty = with_state_value(&s, |state| {
             if !state.selected.remove(&peer) {
                 state.selected.insert(peer);
             }
+            state.selected.is_empty()
         });
         if let Some(ui) = weak.upgrade() {
+            // Unticking the last one ends selection, as it does in any Android list; there is
+            // no Done to press, and nothing selected has nothing to do.
+            if empty == Some(true) {
+                ui.set_selecting(false);
+            }
             show_contacts(&s, &ui);
         }
     });
@@ -1391,6 +1397,18 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     // What the user chose last time, before anything can report a change back.
     let theme = ui.global::<Theme>();
+    // The user's own touch-and-hold delay; the markup's default stands if it cannot be read.
+    match platform.long_press_timeout().map(|t| i64::try_from(t.as_millis())) {
+        Ok(Ok(millis)) => theme.set_long_press(millis),
+        Ok(Err(e)) => tracing::warn!("long-press timeout out of range: {e}"),
+        Err(e) => tracing::warn!("reading the long-press timeout: {e}"),
+    }
+    let p = Rc::clone(&platform);
+    ui.on_long_pressed(move || {
+        if let Err(e) = p.long_press_feedback() {
+            tracing::debug!("long-press feedback: {e}");
+        }
+    });
     theme.set_appearance(appearance_from(settings.get(settings::APPEARANCE).as_deref()));
     theme.set_rtl(settings.flag(settings::LAYOUT_RTL));
 
