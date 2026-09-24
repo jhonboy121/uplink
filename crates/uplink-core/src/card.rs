@@ -5,7 +5,7 @@
 //! Everything is drawn here rather than by the platform, so the one thing that matters about the
 //! card — that it still decodes with the mark over it — is a test rather than a hope.
 
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
 
 use crate::{Error, qr};
 
@@ -29,7 +29,9 @@ const CAPTION_SIZE: f32 = 3.4;
 const MARK_IN_PLATE: f32 = 0.707;
 
 /// The app's own face and mark, vendored once and used by the UI through Slint's include path.
+/// Outfit has no Arabic, so an Arabic caption is set in Noto Sans Arabic at the same weight.
 const FONT: &[u8] = include_bytes!("../../../assets/fonts/Outfit-SemiBold.ttf");
+const ARABIC_FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansArabic-SemiBold.ttf");
 const MARK: &[u8] = include_bytes!("../../../assets/icons/mark-badge.png");
 
 /// Draws `key` as a card captioned `caption`, and returns it as a PNG.
@@ -39,8 +41,7 @@ pub fn identity(key: &str, caption: &str) -> Result<Vec<u8>, Error> {
     let (code, margin) = (size * MODULE, MARGIN * MODULE);
     let width = code + margin * 2;
 
-    let font = FontRef::try_from_slice(FONT).map_err(|e| Error::Card(e.to_string()))?;
-    let caption = Caption::fit(&font, caption, code);
+    let caption = Caption::fit(face_for(caption), caption, code)?;
     let height = margin * 2 + code + CAPTION_GAP * MODULE + caption.height;
 
     let mut card = Canvas::new(width, height);
@@ -67,77 +68,103 @@ pub fn identity(key: &str, caption: &str) -> Result<Vec<u8>, Error> {
     card.png()
 }
 
-/// A line of text, measured once so the card can be sized around it.
-struct Caption<'a, 'font> {
-    font: &'a FontRef<'font>,
-    text: &'a str,
+/// The face a caption is set in: the Arabic one if it has any Arabic in it. A caption is one
+/// language, the app's, so one face per line is enough.
+fn face_for(text: &str) -> &'static [u8] {
+    const ARABIC: [std::ops::RangeInclusive<char>; 4] =
+        ['\u{0600}'..='\u{06FF}', '\u{0750}'..='\u{077F}', '\u{08A0}'..='\u{08FF}', '\u{FB50}'..='\u{FEFF}'];
+    if text.chars().any(|c| ARABIC.iter().any(|block| block.contains(&c))) { ARABIC_FONT } else { FONT }
+}
+
+/// A glyph as shaping placed it, in font units from the start of the line.
+struct Placed {
+    id: GlyphId,
+    x: f32,
+    y: f32,
+}
+
+/// A line of text, shaped and measured once so the card can be sized around it. Shaping is what
+/// joins Arabic letters into their connected forms and lays the line out right to left; the
+/// glyphs come back in the order they are drawn, left to right, either way.
+struct Caption<'font> {
+    font: FontRef<'font>,
+    glyphs: Vec<Placed>,
     scale: PxScale,
+    /// Pixels per font unit at `scale`.
+    factor: f32,
     /// Distance from the line's top to its baseline, and the whole line's height.
     ascent: f32,
     height: u32,
     width: f32,
 }
 
-impl<'a, 'font> Caption<'a, 'font> {
+impl<'font> Caption<'font> {
     /// At the card's own size, unless that would run off the paper — a longer translation shrinks
     /// to fit rather than being clipped.
-    fn fit(font: &'a FontRef<'font>, text: &'a str, available: u32) -> Self {
+    fn fit(face: &'font [u8], text: &str, available: u32) -> Result<Self, Error> {
+        let font = FontRef::try_from_slice(face).map_err(|e| Error::Card(e.to_string()))?;
+        let (glyphs, advance) = shape(face, text)?;
+        let factor_at = |size: f32| font.as_scaled(PxScale::from(size)).h_scale_factor();
         let mut size = CAPTION_SIZE * MODULE as f32;
-        let width = advance(font, text, PxScale::from(size));
+        let width = advance * factor_at(size);
         if width > available as f32 {
             size *= available as f32 / width;
         }
         let scale = PxScale::from(size);
         let scaled = font.as_scaled(scale);
-        Self {
+        let (ascent, descent, factor) = (scaled.ascent(), scaled.descent(), scaled.h_scale_factor());
+        Ok(Self {
             font,
-            text,
+            glyphs,
             scale,
-            ascent: scaled.ascent(),
-            height: (scaled.ascent() - scaled.descent()).ceil() as u32,
-            width: advance(font, text, scale),
-        }
+            factor,
+            ascent,
+            height: (ascent - descent).ceil() as u32,
+            width: advance * factor,
+        })
     }
 
     /// Centred on `centre`, sitting on `baseline`.
     fn draw(&self, card: &mut Canvas, centre: f32, baseline: f32) {
-        let scaled = self.font.as_scaled(self.scale);
-        let mut caret = centre - self.width / 2.0;
-        let mut previous = None;
-        for character in self.text.chars() {
-            let id = scaled.glyph_id(character);
-            if let Some(previous) = previous {
-                caret += scaled.kern(previous, id);
-            }
-            let glyph = id.with_scale_and_position(self.scale, ab_glyph::point(caret, baseline));
-            if let Some(outline) = self.font.outline_glyph(glyph) {
-                let bounds = outline.px_bounds();
-                outline.draw(|x, y, coverage| {
-                    let x = bounds.min.x + x as f32;
-                    let y = bounds.min.y + y as f32;
-                    card.blend(x as i64, y as i64, INK, coverage);
-                });
-            }
-            caret += scaled.h_advance(id);
-            previous = Some(id);
+        let left = centre - self.width / 2.0;
+        for placed in &self.glyphs {
+            // Font units rise; pixels fall.
+            let at = ab_glyph::point(left + placed.x * self.factor, baseline - placed.y * self.factor);
+            let Some(outline) = self.font.outline_glyph(placed.id.with_scale_and_position(self.scale, at)) else {
+                continue;
+            };
+            let bounds = outline.px_bounds();
+            outline.draw(|x, y, coverage| {
+                let x = bounds.min.x + x as f32;
+                let y = bounds.min.y + y as f32;
+                card.blend(x as i64, y as i64, INK, coverage);
+            });
         }
     }
 }
 
-/// How wide `text` is at `scale`, kerning included.
-fn advance(font: &FontRef, text: &str, scale: PxScale) -> f32 {
-    let scaled = font.as_scaled(scale);
-    let mut width = 0.0;
-    let mut previous = None;
-    for character in text.chars() {
-        let id = scaled.glyph_id(character);
-        if let Some(previous) = previous {
-            width += scaled.kern(previous, id);
-        }
-        width += scaled.h_advance(id);
-        previous = Some(id);
+/// `text` shaped in `face`: each glyph where it goes, and the line's whole advance, in font units.
+fn shape(face: &[u8], text: &str) -> Result<(Vec<Placed>, f32), Error> {
+    let font = harfrust::FontRef::new(face).map_err(|e| Error::Card(e.to_string()))?;
+    let data = harfrust::ShaperData::new(&font);
+    let shaper = data.shaper(&font).build();
+    let mut buffer = harfrust::UnicodeBuffer::new();
+    buffer.push_str(text);
+    // Script and direction from the text itself: Arabic comes out right to left.
+    buffer.guess_segment_properties();
+    let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
+    let mut caret = 0;
+    let mut glyphs = Vec::with_capacity(shaped.glyph_infos().len());
+    for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+        let id = u16::try_from(info.glyph_id).map_err(|_| Error::Card("glyph id out of range".into()))?;
+        glyphs.push(Placed {
+            id: GlyphId(id),
+            x: (caret + position.x_offset) as f32,
+            y: position.y_offset as f32,
+        });
+        caret += position.x_advance;
     }
-    width
+    Ok((glyphs, caret as f32))
 }
 
 /// Somewhere to draw: RGB, because nothing about a card is transparent.
@@ -277,11 +304,39 @@ mod tests {
     /// A caption too long for the card is made to fit rather than running off it.
     #[test]
     fn a_long_caption_shrinks() -> Result<(), Error> {
-        let font = FontRef::try_from_slice(FONT).map_err(|e| Error::Card(e.to_string()))?;
         let long = "Scan this code to connect to me, wherever either of us happens to be";
         let code = 45 * MODULE;
-        assert!(Caption::fit(&font, long, code).width <= code as f32);
-        assert!(Caption::fit(&font, CAPTION, code).width < code as f32);
+        assert!(Caption::fit(FONT, long, code)?.width <= code as f32);
+        assert!(Caption::fit(FONT, CAPTION, code)?.width < code as f32);
+        Ok(())
+    }
+
+    /// Arabic is set in the Arabic face and shaped: every glyph is a real one (none is the
+    /// missing-glyph box, id 0), and joining makes the line differ from its letters laid out one
+    /// by one in isolated forms.
+    #[test]
+    fn an_arabic_caption_is_shaped() -> Result<(), Error> {
+        const ARABIC: &str = "امسح للتواصل";
+        assert!(std::ptr::eq(face_for(ARABIC), ARABIC_FONT));
+        assert!(std::ptr::eq(face_for(CAPTION), FONT));
+        let (joined, _) = shape(ARABIC_FONT, ARABIC)?;
+        assert!(joined.iter().all(|glyph| glyph.id != GlyphId(0)));
+        let isolated: Vec<GlyphId> = ARABIC
+            .chars()
+            .map(|c| shape(ARABIC_FONT, &c.to_string()).map(|(glyphs, _)| glyphs.first().map(|g| g.id)))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let shaped: Vec<GlyphId> = joined.iter().rev().map(|glyph| glyph.id).collect();
+        assert_ne!(shaped, isolated, "the letters did not join");
+        // And the whole card still scans with it.
+        let png = identity(KEY, ARABIC)?;
+        let card = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .map_err(|e| Error::Card(e.to_string()))?
+            .to_luma8();
+        let (width, height) = (card.width() as usize, card.height() as usize);
+        assert_eq!(qr::decode_luma(card.as_raw(), width, height, width).as_deref(), Some(KEY));
         Ok(())
     }
 }

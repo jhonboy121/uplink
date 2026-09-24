@@ -1,0 +1,76 @@
+// A row in People or Calls: a face, two lines about them, and Call at the end — or a tick while
+// several are being picked. A tap opens the row and a hold starts picking, both the page's to
+// decide; the pill calls.
+
+import { Theme } from "theme.slint";
+import { Avatar, HoldArea, Pill, Row, Tick } from "controls.slint";
+
+export component PersonRow inherits Rectangle {
+    in property <string> name;
+    in property <string> initial;
+    in property <int> tint;
+    in property <bool> selecting;
+    in property <bool> selected;
+    // Just added: a faint tint with a band of accent sweeping across, so the eye lands on it.
+    in property <bool> fresh: false;
+    callback tapped();
+    callback held();
+    callback call();
+    height: Theme.row-height;
+    touch := HoldArea {
+        tapped => { root.tapped(); }
+        held => { root.held(); }
+    }
+    background: root.selected ? Theme.raised
+        : touch.pressed ? Theme.surface
+        : transparent;
+    animate background { duration: Theme.feedback; easing: ease-out; }
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-action-default => { root.tapped(); }
+    // Under the row's contents, over its background.
+    if root.fresh : Rectangle {
+        clip: true;
+        background: Theme.shimmer-tint;
+        // 0 to 1 across each sweep, for as long as the row is fresh.
+        property <float> phase: mod(animation-tick() / 1ms, Theme.shimmer-sweep / 1ms)
+            / (Theme.shimmer-sweep / 1ms);
+        // From the reading direction's start, like the row.
+        property <float> travel: Theme.rtl ? 1 - self.phase : self.phase;
+        Rectangle {
+            width: parent.width * Theme.shimmer-band;
+            x: -self.width + (parent.width + self.width) * parent.travel;
+            background: @linear-gradient(90deg,
+                Theme.shimmer-glint.with-alpha(0) 0%,
+                Theme.shimmer-glint 50%,
+                Theme.shimmer-glint.with-alpha(0) 100%);
+        }
+    }
+    Row {
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        spacing: Theme.row-gap;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initial: root.initial;
+                tint: root.tint;
+                size: Theme.avatar;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            horizontal-stretch: 1;
+            @children
+        }
+        VerticalLayout {
+            alignment: center;
+            if !root.selecting : Pill {
+                text: @tr("Call");
+                clicked => { root.call(); }
+            }
+            if root.selecting : Tick { on: root.selected; }
+        }
+    }
+}

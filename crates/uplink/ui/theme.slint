@@ -1,0 +1,167 @@
+// Tokens from docs/plan.md, and the two settings that change how everything reads: the theme and
+// the language. Layout is written start/end rather than left/right, because Slint does not mirror
+// layouts itself: `Theme.rtl` is what does it, through `Row` and the `start`/`end` alignments.
+
+import { Palette } from "std-widgets.slint";
+
+export enum Appearance { system, light, dark }
+
+// `system` follows the phone as far as it can: a phone set to a language uplink has no words for
+// reads English.
+export enum Language { system, english, arabic }
+
+export global Theme {
+    // Lists and settings follow the system; a call is always dark, because video wants a dark
+    // room, so chrome over video uses the fixed `on-video` tokens whatever the theme is.
+    in-out property <Appearance> appearance: Appearance.system;
+    // Only read while following the system, so forcing a mode leaves no dependency on the
+    // palette and the two cannot drive each other.
+    out property <bool> system-dark: Palette.color-scheme == ColorScheme.dark;
+    out property <bool> dark: appearance == Appearance.system
+        ? system-dark
+        : appearance == Appearance.dark;
+
+    // What the user picked, and what `system` comes to on this phone, which only Rust can read.
+    in-out property <Language> language: Language.system;
+    in property <Language> system-language: Language.english;
+    out property <Language> shown-language: language == Language.system ? system-language : language;
+    out property <bool> rtl: shown-language == Language.arabic;
+    // Where a line of text starts and ends in the reading direction. Slint's own `start` follows
+    // the text's script, so an English name in an Arabic row would still hug the left.
+    out property <TextHorizontalAlignment> start: rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+    out property <TextHorizontalAlignment> end: rtl ? TextHorizontalAlignment.left : TextHorizontalAlignment.right;
+    // Arabic letters join, so the tracking that opens up Latin capitals would pull them apart.
+    out property <bool> joined: shown-language == Language.arabic;
+    // Starts a line built from figures alone, which has no letter of its own to say which way
+    // it reads: without it "4:12 · 21:04" runs left to right inside a right-to-left list.
+    out property <string> direction-mark: rtl ? "\u{200F}" : "";
+
+    out property <color> ground: dark ? #070A0F : #FFFFFF;
+    out property <color> surface: dark ? #101720 : #F1F4F8;
+    out property <color> raised: dark ? #18212C : #E4EAF1;
+    out property <color> text: dark ? #E9F0F7 : #0E151E;
+    out property <color> muted: dark ? #93A3B5 : #6B7C8F;
+    out property <color> beacon: dark ? #58B6FF : #0A6FC2;
+    // Rows are separated by a hairline, not by gaps between cards.
+    out property <color> hairline: dark ? #2631408C : #E7ECF2;
+    out property <length> hairline-width: 1px;
+    // Behind every sheet, so what is under it reads as out of reach.
+    out property <color> scrim: #000000CC;
+
+    // Fixed: a call screen is dark in either theme.
+    out property <color> video: #101720;
+    out property <color> on-video: #E9F0F7;
+    out property <color> on-video-muted: #93A3B5;
+    out property <color> on-video-accent: #A9D9FF;
+    out property <color> under-video: #070A0F;
+    out property <color> answer: #32C97A;
+    out property <color> end-call: #FF5252;
+    // One spacing scale: 8, halved to 4 where tight.
+    out property <length> gap: 8px;
+    out property <length> gap-large: 16px;
+    out property <length> radius: 14px;
+    // List metrics, measured off the design in a browser and scaled to a 360dp screen.
+    out property <length> edge: 20px;
+    out property <length> row-height: 72px;
+    out property <length> row-gap: 13px;
+    out property <length> value-gap: 15px;
+    out property <length> avatar: 44px;
+    out property <length> bar-top: 12px;
+    out property <length> bar-bottom: 15px;
+    out property <length> pill-height: 28px;
+    out property <length> pill-pad: 14px;
+    out property <length> detail-height: 74px;
+    // Call chrome, measured off the design's call frames. `px` is Slint's logical pixel —
+    // it is dp, scaled by the display factor, so these are device-independent already.
+    out property <length> key-size: 49px;
+    out property <length> key-wide: 64px;
+    out property <length> key-icon: 22px;
+    out property <length> key-gap: 13px;
+    out property <length> call-edge: 19px;
+    out property <length> call-top: 15px;
+    out property <length> call-bottom: 23px;
+    out property <length> chip-height: 31px;
+    out property <length> chip-pad: 10px;
+    out property <length> self-view-width: 90px;
+    out property <length> self-view-height: 134px;
+    out property <length> self-view-edge: 17px;
+    out property <length> self-view-top: 67px;
+    // The call once it has been folded away: big enough to read a face, small enough that the
+    // screen underneath is still usable, which is the whole point of it.
+    out property <length> mini-width: 108px;
+    out property <length> mini-height: 158px;
+    out property <length> mini-edge: 12px;
+    // How far a finger may wander and still count as a tap. Android's own touch slop.
+    out property <length> drag-slop: 8px;
+    // The call log's direction arrow, sized to its line of text.
+    out property <length> call-arrow: 15px;
+    out property <length> call-arrow-gap: 4px;
+    // The scanner: the square's share of the screen's shorter side, the dim around it, and
+    // the square's outline.
+    out property <float> scan-window: 0.7;
+    out property <color> scan-dim: #070A0FA6;
+    out property <length> scan-border: 2px;
+    // A line of figures on a call's details: tighter than a list row, which carries two lines.
+    out property <length> stat-height: 40px;
+    // How long a press has to be held to count as a long press. Android's default until the
+    // app reads the user's own setting ("Touch and hold delay") from `ViewConfiguration`.
+    in-out property <duration> long-press: 400ms;
+    // The tab bar's own height, without the gesture inset it adds underneath. Named because
+    // the folded call has to stay off it.
+    out property <length> tab-height: 64px;
+    out property <length> peer-avatar: 110px;
+    // The Add-someone stack.
+    out property <length> wide-height: 44px;
+    out property <length> wide-radius: 15px;
+    out property <length> stack-gap: 12px;
+    out property <length> stack-top: 17px;
+    out property <length> qr-size: 171px;
+    out property <length> qr-pad: 12px;
+    // The mark on its plate in the middle of a code: the plate is round, so what fits inside
+    // it is the square on its diameter — 1/√2 of the width, not all of it.
+    out property <float> mark-in-plate: 0.707;
+    // The splash, scaled from the design's frame like everything else.
+    out property <length> splash-mark: 105px;
+    out property <length> splash-gap: 20px;
+    out property <length> splash-foot: 32px;
+    out property <length> group-head: 30px;
+    // The copy-key button: a full touch target around a key-sized icon, and how long its
+    // check mark stays before it offers to copy again.
+    out property <length> copy-target: 48px;
+    out property <duration> copied-for: 1500ms;
+    // A just-added contact: a faint tint with a band of accent sweeping across it.
+    out property <duration> shimmer-sweep: 1400ms;
+    out property <float> shimmer-band: 0.45;
+    out property <color> shimmer-tint: beacon.with-alpha(0.08);
+    out property <color> shimmer-glint: beacon.with-alpha(0.22);
+    // Settings: rows on inset surface groups, each with an icon tile. Drawn at 360dp in the
+    // settings canvas, so these are dp as they stand.
+    out property <length> setting-height: 68px;
+    out property <length> setting-pad: 16px;
+    out property <length> setting-gap: 14px;
+    out property <length> setting-tile: 38px;
+    out property <length> setting-tile-radius: 11px;
+    out property <length> setting-icon: 20px;
+    out property <length> setting-title-box: 24px;
+    out property <length> setting-detail-box: 19px;
+    out property <length> group-edge: 16px;
+    // Stronger than `hairline`: on a group's surface the page's own reads as nothing.
+    out property <color> group-hairline: dark ? #263140E6 : #E1E7EE;
+    out property <length> group-gap: 14px;
+    out property <length> brand: 26px;
+    out property <length> sheet-width: 320px;
+    out property <length> toast-bottom: 88px;
+    // Long enough to read a sentence, short enough not to sit in the way.
+    out property <duration> toast-life: 4s;
+    // Every press, hover and selection fades rather than snapping.
+    out property <duration> feedback: 160ms;
+    // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text
+    // gets the taller box explicitly and centres in it.
+    out property <float> line-box: 1.6;
+    out property <string> display: "Outfit";
+    out property <string> mono: "IBM Plex Mono";
+    // In the design's order: the first contact is rose, the second blue. Each tint carries
+    // its own ink, as the design does — the initial is never navy on a rose circle.
+    out property <[color]> avatar-tints: [#F6DDE6, #D8E7F5, #DCEEDF, #F3E3CF, #E0DDF5];
+    out property <[color]> avatar-inks: [#62243C, #123A5C, #1D4A2C, #5C4218, #332C5E];
+}

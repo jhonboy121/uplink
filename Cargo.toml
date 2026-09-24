@@ -20,6 +20,9 @@ opus-sys = { path = "sys/opus-sys" }
 # Glyph outlines and their rasterisation, for the line of text on the shared identity card. Two
 # small crates; a full image-processing library would be a lot of machinery for one line.
 ab_glyph = "0.2"
+# Shapes the identity card's caption: Arabic joins and runs right to left, which drawing glyphs
+# one character at a time cannot do. Already under Slint's own text layout.
+harfrust = { version = "0.12", default-features = false, features = ["std"] }
 # A pointer that is read constantly and replaced rarely, without a lock on the read side. The
 # activity is exactly that: every platform call looks at it, and it changes twice in its life.
 arc-swap = "1"
@@ -73,6 +76,12 @@ serde = { version = "1", features = ["derive"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
 # Our icons are SVG, and `slint` exposes no feature that turns SVG rendering on.
 i-slint-core = { version = "=1.18.1", default-features = false, features = ["svg"] }
+# Never called: a build-dependency only so the `slint!` macro's compiler (a host crate, which
+# feature-unifies with build-dependencies) bundles `lang/` from SLINT_BUNDLE_TRANSLATIONS.
+# `slint-macros` does not enable it itself, and this avoids a build script.
+i-slint-compiler = { version = "=1.18.1", default-features = false, features = ["bundle-translations"] }
+# The phone's language, when the app is set to follow it. Already under Slint for the same job.
+sys-locale = "0.3"
 symphonia = { version = "0.5", default-features = false, features = ["aac"] }
 tempfile = "3"
 tokio = { version = "1", default-features = false }

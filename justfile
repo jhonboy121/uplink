@@ -7,7 +7,7 @@ android_target := "aarch64-linux-android"
 min_sdk := "30"
 target_sdk := "37"
 app_id := "dev.uplink"
-app_label := "Uplink"
+app_label := "uplink"
 version_code := "1"
 out_dir := home_directory() / "android/out"
 keystore := home_directory() / "android/debug.keystore"
@@ -99,10 +99,13 @@ dex:
     #!/bin/sh
     set -eu
     classes=$(mktemp -d)
+    generated=$(mktemp -d)
     mkdir -p "{{dex_dir}}"
-    trap 'rm -rf "$classes"' EXIT
+    trap 'rm -rf "$classes" "$generated"' EXIT
+    # R.java from the same res/ the APK's table is compiled from, so the ids agree.
+    cargo run -q -p android-res -- r-class --package {{app_id}} --out "$generated"
     javac -source {{java_release}} -target {{java_release}} -bootclasspath "{{android_jar}}" -Xlint:-options \
-        -d "$classes" $(find "{{java_src}}" -name '*.java')
+        -d "$classes" $(find "{{java_src}}" "$generated" -name '*.java')
     java -cp "{{d8}}" com.android.tools.r8.D8 {{d8_mode}} --min-api {{min_sdk}} --lib "{{android_jar}}" \
         --output "{{dex_dir}}" $(find "$classes" -name '*.class')
 
@@ -188,6 +191,21 @@ the debug-info variable is what puts the markup's own element names in that tabl
 ''')]
 preview:
     SLINT_EMIT_DEBUG_INFO=1 nice cargo run -q -p ui-preview
+
+[doc('''
+Rewrite crates/uplink/lang/uplink.pot from every @tr in crates/uplink/ui — the template a new
+language's .po starts from.
+''')]
+tr-pot:
+    python3 tools/tr/tr.py pot
+
+[doc('''
+List what each language's .po lacks, leaves empty, or still has after the markup dropped it; the
+same for android/res/values-<lang>/ against values/; and translations whose placeholders differ.
+Slint keys a string by its text and the component it is in, so moving one is a new string.
+''')]
+tr-check:
+    python3 tools/tr/tr.py check
 
 [doc('''
 Regenerate tools/android-res/src/framework.rs — every android: attribute and style id, read out

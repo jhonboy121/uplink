@@ -15,5 +15,9 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 # The widget style embeds its icons, and `slint` has no feature that turns that decoding on.
 i-slint-core = { version = "=1.18.1", default-features = false, features = ["image-decoders", "image-default-formats", "svg"] }
 
+# Turns on translation bundling in the `slint!` macro; see the workspace manifest.
+[build-dependencies]
+i-slint-compiler.workspace = true
+
 [lints]
 workspace = true

@@ -73,7 +73,9 @@ impl StringPool {
         let mut offsets = Vec::with_capacity(self.strings.len());
         for s in &self.strings {
             offsets.push(data.len()?);
-            data.utf8_len(s.chars().count())?;
+            // The first length is in UTF-16 units, which is what Java's String will hold: the
+            // same as the character count for ASCII, not for everything past the BMP.
+            data.utf8_len(s.encode_utf16().count())?;
             data.utf8_len(s.len())?;
             data.bytes(s.as_bytes());
             data.u8(0);

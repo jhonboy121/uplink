@@ -1,0 +1,215 @@
+// What Rust and the markup hand each other. Rust sends facts — enums, counts, names, figures —
+// and the markup words them, so every sentence on screen is one `@tr` can translate.
+//
+// Slint has no Option, so an optional value is a list of at most one. `for x in maybe` draws it
+// only when it is there, and `maybe.length > 0` asks. Nothing uses an empty string for "none".
+
+export enum Screen { people, calls, connect, settings }
+
+export enum CallState { idle, dialing, ringing, incoming, connected }
+
+// How the call's media is travelling, once there is a path to speak of.
+export enum Route { unknown, direct, relayed }
+
+// A call cannot happen without all three, so the gate is not dismissable. `blocked` is the one
+// Android will not ask about again, which is the only case that needs Settings.
+export enum Grant { needed, granted, blocked }
+
+export enum Permission { camera, microphone, notifications }
+
+export struct PermissionItem {
+    permission: Permission,
+    grant: Grant,
+}
+
+// What is waiting on a yes. `none` is the usual state.
+export enum Confirm { none, remove-contact, remove-selected, clear-calls, remove-selected-calls, remove-call }
+
+// A stretch of time back from now, as coarse as a list row wants it.
+export enum Unit { now, minutes, hours, days, weeks }
+
+export struct Ago {
+    unit: Unit,
+    count: int,
+}
+
+// The day a call happened, as the heading of its group in the log.
+export enum Day { today, yesterday, days-ago, weeks-ago }
+
+export struct DayAgo {
+    day: Day,
+    count: int,
+}
+
+// How a call ended. Which of the two declined is the direction arrow's to say.
+export enum Ending { answered, missed, declined, cancelled, no-answer, unreachable, needs-update, failed }
+
+// The heading a group of contacts opens with.
+export enum Group { favourites, others }
+
+export struct ContactItem {
+    name: string,
+    id: string,
+    initial: string,
+    tint: int,
+    // Set on the first row of each group only, so the markup never looks at the row before.
+    heading: [Group],
+    // Empty when they have never been called.
+    last-called: [Ago],
+    favourite: bool,
+    selected: bool,
+    // Just added: the row shimmers for a moment, so the eye lands on it.
+    fresh: bool,
+}
+
+// One contact, opened from People.
+export struct ContactDetail {
+    id: string,
+    name: string,
+    initial: string,
+    // What they call themselves, when they have said.
+    advertised: [string],
+    favourite: bool,
+    fingerprint: [string],
+}
+
+export struct CallItem {
+    name: string,
+    // The peer, for calling back; `entry` is which row of the log this is.
+    id: string,
+    entry: string,
+    initial: string,
+    tint: int,
+    ending: Ending,
+    incoming: bool,
+    // "4:12", for an answered call whose length was kept.
+    duration: [string],
+    // Time of day; the day is the group's.
+    time: string,
+    selected: bool,
+    // Set when this row is the first of a day, so the list can date its groups.
+    day: [DayAgo],
+}
+
+export struct Traffic {
+    sent: string,
+    received: string,
+}
+
+// A figure on a call's details. Rust formats the numbers; the words around them are the
+// markup's, chosen by `measure`.
+export enum Measure {
+    target,
+    fps-out,
+    fps-in,
+    frames,
+    frames-lost,
+    audio-packets,
+    audio-repaired,
+    speed-up,
+    speed-down,
+    round-trip,
+}
+
+export struct Stat {
+    measure: Measure,
+    // As many as the measure has: a spread is average, lowest, highest.
+    figures: [string],
+}
+
+// Which way a call's media went. A mixed call carries each family's whole-percent share.
+export enum PathKind { direct, relayed, partly-relayed, direct-v6, direct-v4, mixed }
+
+export struct Path {
+    kind: PathKind,
+    v6: int,
+    v4: int,
+    relay: int,
+}
+
+// What happened with IPv6: used, or where it stopped — the question a relayed call raises.
+export enum Ipv6 { used, opened, never-opened, they-had-none, you-had-none, neither }
+
+// One call, opened from the log.
+export struct CallDetail {
+    entry: string,
+    // Their key, which is what Call and Add take.
+    peer: string,
+    name: string,
+    initial: string,
+    // Saved as a contact already, so Add has nothing to do.
+    known: bool,
+    fingerprint: [string],
+    ending: Ending,
+    incoming: bool,
+    day: DayAgo,
+    time: string,
+    duration: [string],
+    traffic: [Traffic],
+    // How it went, grouped as the page shows it; each empty for a call too short to sample, or
+    // one logged before any of this was kept.
+    video: [Stat],
+    voice: [Stat],
+    path: [Path],
+    ipv6: [Ipv6],
+    network: [Stat],
+}
+
+// Where n0 puts a relay, or that you added it.
+export enum Region { north-america-east, north-america-west, europe, asia-pacific, elsewhere, yours }
+
+// A relay the endpoint may use. `host` is what settings store, not what is shown: two relays
+// in one region would read alike otherwise.
+export struct RelayItem {
+    host: string,
+    name: string,
+    region: Region,
+    on: bool,
+}
+
+// Something that went wrong and needs no decision. `subject` is whatever the sentence names —
+// a contact, an error's own text — and the counts are for the one that has them.
+export enum Say {
+    already-saved,
+    not-a-key,
+    own-code,
+    no-code,
+    image-unreadable,
+    some-not-removed,
+    call-unreadable,
+    call-not-removed,
+    calls-not-removed,
+    battery-settings,
+    setting-unopened,
+    list-unopened,
+    already-in-call,
+    code-not-shared,
+    log-not-packed,
+    key-not-copied,
+    relay-invalid,
+    failed,
+}
+
+export struct Toast {
+    say: Say,
+    subject: string,
+    count: int,
+    total: int,
+}
+
+// Why a name could not be added, said under the field it concerns.
+export enum AddError { not-a-key, own-code, already-saved, name-taken, failed }
+
+export struct AddProblem {
+    error: AddError,
+    subject: string,
+}
+
+// The versions two phones run when they cannot talk. Either may be unknown.
+export struct Mismatch {
+    // True when it is this phone that is behind.
+    ours-behind: bool,
+    name: string,
+    theirs: [string],
+    ours: [string],
+}

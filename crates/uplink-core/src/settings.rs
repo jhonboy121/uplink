@@ -13,8 +13,8 @@ use crate::db::Db;
 pub const BATTERY_OFFERED: &str = "battery-explained";
 /// `system`, `light` or `dark` — whatever the UI puts there; this store does not interpret it.
 pub const APPEARANCE: &str = "appearance";
-/// Whether every screen is mirrored, for Arabic.
-pub const LAYOUT_RTL: &str = "layout-rtl";
+/// `system`, or the language the UI was set to (`en`, `ar`). The layout's direction follows it.
+pub const LANGUAGE: &str = "language";
 /// `custom`, or anything else for n0's own relays. See [`crate::relays`].
 pub const RELAY_SOURCE: &str = "relay-source";
 /// Which of n0's relays are switched off, one host per line.
@@ -115,11 +115,11 @@ mod tests {
     #[test]
     fn a_flag_is_off_until_it_is_set() -> Result<(), Error> {
         let settings = settings()?;
-        assert!(!settings.flag(LAYOUT_RTL));
-        settings.set_flag(LAYOUT_RTL, true)?;
-        assert!(settings.flag(LAYOUT_RTL));
-        settings.set_flag(LAYOUT_RTL, false)?;
-        assert!(!settings.flag(LAYOUT_RTL));
+        assert!(!settings.flag(BATTERY_OFFERED));
+        settings.set_flag(BATTERY_OFFERED, true)?;
+        assert!(settings.flag(BATTERY_OFFERED));
+        settings.set_flag(BATTERY_OFFERED, false)?;
+        assert!(!settings.flag(BATTERY_OFFERED));
         Ok(())
     }
 }

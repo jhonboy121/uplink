@@ -1,0 +1,253 @@
+// Who you can call, and one of them opened.
+
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ContactDetail, ContactItem, Group, Unit } from "types.slint";
+import { AppBar, BarPill, BigAvatar, Brand, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
+import { PersonRow } from "list.slint";
+
+export component PeoplePage inherits Rectangle {
+    in property <[ContactItem]> contacts;
+    // Offset of a row to bring into view, from the top of the list; negative for none.
+    in property <length> reveal: -1px;
+    in property <length> top-inset;
+    in property <bool> online;
+    in property <bool> selecting;
+    in property <int> selected-count;
+    callback call(string);
+    callback open(string);
+    callback connect();
+    callback select(string);
+    // A row was held long enough to count; the feel of it is the platform's.
+    callback long-pressed();
+    callback start-selecting();
+    callback remove-selected();
+    background: Theme.ground;
+
+    VerticalLayout {
+        // Contacts and nothing else: adding happens in Connect, which is a tab away.
+        AppBar {
+            top-inset: root.top-inset;
+            spacing: 0;
+            PageTitle {
+                text: root.selecting ? @tr("{n} selected" | "{n} selected" % root.selected-count) : @tr("People");
+                horizontal-stretch: 1;
+            }
+            if root.selecting : BarPill {
+                text: @tr("Remove");
+                danger: true;
+                enabled: root.selected-count > 0;
+                clicked => { root.remove-selected(); }
+            }
+            // Reachability, not diagnostics: whether someone could call you right now.
+            if !root.selecting : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: Theme.pill-height;
+                    width: reach.preferred-width + Theme.pill-pad * 2;
+                    border-radius: self.height / 2;
+                    background: transparent;
+                    border-width: 1px;
+                    border-color: root.online ? Theme.answer.with-alpha(0.45) : Theme.muted.with-alpha(0.45);
+                    reach := Text {
+                        text: root.online ? @tr("Online") : @tr("Offline");
+                        color: root.online ? Theme.answer : Theme.muted;
+                        font-size: 0.8125rem;
+                    }
+                }
+            }
+            Brand { }
+        }
+
+        if root.contacts.length == 0 : EmptyState {
+            title: @tr("No one here yet");
+            body: @tr("Open Connect to scan a code, or send them yours.");
+            HorizontalLayout {
+                alignment: center;
+                Pill {
+                    text: @tr("Connect");
+                    clicked => { root.connect(); }
+                }
+            }
+        }
+        if root.contacts.length > 0 : ScrollView {
+            vertical-stretch: 1;
+            // A finger drags the list itself; without this only the scrollbar moves it.
+            mouse-drag-pan-enabled: true;
+            // A row asked to be shown is centred when it can be, and the list stops at its
+            // ends when it cannot. Both on arrival and on a change while the page is up.
+            property <length> reveal: root.reveal;
+            function show-revealed() {
+                if (self.reveal >= 0) {
+                    self.content-y = -clamp(
+                        self.reveal - (self.visible-height - Theme.row-height) / 2,
+                        0px,
+                        max(0px, self.content-height - self.visible-height));
+                }
+            }
+            // Also once the layout has measured the rows: at `init` the content has no height
+            // yet, so the clamp above pins the list to the top and the reveal goes nowhere.
+            init => { self.show-revealed(); }
+            changed reveal => { self.show-revealed(); }
+            changed content-height => { self.show-revealed(); }
+            changed visible-height => { self.show-revealed(); }
+            VerticalLayout {
+                alignment: start;
+                // A flat list: rows are divided by a hairline, never boxed. The hairline is
+                // part of the stack, as the design's border-top is, so the pitch includes it.
+                for contact[index] in root.contacts : VerticalLayout {
+                    for group in contact.heading : SectionHead {
+                        text: group == Group.favourites ? @tr("FAVOURITES") : @tr("ALL");
+                    }
+                    // A hairline divides rows within a group; a heading already divides groups.
+                    // Rust counts this too, to know where a row sits.
+                    if index > 0 && contact.heading.length == 0 : Rectangle {
+                        height: Theme.hairline-width;
+                        background: Theme.hairline;
+                    }
+                    // Holding a row starts selecting with it, which is the only way in.
+                    PersonRow {
+                        name: contact.name;
+                        initial: contact.initial;
+                        tint: index;
+                        selecting: root.selecting;
+                        selected: contact.selected;
+                        fresh: contact.fresh;
+                        tapped => {
+                            if (root.selecting) {
+                                root.select(contact.id);
+                            } else {
+                                root.open(contact.id);
+                            }
+                        }
+                        held => {
+                            root.long-pressed();
+                            if (!root.selecting) {
+                                root.start-selecting();
+                            }
+                            root.select(contact.id);
+                        }
+                        call => { root.call(contact.id); }
+                        RowName { text: contact.name; }
+                        // When they were last called is prose, not a code, so it takes the body
+                        // face rather than the monospace one.
+                        RowDetail {
+                            text: contact.last-called.length == 0 ? @tr("Never called")
+                                : contact.last-called[0].unit == Unit.now ? @tr("Called just now")
+                                : contact.last-called[0].unit == Unit.minutes
+                                    ? @tr("Called {n} minute ago" | "Called {n} minutes ago" % contact.last-called[0].count)
+                                : contact.last-called[0].unit == Unit.hours
+                                    ? @tr("Called {n} hour ago" | "Called {n} hours ago" % contact.last-called[0].count)
+                                : contact.last-called[0].unit == Unit.days
+                                    ? @tr("Called {n} day ago" | "Called {n} days ago" % contact.last-called[0].count)
+                                : @tr("Called {n} week ago" | "Called {n} weeks ago" % contact.last-called[0].count);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One contact: what you call them, what they call themselves, and the three things you can do
+// to the row besides ring it.
+export component ContactPage inherits Rectangle {
+    in property <ContactDetail> contact;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    in-out property <string> draft;
+    in-out property <bool> renaming;
+    callback call();
+    callback toggle-favourite();
+    callback rename(string);
+    callback remove();
+    callback close();
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: root.contact.name;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            BarPill {
+                text: @tr("Done");
+                clicked => { root.close(); }
+            }
+        }
+
+        // Everything below the bar scrolls: when the keyboard covers the rename field, Slint
+        // looks up the parent chain for something scrollable and brings the field back into
+        // view. Without it the field just sits underneath the keyboard.
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-bottom: root.bottom-inset + Theme.gap-large;
+                VerticalLayout {
+                    padding-left: Theme.edge;
+                    padding-right: Theme.edge;
+                    spacing: Theme.stack-gap;
+                    BigAvatar { initial: root.contact.initial; }
+                    // Their claim sits under your name for them, in quotes, and never replaces it.
+                    for advertised in root.contact.advertised : Text {
+                        text: @tr("calls themselves “{}”", advertised);
+                        color: Theme.muted;
+                        font-size: 0.8125rem;
+                        height: self.font-size * Theme.line-box;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Fingerprint { lines: root.contact.fingerprint; }
+                    if !root.renaming : Wide {
+                        text: @tr("Call");
+                        primary: true;
+                        clicked => { root.call(); }
+                    }
+                    if root.renaming : LineEdit {
+                        placeholder-text: @tr("Their name");
+                        text <=> root.draft;
+                    }
+                    if root.renaming : Wide {
+                        text: @tr("Save");
+                        primary: true;
+                        enabled: root.draft != "" && root.draft != root.contact.name;
+                        clicked => {
+                            root.rename(root.draft);
+                            root.renaming = false;
+                        }
+                    }
+                }
+
+                // The actions sit clear of the Call button rather than butting against it.
+                Rectangle { height: Theme.stack-top; }
+                DetailRow {
+                    title: @tr("Favourite");
+                    detail: root.contact.favourite ? @tr("Kept at the top of People") : @tr("Keep them at the top of People");
+                    icon: root.contact.favourite ? @image-url("icons/star-filled.svg") : @image-url("icons/star.svg");
+                    clicked => { root.toggle-favourite(); }
+                }
+                DetailRow {
+                    title: @tr("Rename");
+                    detail: @tr("What you call them, only on this phone");
+                    value: root.renaming ? @tr("Cancel") : @tr("Edit");
+                    clicked => {
+                        root.draft = root.contact.name;
+                        root.renaming = !root.renaming;
+                    }
+                }
+                DetailRow {
+                    title: @tr("Remove");
+                    detail: @tr("Their key goes; they can still call you");
+                    icon: @image-url("icons/close.svg");
+                    danger: true;
+                    clicked => { root.remove(); }
+                }
+            }
+        }
+    }
+}

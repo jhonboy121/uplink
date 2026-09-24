@@ -1,0 +1,479 @@
+// The pieces every screen is built from: touch handling, the row that mirrors, buttons, and the
+// few text styles the design repeats.
+
+import { Theme } from "theme.slint";
+
+// A row that runs from the reading direction's start. Slint's own layouts only run left to right,
+// so every row whose order means something is one of these; a row that only centres one thing
+// can stay a HorizontalLayout. Padding stays physical, which is why rows keep it symmetric.
+export component Row inherits FlexboxLayout {
+    flex-direction: Theme.rtl ? FlexboxLayoutDirection.row-reverse : FlexboxLayoutDirection.row;
+    flex-wrap: FlexboxLayoutWrap.no-wrap;
+    // As a HorizontalLayout does: `horizontal-stretch` shares out the slack. A flexbox's own
+    // default packs everything at the start instead.
+    alignment: LayoutAlignment.stretch;
+}
+
+// A tap, as Android means one: a press released where it started, within the touch slop.
+// `clicked` fires on any release, and Slint delivers a *cancelled* touch as a release (its own
+// tests say so). Android cancels the touch under an edge swipe the moment it takes the swipe
+// for Back — by then the finger has travelled past the slop — so a bare `clicked` pressed the
+// Call pill, or unfolded the call, under every Back that started on one. Every button takes its
+// taps from here.
+export component Tap inherits TouchArea {
+    callback tapped();
+    mouse-cursor: pointer;
+    clicked => {
+        if (abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+            && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
+            root.tapped();
+        }
+    }
+}
+
+// A row's touch: a tap, or a hold. Slint 1.18's TouchArea has no long press, so this is one —
+// a press held within `drag-slop` for `Theme.long-press` (the user's own touch-and-hold
+// delay). A finger that wanders is scrolling, not holding, and the release that ends a hold
+// is not also a tap.
+export component HoldArea inherits TouchArea {
+    callback tapped();
+    callback held();
+    property <bool> holding: false;
+    property <bool> long-pressed: false;
+    mouse-cursor: pointer;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down) {
+            self.long-pressed = false;
+            self.holding = true;
+        } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+            self.holding = false;
+        }
+    }
+    moved => {
+        if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+            || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+            self.holding = false;
+        }
+    }
+    // As `Tap` does: a release that travelled is a scroll or a cancelled Back, not a tap.
+    clicked => {
+        if (!self.long-pressed
+            && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+            && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
+            root.tapped();
+        }
+    }
+    Timer {
+        interval: Theme.long-press;
+        running: root.holding;
+        triggered => {
+            root.holding = false;
+            root.long-pressed = true;
+            root.held();
+        }
+    }
+}
+
+// A line of text in the design's 1.6 line box, centred in it and starting where the row does.
+export component Line inherits Text {
+    height: self.font-size * Theme.line-box;
+    vertical-alignment: center;
+    horizontal-alignment: Theme.start;
+}
+
+// A row's first line: what the thing is.
+export component RowTitle inherits Line {
+    color: Theme.text;
+    font-size: 1rem;
+    font-weight: 700;
+    overflow: elide;
+}
+
+// A row's second line: what it is doing, or what it would do.
+export component RowDetail inherits Line {
+    color: Theme.muted;
+    font-size: 0.8125rem;
+    overflow: elide;
+}
+
+// A contact's or a caller's name at the head of a list row.
+export component RowName inherits Line {
+    color: Theme.text;
+    font-family: Theme.display;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    overflow: elide;
+}
+
+// A sheet's heading.
+export component SheetTitle inherits Line {
+    color: Theme.text;
+    font-family: Theme.display;
+    font-size: 1.1875rem;
+    font-weight: 600;
+}
+
+// A paragraph under a heading, wrapped.
+export component Prose inherits Text {
+    color: Theme.muted;
+    font-size: 0.8125rem;
+    wrap: word-wrap;
+    horizontal-alignment: Theme.start;
+}
+
+export component PageTitle inherits Line {
+    color: Theme.text;
+    font-family: Theme.display;
+    font-size: 1.4375rem;
+    font-weight: 600;
+}
+
+// A word in the monospace face at the end of a row: a state, not an action.
+export component Badge inherits Text {
+    font-family: Theme.mono;
+    font-size: 0.75rem;
+    letter-spacing: Theme.joined ? 0 : 0.6px;
+}
+
+export component Avatar inherits Rectangle {
+    in property <string> initial;
+    in property <int> tint;
+    in property <length> size: 40px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: Theme.avatar-tints[mod(tint, Theme.avatar-tints.length)];
+    Text {
+        text: initial;
+        color: Theme.avatar-inks[mod(tint, Theme.avatar-inks.length)];
+        font-family: Theme.display;
+        font-size: size / 2.6;
+        font-weight: 600;
+    }
+}
+
+// A face in the middle of a page: a contact, a caller, whoever is ringing.
+export component BigAvatar inherits HorizontalLayout {
+    in property <string> initial;
+    alignment: center;
+    Avatar {
+        initial: root.initial;
+        tint: 0;
+        size: Theme.peer-avatar;
+    }
+}
+
+// A key as groups of four over two lines, the way it is read aloud. One Text per line: Slint has
+// no line-height, so a wrapped string would set its own leading and the 1.6 line box would be
+// lost. A key is a code, so it reads left to right in any language.
+export component Fingerprint inherits VerticalLayout {
+    in property <[string]> lines;
+    for line in root.lines : Text {
+        text: line;
+        color: Theme.muted;
+        font-size: 0.9375rem;
+        font-family: Theme.mono;
+        letter-spacing: 0.6px;
+        height: self.font-size * Theme.line-box;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A round call control: custom rather than a Button because these are circles over video,
+// but it still reacts and carries an accessible label.
+export component Key inherits Rectangle {
+    in property <bool> on: false;
+    in property <bool> danger: false;
+    in property <bool> positive: false;
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+    width: danger || positive ? Theme.key-wide : Theme.key-size;
+    height: Theme.key-size;
+    border-radius: self.height / 2;
+    background: danger ? Theme.end-call
+        : positive ? Theme.answer
+        : on ? Theme.on-video
+        : #E9F0F719;
+    border-width: danger || positive || on ? 0px : 1px;
+    border-color: #E9F0F728;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    Image {
+        source: root.icon;
+        width: Theme.key-icon;
+        height: Theme.key-icon;
+        colorize: danger || positive ? #FFFFFF : on ? Theme.under-video : Theme.on-video;
+    }
+    touch := Tap {
+        tapped => { root.clicked(); }
+    }
+    states [
+        pressed when touch.pressed : { opacity: 0.6; }
+        hovered when touch.has-hover : { opacity: 0.85; }
+    ]
+    animate opacity, background { duration: Theme.feedback; easing: ease-out; }
+}
+
+// The mark, small, at the end of every app bar — so whichever screen someone is looking at
+// still says whose app it is.
+export component Brand inherits VerticalLayout {
+    alignment: center;
+    Image {
+        source: Theme.dark ? @image-url("icons/mark.svg") : @image-url("icons/mark-light.svg");
+        width: Theme.brand;
+        height: self.width;
+        accessible-role: image;
+        accessible-label: "uplink";
+    }
+}
+
+// The bar at the top of a page: the title at the start, whatever the page adds after it.
+export component AppBar inherits Row {
+    in property <length> top-inset;
+    vertical-stretch: 0;
+    padding-top: root.top-inset + Theme.bar-top;
+    padding-left: Theme.edge;
+    padding-right: Theme.edge;
+    padding-bottom: Theme.bar-bottom;
+    spacing: Theme.gap;
+}
+
+// The design's full-width action. Its secondary colours were written for a dark ground, so
+// here they come from the accent rather than the literal pale blue, to stay readable in light.
+export component Wide inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    property <color> accent: root.danger ? Theme.end-call : Theme.beacon;
+    height: Theme.wide-height;
+    border-radius: Theme.wide-radius;
+    background: root.primary ? Theme.beacon : self.accent.with-alpha(0.12);
+    border-width: root.primary ? 0px : 1px;
+    border-color: self.accent.with-alpha(0.30);
+    opacity: root.enabled ? 1.0 : 0.45;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+    Text {
+        text: root.text;
+        color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : root.accent;
+        font-size: 1rem;
+        font-weight: root.primary ? 600 : 400;
+        height: self.font-size * Theme.line-box;
+        vertical-alignment: center;
+    }
+    touch := Tap {
+        mouse-cursor: root.enabled ? pointer : default;
+        tapped => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+    states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
+    animate opacity { duration: Theme.feedback; easing: ease-out; }
+}
+
+// The design's one button shape: an outlined pill, for both the header action and Call.
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    property <color> accent: root.danger ? Theme.end-call : Theme.beacon;
+    height: Theme.pill-height;
+    width: label.preferred-width + Theme.pill-pad * 2;
+    border-radius: self.height / 2;
+    background: transparent;
+    border-width: 1px;
+    border-color: root.accent.with-alpha(0.35);
+    opacity: root.enabled ? 1.0 : 0.4;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+    label := Text {
+        text: root.text;
+        color: root.accent;
+        font-size: 0.8125rem;
+    }
+    touch := Tap {
+        mouse-cursor: root.enabled ? pointer : default;
+        tapped => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+    states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
+    animate opacity { duration: Theme.feedback; easing: ease-out; }
+}
+
+// A pill in a bar, centred on the bar's line.
+export component BarPill inherits VerticalLayout {
+    in property <string> text;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    alignment: center;
+    Pill {
+        text: root.text;
+        danger: root.danger;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A row's tick while picking several: filled when this one is picked.
+export component Tick inherits Image {
+    in property <bool> on;
+    source: root.on ? @image-url("icons/check-on.svg") : @image-url("icons/check-off.svg");
+    width: Theme.key-icon;
+    height: self.width;
+    colorize: root.on ? Theme.beacon : Theme.muted;
+}
+
+// The label over a group of rows or figures, in the monospace face.
+export component SectionHead inherits HorizontalLayout {
+    in property <string> text;
+    padding-left: Theme.edge;
+    padding-right: Theme.edge;
+    Text {
+        text: root.text;
+        color: Theme.muted;
+        font-family: Theme.mono;
+        font-size: 0.6875rem;
+        letter-spacing: Theme.joined ? 0 : 1.6px;
+        height: Theme.group-head;
+        vertical-alignment: bottom;
+        horizontal-alignment: Theme.start;
+    }
+}
+
+// What a list says when there is nothing in it yet, and what to do about that.
+export component EmptyState inherits Rectangle {
+    in property <string> title;
+    in property <string> body;
+    vertical-stretch: 1;
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.gap;
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 1.0625rem;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.body;
+            color: Theme.muted;
+            font-size: 0.875rem;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        @children
+    }
+}
+
+// What a thing is on the start side, what it is set to on the end side, on a flat list with a
+// hairline above each row. The contact and call pages' rows; Settings has its own, in groups.
+export component DetailRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> value;
+    // Shown in place of `value`, because a glyph like a cross or a star is not in every face
+    // and a missing one renders as nothing at all.
+    in property <image> icon;
+    in property <bool> danger: false;
+    in property <bool> tappable: true;
+    callback clicked();
+    height: Theme.detail-height;
+    accessible-role: button;
+    accessible-label: title;
+    accessible-action-default => { root.clicked(); }
+    // The design gives every one of these a hairline above it, the first included, and counts
+    // it in the row's height.
+    Rectangle {
+        y: 0;
+        height: Theme.hairline-width;
+        background: Theme.hairline;
+    }
+    touch := Tap {
+        mouse-cursor: root.tappable ? pointer : default;
+        tapped => {
+            if (root.tappable) {
+                root.clicked();
+            }
+        }
+    }
+    background: touch.pressed && root.tappable ? Theme.surface : transparent;
+    animate background { duration: Theme.feedback; easing: ease-out; }
+    Row {
+        y: Theme.hairline-width;
+        height: parent.height - Theme.hairline-width;
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        spacing: Theme.value-gap;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            RowTitle {
+                text: root.title;
+                color: root.danger ? Theme.end-call : Theme.text;
+            }
+            RowDetail { text: root.detail; }
+        }
+        VerticalLayout {
+            alignment: center;
+            if root.icon.width > 0 : Image {
+                source: root.icon;
+                width: Theme.key-icon;
+                height: self.width;
+                colorize: root.danger ? Theme.end-call : Theme.beacon;
+            }
+            if root.icon.width <= 0 : Line {
+                text: root.value;
+                color: root.danger ? Theme.end-call : root.tappable ? Theme.beacon : Theme.muted;
+                font-size: 0.908rem;
+                font-family: Theme.mono;
+            }
+        }
+    }
+}
+
+// One figure: what it is, and its value in the monospace face so columns of numbers line up.
+export component StatRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    height: Theme.stat-height;
+    accessible-role: text;
+    accessible-label: root.title + ": " + root.value;
+    Row {
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        spacing: Theme.value-gap;
+        Text {
+            text: root.title;
+            color: Theme.muted;
+            font-size: 0.875rem;
+            vertical-alignment: center;
+            horizontal-alignment: Theme.start;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.value;
+            color: Theme.text;
+            font-family: Theme.mono;
+            font-size: 0.8125rem;
+            vertical-alignment: center;
+            horizontal-alignment: Theme.end;
+        }
+    }
+}

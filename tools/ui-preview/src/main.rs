@@ -17,7 +17,10 @@ mod dump;
 #[path = "../../../crates/uplink/src/ui.rs"]
 mod ui;
 
-use ui::{App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, Screen, Theme};
+use ui::{
+    Ago, App, Appearance, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
+    Language, Permission, PermissionItem, Route, Screen, Theme, Unit,
+};
 
 /// Logical pixels.
 /// The S24 Ultra is 1440x3120 at 3x. `UPLINK_PREVIEW_SIZE=360x799` renders at the design's own
@@ -34,7 +37,8 @@ const QR_PIXELS: usize = 512;
 const GROUP: usize = 4;
 const FULL_GROUPS: usize = 8;
 const ROW_GROUPS: usize = 4;
-const SELF_GROUPS: usize = 3;
+/// The bundled translation's folder under `crates/uplink/lang`.
+const ARABIC: &str = "ar";
 
 struct Headless {
     window: Rc<MinimalSoftwareWindow>,
@@ -112,20 +116,15 @@ fn main() -> Result<()> {
 
     // One contact, opened from People.
     app.set_screen(Screen::People);
-    app.set_open_contact_id(keys()[0].1.into());
-    app.set_open_contact_name("Noor".into());
-    app.set_open_contact_advertised("Noor A.".into());
-    app.set_open_contact_initial("N".into());
-    app.set_open_contact_favourite(true);
-    app.set_open_contact_fingerprint(fingerprint_lines(keys()[0].1));
+    app.set_open_contact(one(open_contact()));
     shoot(&window, &app, canvas, "contact")?;
-    app.set_open_contact_id(Default::default());
+    app.set_open_contact(none());
 
     // A key that has arrived and has no name yet, over whatever screen you were on.
     app.set_screen(Screen::People);
-    app.set_peer_key("7d192bb40af655c20e62c81291e383bbc63b305338200d8562904d24a46cd641".into());
+    app.set_pending_key(one(keys()[1].1.into()));
     shoot(&window, &app, canvas, "name-sheet")?;
-    app.set_peer_key(Default::default());
+    app.set_pending_key(none());
 
     // People with nobody in it is the first thing a new user sees.
     app.set_screen(Screen::People);
@@ -171,13 +170,40 @@ fn main() -> Result<()> {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
+    app.global::<Theme>().set_appearance(Appearance::Dark);
+
+    // Arabic: every screen mirrored, and the words from the bundled translation.
+    app.global::<Theme>().set_language(Language::Arabic);
+    slint::select_bundled_translation(ARABIC).map_err(|e| anyhow::anyhow!("selecting Arabic: {e}"))?;
+    for (screen, name) in [
+        (Screen::People, "people-ar"),
+        (Screen::Calls, "calls-ar"),
+        (Screen::Connect, "connect-ar"),
+        (Screen::Settings, "settings-ar"),
+    ] {
+        app.set_screen(screen);
+        shoot(&window, &app, canvas, name)?;
+    }
+    app.set_screen(Screen::People);
+    app.set_open_contact(one(open_contact()));
+    shoot(&window, &app, canvas, "contact-ar")?;
+    app.set_open_contact(none());
+    app.set_call_state(CallState::Connected);
+    shoot(&window, &app, canvas, "call-connected-ar")?;
+    app.set_call_state(CallState::Idle);
+    app.global::<Theme>().set_language(Language::System);
+    slint::select_bundled_translation("").map_err(|e| anyhow::anyhow!("selecting English: {e}"))?;
     app.global::<Theme>().set_appearance(Appearance::System);
 
     // Not a screen: the picture "share my identity" sends. It is drawn by core rather than by
     // Slint, but it is as much a thing to look at as the rest, and it is not on any screen.
-    let card = format!("{OUT_DIR}/identity-card.png");
-    std::fs::write(&card, uplink_core::card::identity(keys()[0].1, "Scan to connect")?)?;
-    println!("{card}");
+    // Captioned from Android's resources, as the app captions it, in both languages.
+    for (folder, name) in [("values", "identity-card"), ("values-ar", "identity-card-ar")] {
+        let caption = resource_string(folder, "card_caption")?;
+        let card = format!("{OUT_DIR}/{name}.png");
+        std::fs::write(&card, uplink_core::card::identity(keys()[0].1, &caption)?)?;
+        println!("{card}");
+    }
 
     println!("rendered to {OUT_DIR}/");
     Ok(())
@@ -196,16 +222,22 @@ const fn keys() -> [(&'static str, &'static str); 3] {
 fn populate(app: &App) -> Result<()> {
     let keys = keys();
     // One favourite, one called recently, one never — the three states a row can be in.
-    let rows = [("FAVOURITES", "Called 20 minutes ago", true), ("ALL", "Called Tuesday", false), ("", "Never called", false)];
+    const MINUTES: i32 = 20;
+    const DAYS: i32 = 2;
+    let rows = [
+        (Some(Group::Favourites), Some(Ago { unit: Unit::Minutes, count: MINUTES }), true),
+        (Some(Group::Others), Some(Ago { unit: Unit::Days, count: DAYS }), false),
+        (None, None, false),
+    ];
     let contacts: Vec<ContactItem> = keys
         .iter()
         .zip(rows)
-        .map(|((name, key), (header, detail, favourite))| ContactItem {
+        .map(|((name, key), (heading, last_called, favourite))| ContactItem {
             name: (*name).into(),
             id: (*key).into(),
-            detail: detail.into(),
-            header: header.into(),
-            initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+            heading: maybe(heading),
+            last_called: maybe(last_called),
+            initial: initial(name),
             tint: 0,
             favourite,
             selected: false,
@@ -215,34 +247,34 @@ fn populate(app: &App) -> Result<()> {
     app.set_contacts(slint::ModelRc::new(slint::VecModel::from(contacts)));
 
     // One of each ending, so the screen is reviewed against every state it can show.
+    let today = DayAgo { day: Day::Today, count: 0 };
+    let yesterday = DayAgo { day: Day::Yesterday, count: 1 };
     let log = [
-        ("Noor", "Missed · 23:04", "TODAY", true, true, false),
-        ("Ammar", "4:12 · 22:15", "", false, false, true),
-        ("Noor", "Cancelled · 19:40", "YESTERDAY", false, false, false),
-        ("7d19 2bb4", "Declined · 11:02", "", false, true, false),
+        ("Noor", Ending::Missed, None, "23:04", Some(today), true),
+        ("Ammar", Ending::Answered, Some("4:12"), "22:15", None, false),
+        ("Noor", Ending::Cancelled, None, "19:40", Some(yesterday), false),
+        ("7d19 2bb4", Ending::Declined, None, "11:02", None, true),
     ];
     let calls: Vec<CallItem> = log
         .iter()
         .zip(keys.iter().cycle())
         .enumerate()
-        .map(|(row, ((name, detail, header, missed, incoming, answered), (_, key)))| CallItem {
-            initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
+        .map(|(row, ((name, ending, duration, time, day, incoming), (_, key)))| CallItem {
+            initial: initial(name),
             name: (*name).into(),
             id: (*key).into(),
-            detail: (*detail).into(),
-            header: (*header).into(),
-            tint: 0,
-            missed: *missed,
-            incoming: *incoming,
-            answered: *answered,
             entry: row.to_string().into(),
+            tint: 0,
+            ending: *ending,
+            incoming: *incoming,
+            duration: maybe(duration.map(slint::SharedString::from)),
+            time: (*time).into(),
             selected: false,
+            day: maybe(day.clone()),
         })
         .collect();
     app.set_calls(slint::ModelRc::new(slint::VecModel::from(calls)));
-    app.set_my_id(keys[0].1.into());
-    app.set_my_fingerprint_lines(fingerprint_lines(keys[0].1));
-    app.set_my_short_fingerprint(groups(keys[0].1, SELF_GROUPS, " · ").into());
+    app.set_my_fingerprint(fingerprint_lines(keys[0].1));
     let (qr, mark) = qr_image(keys[0].1)?;
     app.set_qr(qr);
     app.set_qr_mark(mark);
@@ -250,31 +282,61 @@ fn populate(app: &App) -> Result<()> {
     app.set_peer_initial("N".into());
     app.set_call_timer("04:12".into());
     app.set_key_exchange("X25519MLKEM768".into());
-    app.set_call_route("Relayed".into());
-    app.set_call_status("".into());
+    app.set_call_route(Route::Relayed);
     app.set_frame(stand_in(0x2B, 0x4B, 0x6B));
     app.set_remote_frame(stand_in(0x3A, 0x33, 0x50));
     Ok(())
 }
 
-/// The gate's three rows in the given states, with the icons the app uses.
+/// The gate's three rows in the given states.
 fn gate(states: &[Grant; 3]) -> slint::ModelRc<PermissionItem> {
-    let rows = [
-        ("Camera", "So they can see you", &include_bytes!("../../../assets/icons/camera.svg")[..]),
-        ("Microphone", "So they can hear you", &include_bytes!("../../../assets/icons/mic.svg")[..]),
-        ("Notifications", "So you know when someone calls", &include_bytes!("../../../assets/icons/bell.svg")[..]),
-    ];
-    let items: Vec<PermissionItem> = rows
-        .iter()
+    let items: Vec<PermissionItem> = [Permission::Camera, Permission::Microphone, Permission::Notifications]
+        .into_iter()
         .zip(states)
-        .map(|((name, why, svg), grant)| PermissionItem {
-            name: (*name).into(),
-            why: (*why).into(),
-            grant: *grant,
-            icon: slint::Image::load_from_svg_data(svg).unwrap_or_default(),
-        })
+        .map(|(permission, grant)| PermissionItem { permission, grant: *grant })
         .collect();
     slint::ModelRc::new(slint::VecModel::from(items))
+}
+
+/// Noor, opened from People: a favourite who calls themselves something else.
+fn open_contact() -> ContactDetail {
+    let key = keys()[0].1;
+    ContactDetail {
+        id: key.into(),
+        name: "Noor".into(),
+        initial: "N".into(),
+        advertised: one("Noor A.".into()),
+        favourite: true,
+        fingerprint: fingerprint_lines(key),
+    }
+}
+
+/// A plain `<string>` from `android/res/<folder>/values.xml`, found by its name. Enough for the
+/// one-line captions read here; the real compiler is `android-res`.
+fn resource_string(folder: &str, name: &str) -> Result<String> {
+    let path = format!("{}/../../android/res/{folder}/values.xml", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?;
+    let open = format!("<string name=\"{name}\">");
+    let start = text.find(&open).with_context(|| format!("{name} is not in {path}"))? + open.len();
+    let end = text[start..].find("</string>").with_context(|| format!("{name} is not closed in {path}"))?;
+    Ok(text[start..start + end].to_owned())
+}
+
+/// An optional value as the markup takes one: a list of at most one.
+fn maybe<T: Clone + 'static>(value: Option<T>) -> slint::ModelRc<T> {
+    slint::ModelRc::new(slint::VecModel::from_iter(value))
+}
+
+fn one<T: Clone + 'static>(value: T) -> slint::ModelRc<T> {
+    maybe(Some(value))
+}
+
+fn none<T: Clone + 'static>() -> slint::ModelRc<T> {
+    maybe(None)
+}
+
+fn initial(name: &str) -> slint::SharedString {
+    name.chars().next().unwrap_or('?').to_uppercase().to_string().into()
 }
 
 /// Mirrors the app's own fingerprint formatting; the app keeps its copy next to its contacts.
@@ -289,16 +351,6 @@ fn fingerprint_lines(key: &str) -> slint::ModelRc<slint::SharedString> {
         })
         .collect();
     slint::ModelRc::new(slint::VecModel::from(lines))
-}
-
-fn groups(key: &str, count: usize, separator: &str) -> String {
-    key.chars()
-        .take(GROUP * count)
-        .collect::<Vec<_>>()
-        .chunks(GROUP)
-        .map(|group| group.iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join(separator)
 }
 
 /// The code, and the share of its width the mark in the middle covers.

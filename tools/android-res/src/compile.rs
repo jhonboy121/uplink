@@ -122,6 +122,59 @@ pub fn color(text: &str) -> Result<u32> {
     })
 }
 
+/// A `<string>`'s text as aapt2 reads it: runs of whitespace fold to one space, and `\'`, `\"`,
+/// `\\`, `\n`, `\t`, `\@` and `\?` stand for themselves (or a newline, a tab). A literal `@` or
+/// `?` would otherwise start a reference.
+pub fn string_text(node: roxmltree::Node) -> Result<String> {
+    let raw: String = node.descendants().filter(roxmltree::Node::is_text).filter_map(|n| n.text()).collect();
+    let folded = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::with_capacity(folded.len());
+    let mut chars = folded.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some(escaped @ ('\'' | '"' | '\\' | '@' | '?')) => out.push(escaped),
+            other => bail!("unknown escape \\{} in {folded}", other.map(String::from).unwrap_or_default()),
+        }
+    }
+    if out.starts_with(['@', '?']) {
+        bail!("{out}: a string starting with @ or ? must escape it");
+    }
+    Ok(out)
+}
+
+/// A `<plurals>`: `<item quantity="one">…</item>` for each quantity the language has.
+pub fn plural(node: roxmltree::Node) -> Result<Vec<(u32, String)>> {
+    use crate::arsc::{ATTR_FEW, ATTR_MANY, ATTR_ONE, ATTR_OTHER, ATTR_TWO, ATTR_ZERO};
+    let name = node.attribute("name").unwrap_or_default();
+    let items = node
+        .children()
+        .filter(roxmltree::Node::is_element)
+        .map(|item| {
+            let quantity = match item.attribute("quantity") {
+                Some("zero") => ATTR_ZERO,
+                Some("one") => ATTR_ONE,
+                Some("two") => ATTR_TWO,
+                Some("few") => ATTR_FEW,
+                Some("many") => ATTR_MANY,
+                Some("other") => ATTR_OTHER,
+                other => bail!("plurals {name}: {other:?} is not a quantity"),
+            };
+            Ok((quantity, string_text(item)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // `other` is what every language falls back to, so a plural without one can come out empty.
+    if !items.iter().any(|(quantity, _)| *quantity == ATTR_OTHER) {
+        bail!("plurals {name} needs an \"other\" item");
+    }
+    Ok(items)
+}
+
 /// A style's `parent="@android:style/Theme.Foo"`.
 pub fn style_parent(text: &str, symbols: &Symbols) -> Result<u32> {
     reference(text, symbols).with_context(|| format!("style parent {text}"))

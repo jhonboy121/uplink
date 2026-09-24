@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Colours and the app theme. `android-res compile` turns this into resources.arsc; every name
+  here becomes a resource another file can reference as @color/… or @style/….
+-->
+<resources>
+    <!-- The call's ground. Also what Android 12+ builds its splash from, and what fills the
+         window before our first frame on older versions. -->
+    <color name="ground">#FF070A0F</color>
+
+    <style name="Theme.Uplink" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowBackground">@color/ground</item>
+    </style>
+
+    <!-- Everything said outside the window: notifications (posted with no window at all), the
+         picture-in-picture buttons, the share sheet and the identity card. The window's own
+         words are the markup's, in crates/uplink/lang. Translations go in values-<lang>/, and
+         `just tr-check` lists any this file has that one lacks. Java formats these, so an
+         argument is %1$s / %d. -->
+
+    <!-- The listening service. -->
+    <string name="ready">Ready for calls</string>
+    <string name="ready_text">uplink is reachable</string>
+    <string name="starting">Starting</string>
+    <string name="starting_text">uplink is coming online</string>
+
+    <!-- A call in progress, in its notification and its shrunken window. -->
+    <string name="channel_calls">Calls</string>
+    <string name="call_in_progress">Call in progress</string>
+    <string name="mute">Mute</string>
+    <string name="unmute">Unmute</string>
+    <string name="end_call">End call</string>
+
+    <!-- Ringing. -->
+    <string name="channel_ring">Incoming calls</string>
+    <string name="incoming_video_call">Incoming video call</string>
+    <string name="decline">Decline</string>
+    <string name="answer">Answer</string>
+
+    <!-- Missed calls, counted in one notification. -->
+    <string name="channel_missed">Missed calls</string>
+    <plurals name="missed_calls">
+        <item quantity="one">Missed call</item>
+        <item quantity="other">%d missed calls</item>
+    </plurals>
+    <string name="missed_latest">Latest from %1$s</string>
+
+    <!-- Two phones that cannot call each other until one updates. -->
+    <string name="channel_update">Updates needed</string>
+    <string name="update_ours_title">Update uplink</string>
+    <string name="update_theirs_title">%1$s needs to update uplink</string>
+    <string name="update_ours_text">%1$s has a newer uplink (%2$s) than yours (%3$s). Update yours to call each other.</string>
+    <string name="update_theirs_text">Their uplink (%1$s) is older than yours (%2$s). You can call each other once they update.</string>
+    <string name="unknown_version">an unknown version</string>
+
+    <!-- The share sheet, the clipboard, and the picture of your code. -->
+    <string name="share_identity">My uplink code</string>
+    <string name="share_diagnostics">uplink diagnostics</string>
+    <string name="copy_key_label">uplink key</string>
+    <string name="card_caption">Scan to connect</string>
+</resources>

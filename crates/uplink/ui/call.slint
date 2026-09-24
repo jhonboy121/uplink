@@ -1,0 +1,339 @@
+// A call: the whole window while it rings and runs, or folded into a corner so the rest of the
+// app can be used.
+
+import { Theme } from "theme.slint";
+import { CallState, Route } from "types.slint";
+import { BigAvatar, Key, Line, Row, Tap } from "controls.slint";
+
+// A label on the call's scrim: how the call is set up.
+component Chip inherits VerticalLayout {
+    in property <string> text;
+    in property <color> fill;
+    in property <color> edge;
+    in property <color> ink;
+    alignment: start;
+    Rectangle {
+        height: Theme.chip-height;
+        border-radius: self.height / 2;
+        background: root.fill;
+        border-width: 1px;
+        border-color: root.edge;
+        HorizontalLayout {
+            padding-left: Theme.chip-pad;
+            padding-right: Theme.chip-pad;
+            Text {
+                text: root.text;
+                color: root.ink;
+                font-family: Theme.mono;
+                font-size: 0.75rem;
+                letter-spacing: Theme.joined ? 0 : 0.34px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// A call folded into a corner, so the rest of the app is usable while it runs. Adding a
+// contact or sending diagnostics mid-call should not mean hanging up, and picture-in-picture
+// does not help here — the user has not left uplink, which is the common case.
+//
+// It keeps its own position so a drag survives being restored and folded away again, and it
+// is clamped on every layout rather than only while dragging, so rotating cannot strand it
+// off screen.
+export component MiniCall inherits Rectangle {
+    in property <image> frame;
+    in property <string> timer;
+    // What it has to stay clear of at each end: the system bars, and the tab bar it would
+    // otherwise sit on top of and make unreachable.
+    in property <length> top-clear;
+    in property <length> bottom-clear;
+    // The window, which a component cannot ask for: inside it, `parent` is itself.
+    in property <length> area-width;
+    in property <length> area-height;
+    in-out property <length> pos-x;
+    in-out property <length> pos-y;
+    in-out property <bool> placed;
+    callback restore();
+
+    width: Theme.mini-width;
+    height: Theme.mini-height;
+    property <length> lowest: root.area-height - self.height - root.bottom-clear - Theme.mini-edge;
+    property <length> end-x: Theme.rtl ? Theme.mini-edge : root.area-width - self.width - Theme.mini-edge;
+    x: clamp(root.pos-x, Theme.mini-edge, root.area-width - self.width - Theme.mini-edge);
+    y: clamp(root.pos-y, root.top-clear + Theme.mini-edge, max(root.top-clear + Theme.mini-edge, lowest));
+    // First shown, it rests in the end corner, nearest where the call controls were.
+    init => {
+        if (!root.placed) {
+            root.pos-x = root.end-x;
+            root.pos-y = root.lowest;
+            root.placed = true;
+        }
+    }
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: #FFFFFF3D;
+    background: Theme.video;
+    clip: true;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: #00000080;
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.frame;
+        image-fit: cover;
+    }
+    // The timer says it is still running even when the face has not arrived yet.
+    Rectangle {
+        y: parent.height - self.height;
+        height: 22px;
+        background: @linear-gradient(0deg, #04080DCC 0%, #04080D00 100%);
+        Text {
+            text: root.timer;
+            color: Theme.on-video;
+            font-family: Theme.mono;
+            font-size: 0.6875rem;
+            vertical-alignment: center;
+        }
+    }
+    // `clicked` fires on release whether or not the finger travelled, so letting go of a drag
+    // would also unfold the call. A tap is a press that stayed put.
+    property <bool> dragged;
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.dragged = false;
+            }
+        }
+        moved => {
+            if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+                || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+                root.dragged = true;
+            }
+            if (root.dragged) {
+                root.pos-x = root.x + self.mouse-x - self.pressed-x;
+                root.pos-y = root.y + self.mouse-y - self.pressed-y;
+            }
+        }
+        // Checked at the release too, not only by `moved`: a cancelled Back arrives as a
+        // release far from the press with no move in between, which `dragged` never sees.
+        clicked => {
+            if (!root.dragged
+                && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+                && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
+                root.restore();
+            }
+        }
+    }
+}
+
+// The whole window while a call is up: video owns the frame, chrome sits on a scrim.
+export component CallScreen inherits Rectangle {
+    in property <image> frame;
+    in property <image> remote-frame;
+    in property <string> peer-name;
+    in property <string> peer-initial;
+    in property <string> timer;
+    in property <string> key-exchange;
+    in property <Route> route;
+    // Set when the video never came up, or stopped: audio with no picture otherwise looks
+    // exactly like a call where nobody moved.
+    in property <bool> video-failed;
+    in property <CallState> state;
+    in-out property <bool> swapped;
+    in property <bool> mic-on;
+    in property <bool> speaker-on;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    callback accept();
+    callback reject();
+    callback hangup();
+    callback toggle-mic();
+    callback toggle-speaker();
+    callback flip-camera();
+    callback minimise();
+    background: Theme.video;
+
+    property <bool> connected: state == CallState.connected;
+    property <bool> incoming: state == CallState.incoming;
+
+    // Under everything on the call, so a tap nothing here takes stops here. The picture that
+    // fills the screen takes none, and a tap on it went through to the page beneath — a
+    // contact opened, or a call placed, from a tap on your own face.
+    TouchArea { }
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.connected && !root.swapped ? root.remote-frame : root.frame;
+        image-fit: cover;
+    }
+
+    // The corner card: the whole frame until the call connects, then a card holding whichever
+    // of the two pictures is not filling the screen. It depends on `connected` alone — while
+    // it also depended on `swapped`, a tap grew the card back to full size and buried the
+    // other picture under it, which read as the self view vanishing rather than trading.
+    self-view := Rectangle {
+        property <bool> inset: root.connected;
+        x: inset ? (Theme.rtl ? Theme.self-view-edge : parent.width - self.width - Theme.self-view-edge) : 0px;
+        y: inset ? root.top-inset + Theme.self-view-top : 0px;
+        width: inset ? Theme.self-view-width : parent.width;
+        height: inset ? Theme.self-view-height : parent.height;
+        border-radius: inset ? Theme.self-view-edge : 0px;
+        border-width: inset ? 1px : 0px;
+        border-color: #FFFFFF2D;
+        clip: true;
+        visible: root.connected;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.swapped ? root.remote-frame : root.frame;
+            image-fit: cover;
+        }
+        Tap {
+            tapped => { root.swapped = !root.swapped; }
+        }
+        animate x, y, width, height, border-radius { duration: 620ms; easing: ease-out-quint; }
+    }
+
+    // Ringing and incoming: name over a dimmed camera.
+    if !root.connected : Rectangle {
+        background: #070A0FB3;
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.call-top;
+            padding-bottom: parent.height / 4;
+            BigAvatar { initial: root.peer-initial; }
+            Text {
+                text: root.peer-name;
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.4375rem;
+                font-weight: 600;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.incoming ? @tr("Incoming video call") : @tr("Calling…");
+                color: Theme.on-video-muted;
+                font-size: 0.9375rem;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // Top scrim: who, how long, how secure. Only once connected — while it is ringing the
+    // name is already in the middle of the screen.
+    if root.connected : Rectangle {
+        y: 0;
+        height: root.top-inset + 88px;
+        background: @linear-gradient(180deg, #04080DBF 0%, #04080D00 100%);
+        VerticalLayout {
+            padding-top: root.top-inset + Theme.call-top;
+            padding-left: Theme.call-edge;
+            padding-right: Theme.call-edge;
+            alignment: start;
+            Row {
+                alignment: space-between;
+                spacing: Theme.gap-large;
+                VerticalLayout {
+                    spacing: 3px;
+                    Line {
+                        text: root.peer-name;
+                        color: Theme.on-video;
+                        font-family: Theme.display;
+                        font-size: 1.1875rem;
+                        font-weight: 600;
+                    }
+                    // A time is a code: it reads left to right in any language.
+                    Line {
+                        text: root.timer;
+                        color: Theme.on-video-muted;
+                        font-size: 1rem;
+                        font-family: Theme.mono;
+                    }
+                    if root.video-failed : Line {
+                        text: @tr("Video isn't working on this phone — audio only");
+                        color: Theme.end-call;
+                        font-size: 0.8125rem;
+                        overflow: elide;
+                    }
+                }
+                // How the call is set up, in the order it matters: the route first, because
+                // a relayed call explains a bad one, then what it is encrypted with.
+                if root.route != Route.unknown : Chip {
+                    text: root.route == Route.direct ? @tr("Direct") : @tr("Relayed");
+                    fill: #E9F0F71A;
+                    edge: #E9F0F73D;
+                    ink: Theme.on-video-muted;
+                }
+                Chip {
+                    text: root.key-exchange;
+                    fill: #58B6FF29;
+                    edge: #58B6FF4C;
+                    ink: Theme.on-video-accent;
+                }
+            }
+        }
+    }
+
+    // Controls on their own scrim.
+    Rectangle {
+        y: parent.height - self.height;
+        height: root.bottom-inset + 120px;
+        background: @linear-gradient(0deg, #04080DD9 0%, #04080D00 100%);
+        VerticalLayout {
+            alignment: end;
+            padding-bottom: root.bottom-inset + Theme.call-bottom;
+            Row {
+                alignment: center;
+                spacing: Theme.key-gap;
+                if root.incoming : Key {
+                    icon: @image-url("icons/close.svg");
+                    label: @tr("Decline");
+                    danger: true;
+                    clicked => { root.reject(); }
+                }
+                if root.incoming : Key {
+                    icon: @image-url("icons/call.svg");
+                    label: @tr("Answer");
+                    positive: true;
+                    clicked => { root.accept(); }
+                }
+                if !root.incoming : Key {
+                    icon: root.mic-on ? @image-url("icons/mic.svg") : @image-url("icons/mic-off.svg");
+                    label: root.mic-on ? @tr("Mute") : @tr("Unmute");
+                    on: !root.mic-on;
+                    clicked => { root.toggle-mic(); }
+                }
+                if root.connected : Key {
+                    icon: @image-url("icons/speaker.svg");
+                    label: @tr("Speaker");
+                    on: root.speaker-on;
+                    clicked => { root.toggle-speaker(); }
+                }
+                if root.connected : Key {
+                    icon: @image-url("icons/camera-switch.svg");
+                    label: @tr("Switch camera");
+                    clicked => { root.flip-camera(); }
+                }
+                // Folds the call away rather than ending it, which is the difference between
+                // looking something up mid-call and having to call back.
+                if root.connected : Key {
+                    icon: @image-url("icons/minimise.svg");
+                    label: @tr("Fold away");
+                    clicked => { root.minimise(); }
+                }
+                if !root.incoming : Key {
+                    icon: @image-url("icons/call-end.svg");
+                    label: @tr("End call");
+                    danger: true;
+                    clicked => { root.hangup(); }
+                }
+            }
+        }
+    }
+}

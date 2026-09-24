@@ -1,0 +1,318 @@
+// What happened, and with whom: the call log, and one call opened from it. A missed call is the
+// only thing here worth a colour.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { CallDetail, CallItem, Day, DayAgo, Ending, Ipv6, Measure, Path, PathKind, Stat } from "types.slint";
+import { AppBar, BarPill, BigAvatar, Brand, DetailRow, EmptyState, Fingerprint, Line, PageTitle, Row, RowDetail, RowName, SectionHead, StatRow, Wide } from "controls.slint";
+import { PersonRow } from "list.slint";
+
+// How the log words what Rust sends it, shared by the list and the page.
+global CallWords {
+    public pure function ending(ending: Ending) -> string {
+        return ending == Ending.answered ? @tr("Answered")
+            : ending == Ending.missed ? @tr("Missed")
+            : ending == Ending.declined ? @tr("Declined")
+            : ending == Ending.cancelled ? @tr("Cancelled")
+            : ending == Ending.no-answer ? @tr("No answer")
+            : ending == Ending.unreachable ? @tr("Couldn't reach them")
+            : ending == Ending.needs-update ? @tr("Needs an update")
+            : @tr("Did not connect");
+    }
+
+    // The heading over a day's calls, in capitals as a group label.
+    public pure function heading(day: DayAgo) -> string {
+        return day.day == Day.today ? @tr("TODAY")
+            : day.day == Day.yesterday ? @tr("YESTERDAY")
+            : day.day == Day.days-ago ? @tr("{n} DAY AGO" | "{n} DAYS AGO" % day.count)
+            : @tr("{n} WEEK AGO" | "{n} WEEKS AGO" % day.count);
+    }
+
+    // The same day in a line of prose.
+    public pure function day(day: DayAgo) -> string {
+        return day.day == Day.today ? @tr("Today")
+            : day.day == Day.yesterday ? @tr("Yesterday")
+            : day.day == Day.days-ago ? @tr("{n} day ago" | "{n} days ago" % day.count)
+            : @tr("{n} week ago" | "{n} weeks ago" % day.count);
+    }
+
+    public pure function measure(measure: Measure) -> string {
+        return measure == Measure.target ? @tr("Set up for")
+            : measure == Measure.fps-out ? @tr("Frame rate sent")
+            : measure == Measure.fps-in ? @tr("Frame rate received")
+            : measure == Measure.frames ? @tr("Frames")
+            : measure == Measure.frames-lost ? @tr("Frames lost")
+            : measure == Measure.audio-packets ? @tr("Packets")
+            : measure == Measure.audio-repaired ? @tr("Repaired")
+            : measure == Measure.speed-up ? @tr("Upload")
+            : measure == Measure.speed-down ? @tr("Download")
+            : @tr("Round trip");
+    }
+
+    // A spread reads "average · lowest–highest" over the call's samples.
+    public pure function figures(stat: Stat) -> string {
+        return stat.measure == Measure.target ? @tr("{0}p · {1} fps · {2} Mbps", stat.figures[0], stat.figures[1], stat.figures[2])
+            : stat.measure == Measure.fps-out || stat.measure == Measure.fps-in
+                ? @tr("{0} avg · {1}–{2} fps", stat.figures[0], stat.figures[1], stat.figures[2])
+            : stat.measure == Measure.speed-up || stat.measure == Measure.speed-down
+                ? @tr("{0} avg · {1}–{2} Mbps", stat.figures[0], stat.figures[1], stat.figures[2])
+            : stat.measure == Measure.round-trip ? @tr("{0} avg · {1}–{2} ms", stat.figures[0], stat.figures[1], stat.figures[2])
+            : stat.measure == Measure.frames-lost
+                ? @tr("{0} late · {1} held back · {2} discarded", stat.figures[0], stat.figures[1], stat.figures[2])
+            : stat.measure == Measure.audio-repaired
+                ? @tr("{0} rebuilt · {1} filled in · {2} late", stat.figures[0], stat.figures[1], stat.figures[2])
+            : @tr("{0} sent · {1} received", stat.figures[0], stat.figures[1]);
+    }
+
+    public pure function path(path: Path) -> string {
+        return path.kind == PathKind.direct ? @tr("Direct")
+            : path.kind == PathKind.relayed ? @tr("Relayed")
+            : path.kind == PathKind.partly-relayed ? @tr("Relayed {}% of the call", path.relay)
+            : path.kind == PathKind.direct-v6 ? @tr("Direct over IPv6")
+            : path.kind == PathKind.direct-v4 ? @tr("Direct over IPv4")
+            : join(join(path.v6 > 0 ? @tr("IPv6 {}%", path.v6) : "", path.v4 > 0 ? @tr("IPv4 {}%", path.v4) : ""),
+                path.relay > 0 ? @tr("relay {}%", path.relay) : "");
+    }
+
+    public pure function ipv6(ipv6: Ipv6) -> string {
+        return ipv6 == Ipv6.used ? @tr("Used")
+            : ipv6 == Ipv6.opened ? @tr("Opened, not used")
+            : ipv6 == Ipv6.never-opened ? @tr("Both had it, never opened")
+            : ipv6 == Ipv6.they-had-none ? @tr("They had none")
+            : ipv6 == Ipv6.you-had-none ? @tr("You had none")
+            : @tr("Neither side had it");
+    }
+
+    // Two parts of a line, with the separator only when both are there.
+    pure function join(first: string, second: string) -> string {
+        return first == "" ? second : second == "" ? first : first + " · " + second;
+    }
+}
+
+export component CallsPage inherits Rectangle {
+    in property <[CallItem]> calls;
+    in property <length> top-inset;
+    // As People does it: holding a row starts selecting, Remove takes the ticked ones, and
+    // unticking the last one or Back ends it.
+    in property <bool> selecting;
+    in property <int> selected-count;
+    callback call(string);
+    callback clear();
+    callback open(string);
+    callback select(string);
+    callback start-selecting();
+    callback long-pressed();
+    callback remove-selected();
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: root.selecting ? @tr("{n} selected" | "{n} selected" % root.selected-count) : @tr("Calls");
+                horizontal-stretch: 1;
+            }
+            if root.selecting : BarPill {
+                text: @tr("Remove");
+                danger: true;
+                enabled: root.selected-count > 0;
+                clicked => { root.remove-selected(); }
+            }
+            if !root.selecting && root.calls.length > 0 : BarPill {
+                text: @tr("Clear");
+                danger: true;
+                clicked => { root.clear(); }
+            }
+            Brand { }
+        }
+
+        if root.calls.length == 0 : EmptyState {
+            title: @tr("No calls yet");
+            body: @tr("Calls you make and calls you miss both end up here.");
+        }
+        if root.calls.length > 0 : ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                for entry[index] in root.calls : VerticalLayout {
+                    for day in entry.day : SectionHead { text: CallWords.heading(day); }
+                    if index > 0 && entry.day.length == 0 : Rectangle {
+                        height: Theme.hairline-width;
+                        background: Theme.hairline;
+                    }
+                    // A tap opens the call, or ticks it while selecting; the pill calls.
+                    PersonRow {
+                        name: entry.name;
+                        initial: entry.initial;
+                        tint: entry.tint;
+                        selecting: root.selecting;
+                        selected: entry.selected;
+                        tapped => {
+                            if (root.selecting) {
+                                root.select(entry.entry);
+                            } else {
+                                root.open(entry.entry);
+                            }
+                        }
+                        held => {
+                            root.long-pressed();
+                            if (!root.selecting) {
+                                root.start-selecting();
+                            }
+                            root.select(entry.entry);
+                        }
+                        call => { root.call(entry.id); }
+                        RowName {
+                            text: entry.name;
+                            color: entry.ending == Ending.missed ? Theme.end-call : Theme.text;
+                        }
+                        // The arrow carries direction by its tilt and the ending by its colour;
+                        // the words say the ending too, so colour is never the only telling of it.
+                        Row {
+                            spacing: Theme.call-arrow-gap;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    source: entry.incoming
+                                        ? @image-url("icons/call-in.svg")
+                                        : @image-url("icons/call-out.svg");
+                                    width: Theme.call-arrow;
+                                    height: self.width;
+                                    colorize: entry.ending == Ending.answered ? Theme.beacon : Theme.end-call;
+                                    accessible-role: image;
+                                    accessible-label: entry.incoming ? @tr("Incoming") : @tr("Outgoing");
+                                }
+                            }
+                            // "Missed · 21:04", or "4:12 · 21:04" for one that was answered.
+                            RowDetail {
+                                text: Theme.direction-mark
+                                    + (entry.duration.length > 0 ? entry.duration[0] : CallWords.ending(entry.ending))
+                                    + " · " + entry.time;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One call from the log, laid out as a contact is: who, then what you can do, then the facts.
+// A caller not saved yet can be added from here, which is the only way to keep someone who
+// rang you without their code.
+export component CallPage inherits Rectangle {
+    in property <CallDetail> call;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    callback call-back();
+    callback add();
+    callback remove();
+    callback close();
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: root.call.name;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            BarPill {
+                text: @tr("Done");
+                clicked => { root.close(); }
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-bottom: root.bottom-inset + Theme.gap-large;
+                VerticalLayout {
+                    padding-left: Theme.edge;
+                    padding-right: Theme.edge;
+                    spacing: Theme.stack-gap;
+                    BigAvatar { initial: root.call.initial; }
+                    // The key is who this is, whatever the name says; for a caller not saved
+                    // it is the only thing to go on.
+                    Fingerprint { lines: root.call.fingerprint; }
+                    Wide {
+                        text: @tr("Call back");
+                        primary: true;
+                        clicked => { root.call-back(); }
+                    }
+                    if !root.call.known : Wide {
+                        text: @tr("Add to contacts");
+                        clicked => { root.add(); }
+                    }
+                }
+
+                Rectangle { height: Theme.stack-top; }
+                DetailRow {
+                    title: root.call.incoming ? @tr("Incoming call") : @tr("Outgoing call");
+                    detail: CallWords.day(root.call.day) + " · " + root.call.time;
+                    value: CallWords.ending(root.call.ending);
+                    tappable: false;
+                }
+                for duration in root.call.duration : DetailRow {
+                    title: @tr("Duration");
+                    detail: @tr("From answer to hang-up");
+                    value: duration;
+                    tappable: false;
+                }
+                for traffic in root.call.traffic : VerticalLayout {
+                    DetailRow {
+                        title: @tr("Sent");
+                        detail: @tr("Your video and voice");
+                        value: traffic.sent;
+                        tappable: false;
+                    }
+                    DetailRow {
+                        title: @tr("Received");
+                        detail: @tr("Their video and voice");
+                        value: traffic.received;
+                        tappable: false;
+                    }
+                }
+                // Above the figures, so it is not something to scroll past them for.
+                DetailRow {
+                    title: @tr("Remove from log");
+                    detail: @tr("Only this call; nobody else's log changes");
+                    icon: @image-url("icons/close.svg");
+                    danger: true;
+                    clicked => { root.remove(); }
+                }
+
+                // How it went, sampled every few seconds; a call shorter than that has none.
+                if root.call.video.length > 0 : SectionHead { text: @tr("VIDEO"); }
+                for stat in root.call.video : StatRow {
+                    title: CallWords.measure(stat.measure);
+                    value: CallWords.figures(stat);
+                }
+                if root.call.voice.length > 0 : SectionHead { text: @tr("VOICE"); }
+                for stat in root.call.voice : StatRow {
+                    title: CallWords.measure(stat.measure);
+                    value: CallWords.figures(stat);
+                }
+                if root.call.path.length + root.call.ipv6.length + root.call.network.length > 0 : SectionHead {
+                    text: @tr("NETWORK");
+                }
+                for path in root.call.path : StatRow {
+                    title: @tr("Path");
+                    value: CallWords.path(path);
+                }
+                for ipv6 in root.call.ipv6 : StatRow {
+                    title: @tr("IPv6");
+                    value: CallWords.ipv6(ipv6);
+                }
+                for stat in root.call.network : StatRow {
+                    title: CallWords.measure(stat.measure);
+                    value: CallWords.figures(stat);
+                }
+            }
+        }
+    }
+}

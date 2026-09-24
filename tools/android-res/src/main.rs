@@ -18,12 +18,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
-use arsc::{Entry, Res, Type};
+use arsc::{Entry, Localized, Res, Type};
 use compile::Symbols;
 
 /// Types in the order their ids are assigned, which is what `@type/name` resolves through.
-const TYPES: [&str; 4] = ["color", "drawable", "mipmap", "style"];
+/// New types go at the end, so the ids of the others never move.
+const TYPES: [&str; 6] = ["color", "drawable", "mipmap", "style", "string", "plurals"];
 const VALUES: &str = "values.xml";
+/// `res/values/values.xml`: every value, in the default configuration.
+const DEFAULT_VALUES: &str = "values";
+/// `res/values-ar/values.xml` and the like: translations of the default folder's text.
+const LOCALIZED_VALUES: &str = "values-";
 
 #[derive(Parser)]
 #[command(about = "Android binary resources without aapt2", version)]
@@ -42,6 +47,22 @@ enum Command {
     /// Turn `javap -constants` output on android.R$attr and R$style into a lookup table, so
     /// `android:` names in XML resolve to ids instead of being hand-copied constants.
     GenTable(GenTableArgs),
+    /// Write `R.java`: every resource's id as a constant, `R.string.mute`, from the same table
+    /// `compile` writes — so Java names resources the compiler checks, not strings it looks up.
+    RClass(RClassArgs),
+}
+
+#[derive(Parser)]
+struct RClassArgs {
+    /// The directory holding res/.
+    #[arg(long, default_value = "android")]
+    source: PathBuf,
+    /// The Java package R belongs to: the app's.
+    #[arg(long)]
+    package: String,
+    /// The source root to write `<package path>/R.java` under.
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Parser)]
@@ -91,8 +112,8 @@ struct Resources {
 
 fn collect(source: &Path) -> Result<Resources> {
     let res = source.join("res");
-    let values_text = std::fs::read_to_string(res.join(VALUES))
-        .with_context(|| format!("reading {}", res.join(VALUES).display()))?;
+    let values = res.join(DEFAULT_VALUES).join(VALUES);
+    let values_text = std::fs::read_to_string(&values).with_context(|| format!("reading {}", values.display()))?;
 
     // Colours and styles first: they are values rather than files, and everything else may
     // reference them.
@@ -119,11 +140,13 @@ fn collect(source: &Path) -> Result<Resources> {
     // The symbol table has to exist before any XML is compiled, so it is built from the names
     // alone — the file contents come after.
     let parsed = roxmltree::Document::parse(&values_text)?;
+    let mut texts = Texts::default();
     for node in parsed.root_element().children().filter(roxmltree::Node::is_element) {
         let name = node.attribute("name").context("a resource needs a name")?.to_owned();
         match node.tag_name().name() {
             "color" => colors.push((name, node.text().unwrap_or_default().trim().to_owned())),
             "style" => styles.push(node),
+            "string" | "plurals" => texts.add(node)?,
             other => bail!("{other} is not a value this tool understands"),
         }
     }
@@ -142,6 +165,12 @@ fn collect(source: &Path) -> Result<Resources> {
         let name = node.attribute("name").unwrap_or_default();
         symbols.insert(format!("style/{name}"), Type::id(index("style"), i));
     }
+    for (kind, names) in [("string", &texts.strings), ("plurals", &texts.plurals)] {
+        for (i, (name, _)) in names.iter().enumerate() {
+            symbols.insert(format!("{kind}/{name}"), Type::id(index(kind), i));
+        }
+    }
+    let languages = translations(&res, &texts)?;
 
     // Now the values themselves, which may reference any of the above.
     let mut types = vec![
@@ -156,6 +185,7 @@ fn collect(source: &Path) -> Result<Resources> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
+            localized: Vec::new(),
         },
         file_type("drawable", &by_type),
         file_type("mipmap", &by_type),
@@ -179,10 +209,83 @@ fn collect(source: &Path) -> Result<Resources> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
+            localized: Vec::new(),
         },
+        text_type("string", &texts.strings, &languages, |texts| &texts.strings),
+        text_type("plurals", &texts.plurals, &languages, |texts| &texts.plurals),
     ];
     types.retain(|t| !t.entries.is_empty() || t.name == "color");
     Ok(Resources { types, symbols, files })
+}
+
+/// `<string>` and `<plurals>` from one values file, in the order it declares them.
+#[derive(Default)]
+struct Texts {
+    strings: Vec<(String, Res)>,
+    plurals: Vec<(String, Res)>,
+}
+
+impl Texts {
+    fn add(&mut self, node: roxmltree::Node) -> Result<()> {
+        let name = node.attribute("name").context("a resource needs a name")?.to_owned();
+        match node.tag_name().name() {
+            "string" => self.strings.push((name, Res::Str(compile::string_text(node)?))),
+            "plurals" => self.plurals.push((name, Res::Plural(compile::plural(node)?))),
+            other => bail!("{other}: a translation holds only strings and plurals"),
+        }
+        Ok(())
+    }
+}
+
+/// Every `values-<lang>/` folder, read against the default one: a translation of a name the
+/// default does not declare is a mistake the lookup would never reach, so it is an error.
+fn translations(res: &Path, defaults: &Texts) -> Result<Vec<([u8; 2], Texts)>> {
+    let mut found = Vec::new();
+    let mut folders: Vec<_> = std::fs::read_dir(res)?.collect::<std::io::Result<Vec<_>>>()?;
+    folders.sort_by_key(std::fs::DirEntry::file_name);
+    for folder in folders {
+        let name = folder.file_name().to_string_lossy().into_owned();
+        let Some(code) = name.strip_prefix(LOCALIZED_VALUES) else { continue };
+        let Ok(language) = <[u8; 2]>::try_from(code.as_bytes()) else {
+            bail!("{name}: only a two-letter language is understood here");
+        };
+        let path = folder.path().join(VALUES);
+        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let mut texts = Texts::default();
+        for node in roxmltree::Document::parse(&text)?.root_element().children().filter(roxmltree::Node::is_element) {
+            texts.add(node)?;
+        }
+        for (kind, mine, theirs) in [("string", &texts.strings, &defaults.strings), ("plurals", &texts.plurals, &defaults.plurals)] {
+            if let Some((stray, _)) = mine.iter().find(|(name, _)| !theirs.iter().any(|(other, _)| other == name)) {
+                bail!("{name}: {kind} {stray} has no default in {VALUES}");
+            }
+        }
+        found.push((language, texts));
+    }
+    Ok(found)
+}
+
+/// A text type: the default entries, and each language's translation of them.
+fn text_type(
+    kind: &'static str,
+    defaults: &[(String, Res)],
+    languages: &[([u8; 2], Texts)],
+    list: impl Fn(&Texts) -> &Vec<(String, Res)>,
+) -> Type {
+    Type {
+        name: kind,
+        entries: defaults.iter().map(|(name, res)| Entry { name: name.clone(), res: res.clone() }).collect(),
+        localized: languages
+            .iter()
+            .map(|(language, texts)| Localized {
+                language: *language,
+                entries: defaults
+                    .iter()
+                    .map(|(name, _)| list(texts).iter().find(|(other, _)| other == name).map(|(_, res)| res.clone()))
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 
 fn file_type(kind: &'static str, by_type: &HashMap<&str, Vec<(String, String)>>) -> Type {
@@ -194,6 +297,7 @@ fn file_type(kind: &'static str, by_type: &HashMap<&str, Vec<(String, String)>>)
             .flatten()
             .map(|(name, target)| Entry { name: name.clone(), res: Res::File(target.clone()) })
             .collect(),
+        localized: Vec::new(),
     }
 }
 
@@ -281,6 +385,44 @@ fn gen_table(args: &GenTableArgs) -> Result<()> {
     Ok(())
 }
 
+/// `R.java`, one nested class per type, as aapt2 writes it. A style's dots become underscores,
+/// which is also how Android's own R names them.
+fn r_class(args: &RClassArgs) -> Result<()> {
+    let resources = collect(&args.source)?;
+    let mut by_type: Vec<(&str, Vec<(String, u32)>)> = TYPES.iter().map(|kind| (*kind, Vec::new())).collect();
+    for (symbol, id) in &resources.symbols {
+        let (kind, name) = symbol.split_once('/').context("a symbol is type/name")?;
+        let field = name.replace('.', "_");
+        let valid = field.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            bail!("{symbol}: {field} is not a Java identifier");
+        }
+        if let Some((_, fields)) = by_type.iter_mut().find(|(k, _)| *k == kind) {
+            fields.push((field, *id));
+        }
+    }
+    let mut out = format!(
+        "// Generated by `android-res r-class` from android/res. Do not edit.\n\npackage {};\n\npublic final class R {{\n    private R() {{}}\n",
+        args.package
+    );
+    for (kind, mut fields) in by_type.into_iter().filter(|(_, fields)| !fields.is_empty()) {
+        fields.sort();
+        out.push_str(&format!("\n    public static final class {kind} {{\n        private {kind}() {{}}\n\n"));
+        for (field, id) in fields {
+            out.push_str(&format!("        public static final int {field} = {id:#010x};\n"));
+        }
+        out.push_str("    }\n");
+    }
+    out.push_str("}\n");
+    let dir = args.package.split('.').fold(args.out.clone(), |path, part| path.join(part));
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("R.java");
+    std::fs::write(&path, out)?;
+    println!("{} ids -> {}", resources.symbols.len(), path.display());
+    Ok(())
+}
+
 /// Every file under `dir`, with the manifest first and the table early, since a reader that
 /// streams the zip meets them in this order.
 fn staged(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -316,6 +458,7 @@ fn main() -> Result<()> {
             println!("{} entries -> {}", files.len(), args.out.display());
         }
         Command::GenTable(args) => gen_table(&args)?,
+        Command::RClass(args) => r_class(&args)?,
     }
     Ok(())
 }

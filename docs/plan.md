@@ -797,3 +797,28 @@ default); keep disk usage lean. Avoid build scripts.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
+- **2026-09-24**: **the UI is split, typed, and in Arabic.** The 3.2k-line `ui.rs` is now
+  `crates/uplink/ui/*.slint` (theme, types, controls, list, sheets, onboarding, people, calls,
+  connect, settings, call, app) behind a two-line `slint!`; the Rust side that turns records into
+  screens moved from `lib.rs` to `view.rs` and `clock.rs`. Rust now sends facts — enums, counts,
+  names, figures — and the markup words them, which is what makes every sentence translatable:
+  no English is built in Rust for the screen any more (the share-sheet titles, the identity card's
+  caption and the Java notifications still are). An optional value is a model of at most one, so
+  no property uses an empty string for "none". **Arabic** is bundled with Slint's gettext scheme
+  (`crates/uplink/lang/ar/…/uplink.po`, six plural forms), switched at runtime, and the Settings
+  "Layout direction" row became **Language** (System / English / العربية); the direction follows
+  the language. Rows mirror through a `FlexboxLayout` with `row-reverse`. The English screens were
+  checked against a baseline render: nothing moved more than 1px (taffy's rounding). Bundling needs
+  no build script — see docs/ref/slint-1.18-android.md — and `slint-tr-extractor` was not
+  installed: `just tr-pot` / `just tr-check` do its job. Numerals stay Western Arabic digits for
+  now; the design's "numerals follow the language" is open.
+- **2026-09-24**: **everything outside the window follows the app's language too.** Notifications,
+  channel names, the picture-in-picture buttons, the share-sheet titles, the clipboard label and the
+  identity card's caption are Android string resources (`android/res/values/`, Arabic in
+  `values-ar/`), which `tools/android-res` now compiles with a locale-tagged table, plurals, and a
+  generated `R` class (no more resource lookups by name in Java). Rust tells Java the language on
+  every start and change; Java keeps a copy so a boot speaks it before the core is up. Two
+  catalogues, one per runtime — Slint's `.po` for the window, Android's XML for the rest — and
+  `just tr-check` checks both, placeholders included. The card's caption is **shaped** (harfrust,
+  already in the lock) in **Noto Sans Arabic SemiBold** (vendored, OFL), so Arabic joins and runs
+  right to left. The Language row has its own globe icon.

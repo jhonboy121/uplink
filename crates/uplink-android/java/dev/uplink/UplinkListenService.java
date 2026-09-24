@@ -33,7 +33,7 @@ public class UplinkListenService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        final UplinkApplication app = (UplinkApplication) getApplication();
+        final UplinkApplication app = app();
         createChannel();
         // Android wants the notification within seconds of the start, and binding can take
         // longer than that, so it goes up first and says what is true at the time.
@@ -64,7 +64,7 @@ public class UplinkListenService extends Service {
      * not ask to be told that. Android insists a foreground service post something.
      */
     private void createChannel() {
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "Ready for calls", NotificationManager.IMPORTANCE_MIN);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, app().text(R.string.ready), NotificationManager.IMPORTANCE_MIN);
         channel.setShowBadge(false);
         channel.setSound(null, null);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
@@ -75,9 +75,9 @@ public class UplinkListenService extends Service {
         PendingIntent tap = PendingIntent.getActivity(
                 this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(getResources().getIdentifier("notification", "drawable", getPackageName()))
-                .setContentTitle(ready ? "Ready for calls" : "Starting")
-                .setContentText(ready ? "uplink is reachable" : "uplink is coming online")
+                .setSmallIcon(R.drawable.notification)
+                .setContentTitle(app().text(ready ? R.string.ready : R.string.starting))
+                .setContentText(app().text(ready ? R.string.ready_text : R.string.starting_text))
                 .setContentIntent(tap)
                 .setOngoing(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -88,6 +88,10 @@ public class UplinkListenService extends Service {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         }
         return builder.build();
+    }
+
+    private UplinkApplication app() {
+        return (UplinkApplication) getApplication();
     }
 
     @Override

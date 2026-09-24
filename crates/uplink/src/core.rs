@@ -39,7 +39,7 @@ use uplink_core::media::MediaStats;
 use uplink_core::quality::{Quality, VideoTarget};
 use uplink_core::node::{Behind, Command, EndReason, Event, Network, Node, NodeHandle};
 use uplink_core::relays::Relays;
-use uplink_core::settings::Settings;
+use uplink_core::settings::{self, Settings};
 use uplink_core::{EndpointId, SecretKey, identity};
 
 use crate::{LOG_FILTER, LOG_TAG};
@@ -99,20 +99,13 @@ struct Ringer {
     app: String,
 }
 
-/// What to tell someone whose call could not happen, as a title and a line: which phone needs
-/// updating, and both versions. One wording, for the notification and the screen alike.
-pub fn update_notice(behind: Behind, name: &str, theirs: &str, ours: &str) -> (String, String) {
-    let unnamed = |version: &str| if version.is_empty() { "an unknown version".to_owned() } else { version.to_owned() };
-    let (theirs, ours) = (unnamed(theirs), unnamed(ours));
-    match behind {
-        Behind::Us => (
-            "Update uplink".to_owned(),
-            format!("{name} has a newer uplink ({theirs}) than yours ({ours}). Update yours to call each other."),
-        ),
-        Behind::Them => (
-            format!("{name} needs to update uplink"),
-            format!("Their uplink ({theirs}) is older than yours ({ours}). You can call each other once they update."),
-        ),
+/// The language Android's resources are read in, from the stored setting (`system`, `en`, `ar`):
+/// a `values-` folder's code, or empty to follow the phone.
+pub fn locale(stored: Option<&str>) -> &'static str {
+    match stored {
+        Some("en") => "en",
+        Some("ar") => "ar",
+        _ => "",
     }
 }
 
@@ -144,8 +137,7 @@ impl Ringer {
 
     /// A call that could not happen until one phone updates. As `missed`: only when not in front.
     fn update_needed(&self, peer: &EndpointId, behind: Behind, theirs: &str) {
-        let (title, text) = update_notice(behind, &self.name_of(peer), theirs, &self.app);
-        if let Err(e) = self.context.update_needed(&title, &text) {
+        if let Err(e) = self.context.update_needed(behind == Behind::Us, &self.name_of(peer), theirs, &self.app) {
             tracing::warn!("update notification: {e}");
         }
     }
@@ -343,7 +335,12 @@ impl Core {
         let db = Db::open(data_dir)?;
         // Read before binding: the relay map is fixed for the life of the endpoint, so a change
         // made on the settings screen lands the next time the process starts.
-        let relays = Relays::load(&Settings::open(db.clone())?);
+        let settings = Settings::open(db.clone())?;
+        let relays = Relays::load(&settings);
+        // Java keeps its own copy for a boot, but the store is what the user last chose.
+        if let Err(e) = context.set_language(locale(settings.get(settings::LANGUAGE).as_deref())) {
+            tracing::warn!("telling Java the language: {e}");
+        }
         // Unknown is said as such rather than failing the start: it only ever appears in a notice.
         let app = context.app_version().unwrap_or_else(|e| {
             tracing::warn!("reading this build's version: {e}");

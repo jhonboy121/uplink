@@ -16,6 +16,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -38,6 +40,7 @@ import android.provider.Settings;
 import android.util.Log;
 
 import java.io.IOException;
+import java.util.Locale;
 
 /**
  * Everything the app can do with only a `Context`, which is everything that still matters when
@@ -75,6 +78,13 @@ public class UplinkApplication extends Application {
     private static final int REQUEST_DECLINE = 12;
     private static final int REQUEST_MISSED = 13;
     private static final int REQUEST_UPDATE = 14;
+    /**
+     * The app's language, kept here as well as in Rust's settings: a boot posts the listening
+     * notification before the endpoint (and the database behind it) is up, and it should already
+     * be in the language the user picked.
+     */
+    private static final String PREFERENCES = "uplink";
+    private static final String LANGUAGE = "language";
 
     /**
      * Phone makers' own lists of apps they may stop in the background, beside Android's. None of
@@ -108,6 +118,11 @@ public class UplinkApplication extends Application {
      */
     private static volatile long core;
 
+    /**
+     * Resources in the language the app is set to, which is not necessarily the phone's: every
+     * word outside the window is read through this. Itself when following the phone.
+     */
+    private volatile Context words = this;
     private volatile boolean inCall;
     private volatile String peer = "";
     private volatile boolean micOn = true;
@@ -140,6 +155,7 @@ public class UplinkApplication extends Application {
         } catch (PackageManager.NameNotFoundException | UnsatisfiedLinkError e) {
             Log.e(TAG, "loading the native library: " + e);
         }
+        words = localized(preferences().getString(LANGUAGE, ""));
         registerActivityLifecycleCallbacks(visibility);
         IntentFilter filter = new IntentFilter(ACTION_RING);
         filter.addAction(ACTION_MISSED_DISMISSED);
@@ -181,6 +197,52 @@ public class UplinkApplication extends Application {
         if (handle != 0) {
             nativeLog(handle, priority, message);
         }
+    }
+
+    // ---- Words ---------------------------------------------------------------------------------
+
+    /**
+     * The language to say things in, as a `values-` folder names it; empty follows the phone.
+     * Rust calls this on every start and whenever the setting changes.
+     */
+    void setLanguage(String code) {
+        preferences().edit().putString(LANGUAGE, code).apply();
+        words = localized(code);
+    }
+
+    private SharedPreferences preferences() {
+        return getSharedPreferences(PREFERENCES, MODE_PRIVATE);
+    }
+
+    private Context localized(String code) {
+        if (code.isEmpty()) {
+            return this;
+        }
+        Configuration configuration = new Configuration(getResources().getConfiguration());
+        configuration.setLocale(Locale.forLanguageTag(code));
+        return createConfigurationContext(configuration);
+    }
+
+    /** A string resource in the app's language, formatted with `args`. */
+    String text(int id, Object... args) {
+        return words.getString(id, args);
+    }
+
+    /**
+     * The few words Rust needs itself — the card's caption, the share sheet's titles, the
+     * clipboard's label — by their place here. Must match `Text` in Rust's platform module.
+     */
+    private static final int[] RUST_TEXTS = {
+        R.string.card_caption, R.string.share_identity, R.string.share_diagnostics, R.string.copy_key_label,
+    };
+
+    String rustText(int which) {
+        return text(RUST_TEXTS[which]);
+    }
+
+    /** A plural resource in the app's language: the form for `count`, formatted with `args`. */
+    String plural(int id, int count, Object... args) {
+        return words.getResources().getQuantityString(id, count, args);
     }
 
     boolean inCall() {
@@ -230,26 +292,32 @@ public class UplinkApplication extends Application {
     }
 
     /**
-     * A call that could not happen because one of the two phones needs a newer uplink. Shown only
-     * while the app is not in front; in front, the app says it on screen. The words are Rust's, so
-     * the notification and the screen say the same thing.
+     * A call that could not happen because one of the two phones needs a newer uplink: `name`'s,
+     * or ours when `oursBehind`. Shown only while the app is not in front; in front, the app says
+     * it on screen. A version the other side did not send is empty.
      */
-    void updateNeeded(final String title, final String text) {
+    void updateNeeded(final boolean oursBehind, final String name, String theirsVersion, String oursVersion) {
+        final String theirs = theirsVersion.isEmpty() ? text(R.string.unknown_version) : theirsVersion;
+        final String ours = oursVersion.isEmpty() ? text(R.string.unknown_version) : oursVersion;
         main.post(new Runnable() {
             @Override
             public void run() {
                 if (inFront) {
                     return;
                 }
+                String title = oursBehind ? text(R.string.update_ours_title) : text(R.string.update_theirs_title, name);
+                String text = oursBehind
+                        ? text(R.string.update_ours_text, name, theirs, ours)
+                        : text(R.string.update_theirs_text, theirs, ours);
                 NotificationManager notifications = getSystemService(NotificationManager.class);
                 notifications.createNotificationChannel(new NotificationChannel(
-                        UPDATE_CHANNEL, "Updates needed", NotificationManager.IMPORTANCE_DEFAULT));
+                        UPDATE_CHANNEL, text(R.string.channel_update), NotificationManager.IMPORTANCE_DEFAULT));
                 Intent open = new Intent(UplinkApplication.this, UplinkActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 PendingIntent tap = PendingIntent.getActivity(UplinkApplication.this, REQUEST_UPDATE, open,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 Notification notification = new Notification.Builder(UplinkApplication.this, UPDATE_CHANNEL)
-                        .setSmallIcon(drawable("notification"))
+                        .setSmallIcon(R.drawable.notification)
                         .setContentTitle(title)
                         .setContentText(text)
                         .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -420,7 +488,7 @@ public class UplinkApplication extends Application {
                 missed++;
                 NotificationManager notifications = getSystemService(NotificationManager.class);
                 NotificationChannel channel = new NotificationChannel(
-                        MISSED_CHANNEL, "Missed calls", NotificationManager.IMPORTANCE_DEFAULT);
+                        MISSED_CHANNEL, text(R.string.channel_missed), NotificationManager.IMPORTANCE_DEFAULT);
                 notifications.createNotificationChannel(channel);
                 Intent open = new Intent(UplinkApplication.this, UplinkActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -430,9 +498,9 @@ public class UplinkApplication extends Application {
                 PendingIntent dismissed = PendingIntent.getBroadcast(UplinkApplication.this, REQUEST_MISSED,
                         dismissing, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 Notification notification = new Notification.Builder(UplinkApplication.this, MISSED_CHANNEL)
-                        .setSmallIcon(drawable("notification"))
-                        .setContentTitle(missed == 1 ? "Missed call" : missed + " missed calls")
-                        .setContentText(missed == 1 ? who : "Latest from " + who)
+                        .setSmallIcon(R.drawable.notification)
+                        .setContentTitle(plural(R.plurals.missed_calls, missed, missed))
+                        .setContentText(missed == 1 ? who : text(R.string.missed_latest, who))
                         .setCategory(Notification.CATEGORY_MISSED_CALL)
                         .setContentIntent(tap)
                         .setDeleteIntent(dismissed)
@@ -466,7 +534,7 @@ public class UplinkApplication extends Application {
      */
     private void createRingChannel(NotificationManager notifications) {
         NotificationChannel channel =
-                new NotificationChannel(RING_CHANNEL, "Incoming calls", NotificationManager.IMPORTANCE_HIGH);
+                new NotificationChannel(RING_CHANNEL, text(R.string.channel_ring), NotificationManager.IMPORTANCE_HIGH);
         channel.setSound(null, null);
         channel.enableVibration(false);
         channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
@@ -480,9 +548,9 @@ public class UplinkApplication extends Application {
         PendingIntent decline = PendingIntent.getBroadcast(
                 this, REQUEST_DECLINE, declining, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, RING_CHANNEL)
-                .setSmallIcon(drawable("notification"))
+                .setSmallIcon(R.drawable.notification)
                 .setContentTitle(who)
-                .setContentText("Incoming video call")
+                .setContentText(text(R.string.incoming_video_call))
                 .setCategory(Notification.CATEGORY_CALL)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setContentIntent(show)
@@ -495,9 +563,9 @@ public class UplinkApplication extends Application {
             builder.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer));
         } else {
             builder.addAction(new Notification.Action.Builder(
-                            Icon.createWithResource(this, drawable("call_end")), "Decline", decline).build())
+                            Icon.createWithResource(this, R.drawable.call_end), text(R.string.decline), decline).build())
                     .addAction(new Notification.Action.Builder(
-                            Icon.createWithResource(this, drawable("notification")), "Answer", answer).build());
+                            Icon.createWithResource(this, R.drawable.notification), text(R.string.answer), answer).build());
         }
         return builder.build();
     }
@@ -678,10 +746,5 @@ public class UplinkApplication extends Application {
             log(Log.WARN, "opening " + list.flattenToShortString() + ": " + e);
             openAppSettings();
         }
-    }
-
-    /** By name: the resource table is ours, and there is no generated R class to look in. */
-    private int drawable(String name) {
-        return getResources().getIdentifier(name, "drawable", getPackageName());
     }
 }

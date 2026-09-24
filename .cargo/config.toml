@@ -10,6 +10,9 @@ CC_aarch64_linux_android = { value = "tools/android-clang", relative = true }
 # Only probed (cmake-rs asks for both compilers); our C deps build no C++.
 CXX_aarch64_linux_android = { value = "tools/android-clang", relative = true }
 AR_aarch64_linux_android = "llvm-ar"
+# The `slint!` macro bundles every language under here into the binary. It looks for
+# `<lang>/LC_MESSAGES/<package name>.po`, so ui-preview's catalogue is a link to the app's.
+SLINT_BUNDLE_TRANSLATIONS = { value = "crates/uplink/lang", relative = true }
 
 [net]
 retry = 10

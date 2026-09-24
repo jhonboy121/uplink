@@ -123,3 +123,45 @@ server — use them before writing markup. What the first pass of our UI got wro
   further than the slop.
 - **A component cannot ask for its parent's size**: inside it, `parent` is itself. Pass the
   available width and height in as properties if it has to clamp itself to the window.
+
+## Markup in files, translations, RTL ✅ (2026-09-24)
+
+- **Markup lives in `crates/uplink/ui/*.slint`**; `src/ui.rs` is `slint!{ #[include_path = ...]
+  export * from "../ui/app.slint"; }`. `export *` and `export { A, B } from "x.slint"` both work,
+  and re-exported structs, enums and globals get their Rust API. The macro emits `include_bytes!`
+  for every file it loaded, so editing a `.slint` (or a `.po`) recompiles.
+- **`#[include_path]` is joined to each importing file's own folder**, not to the macro's file
+  (`TypeLoader::find_file_in_include_path`). Keep `ui/` flat and at `src/`'s depth.
+- **`@children` works through inheritance**: `component Page inherits AskPage { Wide {} }` places
+  `Wide` where `AskPage` put `@children`, even inside a nested layout.
+- **An optional value is a model of at most one**: `in property <[Contact]> open-contact;`, drawn
+  with `for c in root.open-contact : ContactPage { ... }`, closed from markup with
+  `root.open-contact = [];`. `maybe[0]` reads it in an expression. Rust: `VecModel::from_iter(opt)`.
+- **Bundled translations without a build script**: the compiler reads `SLINT_BUNDLE_TRANSLATIONS`
+  (set in `.cargo/config.toml`, `relative = true`) only when `i-slint-compiler` has its
+  `bundle-translations` feature, which `slint-macros` does *not* enable. A never-used
+  `[build-dependencies] i-slint-compiler = { features = ["bundle-translations"] }` turns it on:
+  build-dependencies and proc-macros are both host crates and feature-unify (`cargo tree -e
+  features -i i-slint-compiler` shows one node). Costs `rspolib` (+ natord, snafu).
+  - It looks for `<dir>/<lang>/LC_MESSAGES/<CARGO_PKG_NAME>.po`, and a missing one is a
+    **compile error** — so `ui-preview.po` is a symlink to `uplink.po`.
+  - A string's key is its text **and its context, which defaults to the enclosing component's
+    (or global's) name**. `tools/tr/tr.py` (`just tr-pot`, `just tr-check`) extracts and checks
+    without `slint-tr-extractor`.
+  - Arabic's six plural forms work (`Plural-Forms` header; the rule parser handles `%`, `&&`,
+    `?:`). `slint::select_bundled_translation("ar")` / `("")` for the markup's own English.
+- **RTL**: `FlexboxLayout { flex-direction: row-reverse; flex-wrap: no-wrap; }` mirrors a row at
+  runtime (`controls.slint`'s `Row`). **Its `alignment` does not default to `stretch`** as a
+  `HorizontalLayout`'s does: without `alignment: LayoutAlignment.stretch` nothing takes
+  `horizontal-stretch` and a title shrank from 344 to 71px. Taffy rounds positions to whole
+  pixels, which moves centred items by up to 1px against the old layout.
+- `TextHorizontalAlignment.start` follows the *text's* script, so an English name in an Arabic
+  row still hugs the left: use `Theme.start` (left/right from the layout direction).
+- **`letter-spacing` breaks Arabic joining**; the tracked monospace labels drop it in Arabic.
+- A line of figures has no strong character, so it lays out LTR even in an RTL list; prefix
+  U+200F (RLM) to put it in the list's direction.
+- Bidi isolates (U+2068…U+2069) around a Latin name in an Arabic sentence are **not honoured by
+  the host software renderer** (the preview); Skia on the device is expected to. Not yet checked
+  on the phone.
+- The preview host (Alpine) has Cascadia with Arabic glyphs, so `just preview` shows Arabic shaped;
+  Outfit / Public Sans / Plex Mono have none, and Android falls back to its system Arabic face.

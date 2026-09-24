@@ -61,8 +61,36 @@ pub struct Relay {
     pub host: String,
     /// What to call it on screen: n0's own label for the location, or the name it was added with.
     pub name: String,
-    pub region: String,
+    pub region: Region,
     pub on: bool,
+}
+
+/// Where a relay is. The words are the UI's, in whichever language it is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    NorthAmericaEast,
+    NorthAmericaWest,
+    Europe,
+    AsiaPacific,
+    /// One of n0's whose label this does not know: a relay added since this was written.
+    Elsewhere,
+    /// Added by the user.
+    Yours,
+}
+
+impl Region {
+    /// Where n0 puts a relay, read from the label it names it with. An unrecognised label is a
+    /// relay added since this was written — exactly the case the off-list exists to get right, so
+    /// it is listed, it is on, and it is named as plainly as we can manage.
+    fn of(name: &str) -> Self {
+        match name.get(..3) {
+            Some("use") => Self::NorthAmericaEast,
+            Some("usw") => Self::NorthAmericaWest,
+            Some("euc") => Self::Europe,
+            Some("aps") => Self::AsiaPacific,
+            _ => Self::Elsewhere,
+        }
+    }
 }
 
 impl Relays {
@@ -108,7 +136,7 @@ impl Relays {
                 .map(|relay| Relay {
                     host: relay.url.host_str().unwrap_or_default().to_owned(),
                     name: relay.name.clone(),
-                    region: "Added by you".to_owned(),
+                    region: Region::Yours,
                     on: true,
                 })
                 .collect(),
@@ -123,22 +151,9 @@ fn published() -> Vec<Relay> {
         .filter_map(|url| url.host_str())
         .map(|host| {
             let name = host.split('.').next().unwrap_or(host);
-            Relay { host: host.to_owned(), name: name.to_owned(), region: region(name).to_owned(), on: true }
+            Relay { host: host.to_owned(), name: name.to_owned(), region: Region::of(name), on: true }
         })
         .collect()
-}
-
-/// Where n0 puts a relay, read from the label it names it with. An unrecognised label is a relay
-/// added since this was written — exactly the case the off-list exists to get right, so it is
-/// listed, it is on, and it is named as plainly as we can manage.
-fn region(name: &str) -> &'static str {
-    match name.get(..3) {
-        Some("use") => "North America, east",
-        Some("usw") => "North America, west",
-        Some("euc") => "Europe",
-        Some("aps") => "Asia-Pacific",
-        _ => "n0 relay",
-    }
 }
 
 /// Switches one of n0's relays on or off. The off-list is the only thing written: the set itself

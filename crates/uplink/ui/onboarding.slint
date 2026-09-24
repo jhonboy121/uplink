@@ -1,0 +1,185 @@
+// What a launch shows before the app itself: the splash, the permission gate, and the one-time
+// battery explainer.
+
+import { Theme } from "theme.slint";
+import { Grant, Permission, PermissionItem } from "types.slint";
+import { AppBar, Badge, Line, PageTitle, Row, RowDetail, Wide } from "controls.slint";
+
+// The first thing a launch shows, over the endpoint coming up. It follows the theme: a dark
+// splash handing over to a light app is a flash, and the ground is the one thing that must
+// not change across the handover.
+export component Splash inherits Rectangle {
+    background: Theme.ground;
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.splash-gap;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                // Two files rather than one tinted: the mark is two-tone, and `colorize`
+                // would flatten the peers into the link.
+                source: Theme.dark ? @image-url("icons/mark.svg") : @image-url("icons/mark-light.svg");
+                width: Theme.splash-mark;
+                height: self.width;
+            }
+        }
+        Text {
+            text: "uplink";
+            color: Theme.text;
+            font-family: Theme.display;
+            font-size: 1.90625rem;
+            font-weight: 600;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Text {
+        y: parent.height - self.height - Theme.splash-foot;
+        width: parent.width;
+        text: "P2P · E2EE";
+        color: Theme.muted;
+        font-family: Theme.mono;
+        font-size: 0.8125rem;
+        letter-spacing: 1.8px;
+        horizontal-alignment: center;
+    }
+}
+
+// One thing asked for, and why: an icon, what it is, the reason, and where it stands.
+component AskRow inherits Row {
+    in property <image> icon;
+    in property <color> tint;
+    in property <string> title;
+    in property <string> why;
+    in property <string> state;
+    in property <color> state-color;
+    spacing: Theme.row-gap;
+    VerticalLayout {
+        alignment: center;
+        Image {
+            source: root.icon;
+            width: Theme.key-icon;
+            height: self.width;
+            colorize: root.tint;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Line {
+            text: root.title;
+            color: Theme.text;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        RowDetail { text: root.why; }
+    }
+    VerticalLayout {
+        alignment: center;
+        Badge {
+            text: root.state;
+            color: root.state-color;
+        }
+    }
+}
+
+// A page that asks before Android does: the title, why, and whatever it asks about.
+component AskPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <string> title;
+    in property <string> why;
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle { text: root.title; }
+        }
+        VerticalLayout {
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            spacing: Theme.stack-gap;
+            Text {
+                text: root.why;
+                color: Theme.muted;
+                font-size: 0.9375rem;
+                wrap: word-wrap;
+                horizontal-alignment: Theme.start;
+            }
+            @children
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+// The gate. Everything a call needs, asked for once, with the reason next to each — asking
+// cold is how people tap Deny.
+export component PermissionsPage inherits AskPage {
+    in property <[PermissionItem]> permissions;
+    in property <bool> blocked;
+    callback grant();
+    callback settings();
+    title: root.blocked ? @tr("uplink can't call yet") : @tr("Before your first call");
+    why: root.blocked
+        ? @tr("Android won't ask again, so these have to be turned on in settings. uplink will be waiting when you come back.")
+        : @tr("A call needs all three. uplink asks once, and asks for nothing else — no contacts, no location, no storage.");
+
+    for item in root.permissions : AskRow {
+        icon: item.permission == Permission.camera ? @image-url("icons/camera.svg")
+            : item.permission == Permission.microphone ? @image-url("icons/mic.svg")
+            : @image-url("icons/bell.svg");
+        tint: item.grant == Grant.blocked ? Theme.end-call
+            : item.grant == Grant.granted ? Theme.answer
+            : Theme.beacon;
+        title: item.permission == Permission.camera ? @tr("Camera")
+            : item.permission == Permission.microphone ? @tr("Microphone")
+            : @tr("Notifications");
+        why: item.permission == Permission.camera ? @tr("So they can see you")
+            : item.permission == Permission.microphone ? @tr("So they can hear you")
+            : @tr("So you know when someone calls");
+        state: item.grant == Grant.granted ? @tr("on") : item.grant == Grant.blocked ? @tr("off") : @tr("needed");
+        state-color: item.grant == Grant.granted ? Theme.answer
+            : item.grant == Grant.blocked ? Theme.end-call
+            : Theme.muted;
+    }
+    Wide {
+        text: root.blocked ? @tr("Open settings") : @tr("Continue");
+        primary: true;
+        clicked => {
+            if (root.blocked) {
+                root.settings();
+            } else {
+                root.grant();
+            }
+        }
+    }
+}
+
+// After the gate, once: the battery exemption, explained before Android's dialog the way the
+// gate explains permissions. Unlike the gate it can be declined — uplink works without it,
+// it just may not ring overnight — so "Not now" is as easy to reach as "Allow".
+export component BatteryPage inherits AskPage {
+    callback allow();
+    callback skip();
+    title: @tr("Stay reachable");
+    why: @tr("To save battery, Android stops apps it thinks nobody is using. uplink has to keep listening, or a call can't reach you while the phone sleeps.");
+
+    AskRow {
+        icon: @image-url("icons/call.svg");
+        tint: Theme.beacon;
+        title: @tr("Calls while the phone sleeps");
+        why: @tr("Android asks next. You can change it later in Settings.");
+        state: @tr("optional");
+        state-color: Theme.muted;
+    }
+    Wide {
+        text: @tr("Allow");
+        primary: true;
+        clicked => { root.allow(); }
+    }
+    Wide {
+        text: @tr("Not now");
+        clicked => { root.skip(); }
+    }
+}

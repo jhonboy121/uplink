@@ -1,0 +1,315 @@
+// Everything that sits over a page and waits: a notice, a question, a name to type, the relay
+// list, and the toast that asks nothing at all.
+
+import { CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AddError, AddProblem, Mismatch, Region, RelayItem, Say, Toast } from "types.slint";
+import { Line, Prose, Row, RowDetail, RowTitle, SheetTitle, Tap, Wide } from "controls.slint";
+
+// A card over a dimmed window. Centred in what the keyboard leaves rather than in the window, so
+// a field the sheet exists for is never the part that ends up underneath it.
+component Sheet inherits Rectangle {
+    in property <length> keyboard;
+    background: Theme.scrim;
+
+    // Swallows taps on the dimmed area, so the sheet is dismissed deliberately and nothing
+    // behind it reacts.
+    TouchArea { }
+
+    Rectangle {
+        width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+        height: min(body.preferred-height, parent.height - root.keyboard - Theme.edge * 2);
+        y: max(Theme.edge, (parent.height - root.keyboard - self.height) / 2);
+        animate y { duration: 180ms; easing: ease-out; }
+        border-radius: Theme.wide-radius;
+        background: Theme.ground;
+        body := VerticalLayout {
+            padding: Theme.edge;
+            spacing: Theme.stack-gap;
+            @children
+        }
+    }
+}
+
+// Something the user has to know and nothing to decide: one button, which only closes it. For
+// now that is only two phones whose versions cannot talk.
+export component NoticeSheet inherits Sheet {
+    in property <Mismatch> mismatch;
+    callback close();
+
+    property <string> theirs: root.mismatch.theirs.length > 0 ? root.mismatch.theirs[0] : @tr("an unknown version");
+    property <string> ours: root.mismatch.ours.length > 0 ? root.mismatch.ours[0] : @tr("an unknown version");
+
+    Text {
+        text: root.mismatch.ours-behind ? @tr("Update uplink") : @tr("{} needs to update uplink", root.mismatch.name);
+        color: Theme.text;
+        font-family: Theme.display;
+        font-size: 1.1875rem;
+        font-weight: 600;
+        wrap: word-wrap;
+        horizontal-alignment: Theme.start;
+    }
+    Prose {
+        text: root.mismatch.ours-behind
+            ? @tr("{0} has a newer uplink ({1}) than yours ({2}). Update yours to call each other.", root.mismatch.name, root.theirs, root.ours)
+            : @tr("Their uplink ({0}) is older than yours ({1}). You can call each other once they update.", root.theirs, root.ours);
+        font-size: 0.875rem;
+    }
+    Wide {
+        text: @tr("OK");
+        primary: true;
+        clicked => { root.close(); }
+    }
+}
+
+// Anything that cannot be undone asks first. A tap is cheap and a key may be gone for good.
+export component ConfirmSheet inherits Sheet {
+    in property <string> title;
+    in property <string> body;
+    in property <string> confirm-label;
+    callback confirm();
+    callback cancel();
+
+    SheetTitle {
+        text: root.title;
+        overflow: elide;
+    }
+    Prose { text: root.body; }
+    Wide {
+        text: root.confirm-label;
+        danger: true;
+        clicked => { root.confirm(); }
+    }
+    Wide {
+        text: @tr("Keep");
+        clicked => { root.cancel(); }
+    }
+}
+
+// Naming a key that has just arrived — scanned, opened from an image, or pasted. A sheet over
+// whatever screen you were on, because a key can arrive while you are anywhere and the one
+// thing left to do should not be somewhere else.
+export component NameSheet inherits Sheet {
+    in property <string> key;
+    in-out property <string> name;
+    // Why the last Add did not take, said under the field it concerns. Cleared by editing.
+    in-out property <[AddProblem]> problem;
+    callback add(string);
+    callback cancel();
+
+    property <bool> named: root.name != "";
+
+    SheetTitle { text: @tr("Name this contact"); }
+    Prose { text: @tr("Only you see this name. They are saved by their key either way."); }
+    Text {
+        text: root.key;
+        color: Theme.muted;
+        font-family: Theme.mono;
+        font-size: 0.75rem;
+        wrap: word-wrap;
+    }
+    LineEdit {
+        placeholder-text: @tr("Their name");
+        text <=> root.name;
+        edited => { root.problem = []; }
+        accepted => {
+            if (root.named) {
+                root.add(root.name);
+            }
+        }
+    }
+    for problem in root.problem : Prose {
+        text: problem.error == AddError.not-a-key ? @tr("That code is not an uplink key")
+            : problem.error == AddError.own-code ? @tr("That's your own code. Scan theirs instead")
+            : problem.error == AddError.already-saved ? @tr("Already saved as {}", problem.subject)
+            : problem.error == AddError.name-taken ? @tr("{} is already the name of a contact", problem.subject)
+            : @tr("Could not add them: {}", problem.subject);
+        color: Theme.end-call;
+        accessible-role: text;
+        accessible-label: self.text;
+    }
+    Wide {
+        text: @tr("Add");
+        primary: true;
+        enabled: root.named;
+        clicked => { root.add(root.name); }
+    }
+    Wide {
+        text: @tr("Not now");
+        clicked => { root.cancel(); }
+    }
+}
+
+// One relay in the sheet: what it is called, where it is, and the one thing you can do to it.
+component RelayRow inherits Row {
+    in property <RelayItem> relay;
+    in property <bool> removable: false;
+    in-out property <bool> on;
+    callback remove();
+    spacing: Theme.value-gap;
+    // Fixed, because the list's height is counted in rows rather than measured. A scroll
+    // view has no preferred height of its own to give the sheet.
+    height: Theme.detail-height;
+    if !root.removable : CheckBox {
+        checked: root.on;
+        toggled => { root.on = self.checked; }
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        RowTitle { text: root.relay.name; }
+        RowDetail {
+            text: root.relay.region == Region.north-america-east ? @tr("North America, east")
+                : root.relay.region == Region.north-america-west ? @tr("North America, west")
+                : root.relay.region == Region.europe ? @tr("Europe")
+                : root.relay.region == Region.asia-pacific ? @tr("Asia-Pacific")
+                : root.relay.region == Region.yours ? @tr("Added by you")
+                : @tr("n0 relay");
+        }
+    }
+    if root.removable : VerticalLayout {
+        alignment: center;
+        Text {
+            text: @tr("Remove");
+            color: Theme.end-call;
+            font-size: 0.8125rem;
+            font-weight: 700;
+            vertical-alignment: center;
+            accessible-role: button;
+            accessible-label: @tr("Remove {}", root.relay.name);
+            accessible-action-default => { root.remove(); }
+            Tap {
+                tapped => { root.remove(); }
+            }
+        }
+    }
+}
+
+// Which relays the endpoint may use. A sheet rather than rows on the settings page, because
+// these are edited as a set: ticking three boxes one at a time would rebind the endpoint
+// three times, and two of those states are ones nobody asked for.
+export component RelaySheet inherits Sheet {
+    in property <[RelayItem]> relays;
+    in property <[RelayItem]> custom-relays;
+    in-out property <bool> custom;
+    in-out property <string> new-name;
+    in-out property <string> new-url;
+    callback save();
+    callback cancel();
+    callback add(string, string);
+    callback remove(string);
+
+    property <bool> has-url: root.new-url != "";
+
+    SheetTitle { text: @tr("Relays"); }
+    Prose { text: @tr("Each one is contacted every few seconds, call or no call. Using only the ones near you costs nothing and saves battery and mobile data."); }
+    // Which set is live. Both are listed whichever it is, because you pick the relay you are
+    // moving to before you move to it.
+    Row {
+        spacing: Theme.value-gap;
+        Wide {
+            text: @tr("n0's");
+            primary: !root.custom;
+            clicked => { root.custom = false; }
+        }
+        Wide {
+            text: @tr("My own");
+            primary: root.custom;
+            enabled: root.custom-relays.length > 0;
+            clicked => { root.custom = true; }
+        }
+    }
+    // Counted rather than measured: a ScrollView reports no preferred height of its own, so a
+    // sheet sized to its content would collapse the list to a single row.
+    ScrollView {
+        height: min(
+            (root.custom ? root.custom-relays.length : root.relays.length) * Theme.detail-height,
+            root.height / 3);
+        mouse-drag-pan-enabled: true;
+        VerticalLayout {
+            alignment: start;
+            if !root.custom : VerticalLayout {
+                for relay in root.relays : RelayRow {
+                    relay: relay;
+                    on <=> relay.on;
+                }
+            }
+            if root.custom : VerticalLayout {
+                for relay in root.custom-relays : RelayRow {
+                    relay: relay;
+                    removable: true;
+                    remove => { root.remove(relay.host); }
+                }
+            }
+        }
+    }
+    if root.custom-relays.length == 0 && root.custom : Prose {
+        text: @tr("Add one below to use your own.");
+    }
+    LineEdit {
+        placeholder-text: @tr("Name, e.g. Home");
+        text <=> root.new-name;
+    }
+    LineEdit {
+        placeholder-text: "https://relay.example.com";
+        input-type: text;
+        text <=> root.new-url;
+        accepted => {
+            if (root.has-url) {
+                root.add(root.new-name, root.new-url);
+            }
+        }
+    }
+    Wide {
+        text: @tr("Add this relay");
+        enabled: root.has-url;
+        clicked => { root.add(root.new-name, root.new-url); }
+    }
+    Wide {
+        text: @tr("Save");
+        primary: true;
+        clicked => { root.save(); }
+    }
+    Wide {
+        text: @tr("Cancel");
+        clicked => { root.cancel(); }
+    }
+}
+
+// Something that went wrong and needs no decision — it says its piece and goes. Anything the
+// user has to answer is a sheet, not this.
+export component ToastCard inherits Rectangle {
+    in property <Toast> toast;
+    height: body.preferred-height;
+    border-radius: Theme.wide-radius;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.hairline;
+    body := HorizontalLayout {
+        padding: Theme.row-gap;
+        Text {
+            text: root.toast.say == Say.already-saved ? @tr("{} is already in your contacts", root.toast.subject)
+                : root.toast.say == Say.not-a-key ? @tr("That code is not an uplink key")
+                : root.toast.say == Say.own-code ? @tr("That's your own code. Scan theirs instead")
+                : root.toast.say == Say.no-code ? @tr("No code in that image")
+                : root.toast.say == Say.image-unreadable ? @tr("Could not open that image: {}", root.toast.subject)
+                : root.toast.say == Say.some-not-removed ? @tr("{0} of {1} could not be removed", root.toast.count, root.toast.total)
+                : root.toast.say == Say.call-unreadable ? @tr("Could not open that call: {}", root.toast.subject)
+                : root.toast.say == Say.call-not-removed ? @tr("Could not remove that call: {}", root.toast.subject)
+                : root.toast.say == Say.calls-not-removed ? @tr("Could not remove those calls: {}", root.toast.subject)
+                : root.toast.say == Say.battery-settings ? @tr("Could not open battery settings: {}", root.toast.subject)
+                : root.toast.say == Say.setting-unopened ? @tr("Could not open that setting: {}", root.toast.subject)
+                : root.toast.say == Say.list-unopened ? @tr("Could not open that list: {}", root.toast.subject)
+                : root.toast.say == Say.already-in-call ? @tr("You're already in a call")
+                : root.toast.say == Say.code-not-shared ? @tr("Could not share your code")
+                : root.toast.say == Say.log-not-packed ? @tr("Could not pack the log")
+                : root.toast.say == Say.key-not-copied ? @tr("Could not copy your key: {}", root.toast.subject)
+                : root.toast.say == Say.relay-invalid ? @tr("{} is not a relay address", root.toast.subject)
+                : @tr("Something went wrong: {}", root.toast.subject);
+            color: Theme.text;
+            font-size: 0.875rem;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

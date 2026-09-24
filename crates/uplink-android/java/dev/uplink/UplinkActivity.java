@@ -450,17 +450,17 @@ public class UplinkActivity extends NativeActivity {
     private List<RemoteAction> callActions() {
         List<RemoteAction> actions = new ArrayList<>();
         boolean micOn = app().micOn();
-        actions.add(action(micOn ? "mic" : "mic_off", micOn ? "Mute" : "Unmute", ACTION_MIC));
-        actions.add(action("call_end", "End call", ACTION_HANGUP));
+        actions.add(action(micOn ? R.drawable.mic : R.drawable.mic_off, micOn ? R.string.mute : R.string.unmute, ACTION_MIC));
+        actions.add(action(R.drawable.call_end, R.string.end_call, ACTION_HANGUP));
         return actions;
     }
 
-    private RemoteAction action(String drawable, String title, int code) {
-        int id = getResources().getIdentifier(drawable, "drawable", getPackageName());
+    private RemoteAction action(int drawable, int title, int code) {
+        String words = app().text(title);
         Intent intent = new Intent(ACTION_CALL).setPackage(getPackageName()).putExtra(EXTRA_ACTION, code);
         PendingIntent pending = PendingIntent.getBroadcast(
                 this, code, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new RemoteAction(Icon.createWithResource(this, id), title, title, pending);
+        return new RemoteAction(Icon.createWithResource(this, drawable), words, words, pending);
     }
 
     /**

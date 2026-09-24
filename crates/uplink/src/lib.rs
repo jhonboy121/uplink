@@ -2,10 +2,12 @@
 //! in-app diagnostics (previous exits + previous log) since there is no adb.
 
 mod audio;
+mod clock;
 mod core;
 mod tasks;
 mod ui;
 mod video;
+mod view;
 
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -14,13 +16,13 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
 use slint::{ComponentHandle, Model as _, RenderingState, Timer, TimerMode};
@@ -29,30 +31,31 @@ use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
-use uplink_android::platform::{AppContext, Permission, Platform, PlatformEvent};
+use uplink_android::platform::{Permission, Platform, PlatformEvent, Text};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
-use uplink_core::calls::{CallId, CallLog, CallRecord, Logged, Outcome};
+use uplink_core::calls::{CallId, CallLog};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
-use uplink_core::quality::{Quality, Spread};
 use uplink_core::relays::{self, Relays};
 use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Command, EndReason, Event};
+use uplink_core::node::{Behind, Command, EndReason, Event};
 use uplink_core::EndpointId;
 
+use crate::clock::LocalClock;
 use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, RelayItem,
-    Screen, Theme,
+    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem, RelayItem,
+    Say, Screen, Theme, Toast,
 };
 use crate::video::{CallVideo, VideoParts};
+use crate::view::{maybe, none, one, toast};
 
 const LOG_TAG: &CStr = c"uplink";
 /// Baked in at build time (`just log=debug apk`).
@@ -68,25 +71,13 @@ const CAPTURE_WIDTH: i32 = 1280;
 const CAPTURE_HEIGHT: i32 = 720;
 const CAPTURE_FPS: i32 = 30;
 const READER_MAX_IMAGES: i32 = 4;
-/// Groups of four, the way the key is read aloud.
-const FINGERPRINT_GROUP: usize = 4;
-const FINGERPRINT_GROUPS: usize = 8;
-/// A contact row and the "Your key" row show only the leading groups.
-const FINGERPRINT_ROW_GROUPS: usize = 4;
-const FINGERPRINT_SELF_GROUPS: usize = 3;
 const QR_PIXELS: usize = 512;
-/// Under the code on the shared picture, the name the chooser goes out under, and what the file
-/// is called — the key never changes, so one file is rewritten rather than a new one each time.
-const SHARE_CAPTION: &str = "Scan to connect";
-const SHARE_TITLE: &str = "My uplink code";
+/// What the shared files are called — the key never changes, so one card is rewritten rather than
+/// a new one each time. Their captions and titles are Android's resources, in the app's language.
 const SHARE_FILE: &str = "identity.png";
-/// What Android calls the copied key in its own confirmation.
-const COPY_LABEL: &str = "uplink key";
 const DIAGNOSTICS_FILE: &str = "uplink-logs.tar.gz";
-const DIAGNOSTICS_TITLE: &str = "uplink diagnostics";
-/// Shown on the call screen when the codecs did not come up: the call runs on audio, and saying
-/// nothing makes that look like a peer who is sitting still.
-const NO_VIDEO: &str = "Video isn't working on this phone — audio only";
+/// The bundled translation's folder under `crates/uplink/lang`; English is the markup itself.
+const ARABIC: &str = "ar";
 // Scanning: CPU-readable frames, big enough to read a code held up to the camera.
 const SCAN_WIDTH: i32 = 960;
 const SCAN_HEIGHT: i32 = 720;
@@ -262,8 +253,8 @@ impl State {
                             Ok(key) => key,
                             Err(unusable) => {
                                 let _ = ui.upgrade_in_event_loop(move |ui| {
-                                    if ui.get_toast().is_empty() {
-                                        toast(&ui, unusable.message());
+                                    if ui.get_toast().row_count() == 0 {
+                                        toast(&ui, unusable.say(), "");
                                     }
                                 });
                                 return;
@@ -306,15 +297,16 @@ impl State {
                 // screen, because the peer cannot tell a broken encoder from a still room.
                 tracing::error!("call video: {e:#}");
                 self.status(format!("call video failed: {e:#}"));
-                self.trouble(NO_VIDEO);
+                self.video_failed();
             }
         }
     }
 
-    /// Says on the call screen that part of the call never came up.
-    fn trouble(&self, message: &str) {
+    /// Says on the call screen that the call runs on audio alone: without it, a call whose codecs
+    /// never came up looks exactly like a peer who is sitting still.
+    fn video_failed(&self) {
         if let Some(ui) = self.ui.upgrade() {
-            ui.set_call_trouble(message.into());
+            ui.set_video_failed(true);
         }
     }
 
@@ -381,8 +373,8 @@ fn copy_luma(reader: &ImageReader) -> Result<Option<ScanFrame>> {
 /// before the sheet, not as an error after it, since no name typed there could fix it.
 fn offer_key(state: &Rc<RefCell<State>>, ui: &App, key: EndpointId) {
     match with_contacts(state, |contacts| contacts.name_of(&key).map(str::to_owned)).flatten() {
-        Some(name) => toast(ui, format!("{name} is already in your contacts")),
-        None => ui.set_peer_key(key.to_string().into()),
+        Some(name) => toast(ui, Say::AlreadySaved, name),
+        None => ui.set_pending_key(one(key.to_string().into())),
     }
 }
 
@@ -396,14 +388,14 @@ fn pick_key(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
             Ok(Some(image)) => match qr::decode_luma(&image.pixels, image.width, image.height, image.width) {
                 Some(text) => match peer_key(&text, &state.borrow().me) {
                     Ok(key) => offer_key(&state, &ui, key),
-                    Err(unusable) => toast(&ui, unusable.message()),
+                    Err(unusable) => toast(&ui, unusable.say(), ""),
                 },
-                None => toast(&ui, "No code in that image"),
+                None => toast(&ui, Say::NoCode, ""),
             },
             Ok(None) => {}
             Err(e) => {
                 tracing::error!("picking an image: {e}");
-                toast(&ui, format!("Could not open that image: {e}"));
+                toast(&ui, Say::ImageUnreadable, e);
             }
         }
     });
@@ -415,8 +407,7 @@ fn pick_key(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
 /// Names whoever is on the other end, with the initial the avatar shows.
 fn set_peer(ui: &App, name: &str) {
     ui.set_peer_name(name.into());
-    let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
-    ui.set_peer_initial(initial.into());
+    ui.set_peer_initial(view::initial(name));
 }
 
 /// The relay list as the settings screen reads it. Taken from the store rather than kept in the
@@ -427,50 +418,16 @@ fn show_relays(ui: &App, settings: &Settings) {
     let published: Vec<RelayItem> = Relays::N0 { off: settings.lines(settings::RELAYS_OFF) }
         .listed()
         .into_iter()
-        .map(item)
+        .map(view::relay_item)
         .collect();
-    let custom: Vec<RelayItem> = Relays::Custom(relays::custom(settings)).listed().into_iter().map(item).collect();
+    let custom: Vec<RelayItem> =
+        Relays::Custom(relays::custom(settings)).listed().into_iter().map(view::relay_item).collect();
     let uses_custom = relays::uses_custom(settings);
     let on = if uses_custom { custom.len() } else { published.iter().filter(|relay| relay.on).count() };
     ui.set_relays_on(i32::try_from(on).unwrap_or(i32::MAX));
     ui.set_relays_custom(uses_custom);
-    ui.set_custom_relays(slint::ModelRc::new(slint::VecModel::from(custom)));
-    ui.set_relays(slint::ModelRc::new(slint::VecModel::from(published)));
-}
-
-fn item(relay: relays::Relay) -> RelayItem {
-    RelayItem { host: relay.host.into(), name: relay.name.into(), region: relay.region.into(), on: relay.on }
-}
-
-/// Key as groups of four over two even lines, matching what the peer reads out. Lines rather than
-/// one wrapping string, because Slint has no line-height and the design's leading matters.
-fn fingerprint_lines(id: &EndpointId) -> slint::ModelRc<slint::SharedString> {
-    let key = id.to_string();
-    let lines: Vec<slint::SharedString> = key
-        .chars()
-        .take(FINGERPRINT_GROUP * FINGERPRINT_GROUPS)
-        .collect::<Vec<_>>()
-        .chunks(FINGERPRINT_GROUP * FINGERPRINT_ROW_GROUPS)
-        .map(|line| {
-            line.chunks(FINGERPRINT_GROUP).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join(" ").into()
-        })
-        .collect();
-    slint::ModelRc::new(slint::VecModel::from(lines))
-}
-
-fn groups(id: &EndpointId, count: usize, separator: &str) -> String {
-    id.to_string()
-        .chars()
-        .take(FINGERPRINT_GROUP * count)
-        .collect::<Vec<_>>()
-        .chunks(FINGERPRINT_GROUP)
-        .map(|group| group.iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join(separator)
-}
-
-fn short(id: &EndpointId) -> String {
-    id.fmt_short().to_string()
+    ui.set_custom_relays(view::list(custom));
+    ui.set_relays(view::list(published));
 }
 
 /// The key as a QR image, and the share of its width the mark in the middle may cover. Only the
@@ -488,9 +445,9 @@ fn qr_image(id: &EndpointId) -> Result<(slint::Image, f32)> {
 
 /// Hands the identity to the share sheet as a picture of its code. Drawn by core, written where
 /// the app's content provider can serve it, and handed to Android by name.
-async fn write_identity_card(data_dir: PathBuf, key: String) -> Result<()> {
+async fn write_identity_card(data_dir: PathBuf, key: String, caption: String) -> Result<()> {
     let directory = Platform::share_dir(&data_dir);
-    let card = card::identity(&key, SHARE_CAPTION)?;
+    let card = card::identity(&key, &caption)?;
     tokio::fs::create_dir_all(&directory).await?;
     Ok(tokio::fs::write(directory.join(SHARE_FILE), card).await?)
 }
@@ -502,21 +459,25 @@ fn share_when_written(
     platform: &Rc<Platform>,
     ui: &slint::Weak<App>,
     file: &'static str,
-    title: &'static str,
-    trouble: &'static str,
+    title: Text,
+    trouble: Say,
     write: impl Future<Output = Result<()>> + Send + 'static,
 ) {
     let writing = handle.spawn(write);
     let (platform, weak) = (Rc::clone(platform), ui.clone());
     spawn_ui(async move {
         let shared = match writing.await {
-            Ok(Ok(())) => platform.share_file(file, title).map_err(anyhow::Error::from),
+            Ok(Ok(())) => platform
+                .context()
+                .text(title)
+                .and_then(|title| platform.share_file(file, &title))
+                .map_err(anyhow::Error::from),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(anyhow::Error::from(e)),
         };
         if let (Err(e), Some(ui)) = (shared, weak.upgrade()) {
             tracing::error!("sharing {file}: {e:#}");
-            toast(&ui, trouble);
+            toast(&ui, trouble, "");
         }
     });
 }
@@ -537,29 +498,6 @@ async fn pack_diagnostics(data_dir: PathBuf) -> Result<()> {
 /// A count of modules as a share of the whole drawing.
 fn ratio(part: usize, whole: usize) -> f32 {
     part as f32 / whole.max(1) as f32
-}
-
-/// Contacts for the list, in the order they were added.
-/// Where the fresh row's top sits in the People list, in logical pixels, summed the way the
-/// markup stacks it: a heading above the first row of a group, a hairline above any other row.
-fn fresh_offset(ui: &App, items: &[ContactItem]) -> Option<f32> {
-    let theme = ui.global::<Theme>();
-    let (row, heading, hairline) = (theme.get_row_height(), theme.get_group_head(), theme.get_hairline_width());
-    let mut y = 0.0;
-    for (index, item) in items.iter().enumerate() {
-        y += if !item.header.is_empty() {
-            heading
-        } else if index > 0 {
-            hairline
-        } else {
-            0.0
-        };
-        if item.fresh {
-            return Some(y);
-        }
-        y += row;
-    }
-    None
 }
 
 /// A contact was just added: open People on it, and let it shimmer for a moment.
@@ -586,61 +524,27 @@ fn show_added(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
 }
 
 fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
-    let items = with_state_value(state, |s| {
-        // The store already orders favourites first, so a group starts wherever the flag changes.
-        let mut previous: Option<bool> = None;
-        let selected = &s.selected;
-        s.contacts
-            .iter()
-            .map(|contact| {
-                let header = match previous {
-                    Some(was) if was == contact.favourite => "",
-                    _ if contact.favourite => "FAVOURITES",
-                    _ => "ALL",
-                };
-                previous = Some(contact.favourite);
-                ContactItem {
-                    name: contact.name.clone().into(),
-                    id: contact.id.to_string().into(),
-                    detail: last_called(contact.last_called).into(),
-                    header: header.into(),
-                    initial: contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
-                    tint: 0,
-                    favourite: contact.favourite,
-                    selected: selected.contains(&contact.id),
-                    fresh: s.fresh == Some(contact.id),
-                }
-            })
-            .collect::<Vec<_>>()
-    });
+    let items = with_state_value(state, |s| view::contact_items(&s.contacts, &s.selected, s.fresh));
     if let Some(items) = items {
-        ui.set_contacts_reveal(fresh_offset(ui, &items).unwrap_or(-1.0));
-        ui.set_contacts(slint::ModelRc::new(slint::VecModel::from(items)));
+        ui.set_contacts_reveal(view::fresh_offset(ui, &items).unwrap_or(-1.0));
+        ui.set_contacts(view::list(items));
     }
     let count = with_state_value(state, |s| i32::try_from(s.selected.len()).unwrap_or(i32::MAX));
     ui.set_selected_count(count.unwrap_or_default());
 }
 
-/// Fills the contact sheet, and closes it if that key is no longer a contact. Refreshing one that
+/// Fills the contact page, and closes it if that key is no longer a contact. Refreshing one that
 /// is not open would open it, so a change made elsewhere leaves it alone.
 fn refresh_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
-    if ui.get_open_contact_id() == peer.to_string().as_str() {
+    let open = peer.to_string();
+    if ui.get_open_contact().iter().any(|contact| contact.id == open.as_str()) {
         show_open_contact(state, ui, peer);
     }
 }
 
 fn show_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
-    let found = with_contacts(state, |contacts| contacts.get(&peer).cloned()).flatten();
-    let Some(contact) = found else {
-        ui.set_open_contact_id(Default::default());
-        return;
-    };
-    ui.set_open_contact_id(contact.id.to_string().into());
-    ui.set_open_contact_initial(contact.name.chars().next().unwrap_or('?').to_uppercase().to_string().into());
-    ui.set_open_contact_name(contact.name.into());
-    ui.set_open_contact_advertised(contact.advertised.unwrap_or_default().into());
-    ui.set_open_contact_favourite(contact.favourite);
-    ui.set_open_contact_fingerprint(fingerprint_lines(&peer));
+    let found = with_contacts(state, |contacts| contacts.get(&peer).map(view::contact_detail)).flatten();
+    ui.set_open_contact(maybe(found));
 }
 
 /// How many the Calls screen shows; the store keeps more than a screen can use.
@@ -648,325 +552,18 @@ const CALLS_SHOWN: i64 = 100;
 
 /// Fills the Calls screen, newest first, grouped by day.
 fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
-    let items = with_state_value(state, |s| {
-        let records = match s.log.recent(CALLS_SHOWN) {
-            Ok(records) => records,
-            Err(e) => {
-                tracing::warn!("reading the call log: {e}");
-                return Vec::new();
-            }
-        };
-        let mut previous = String::new();
-        let selected = &s.selected_calls;
-        records
-            .iter()
-            .map(|logged| {
-                let record = &logged.call;
-                let day = s.clock.day_of(record.at);
-                let header = if day == previous { String::new() } else { day.clone() };
-                previous = day;
-                // A name we chose, else what they called themselves, else the key itself.
-                let name = s
-                    .contacts
-                    .get(&record.peer)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_else(|| short(&record.peer));
-                CallItem {
-                    initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
-                    name: name.into(),
-                    id: record.peer.to_string().into(),
-                    detail: describe_call(record, &s.clock).into(),
-                    tint: 0,
-                    missed: record.outcome == Outcome::Missed,
-                    incoming: record.incoming,
-                    answered: record.outcome == Outcome::Answered,
-                    entry: logged.id.to_string().into(),
-                    selected: selected.contains(&logged.id),
-                    header: header.into(),
-                }
-            })
-            .collect::<Vec<_>>()
+    let items = with_state_value(state, |s| match s.log.recent(CALLS_SHOWN) {
+        Ok(records) => view::call_items(&records, &s.contacts, &s.clock, &s.selected_calls),
+        Err(e) => {
+            tracing::warn!("reading the call log: {e}");
+            Vec::new()
+        }
     });
     if let Some(items) = items {
-        ui.set_calls(slint::ModelRc::new(slint::VecModel::from(items)));
+        ui.set_calls(view::list(items));
     }
     let count = with_state_value(state, |s| i32::try_from(s.selected_calls.len()).unwrap_or(i32::MAX));
     ui.set_selected_calls_count(count.unwrap_or_default());
-}
-
-/// "Missed · 21:04", or "4:12 · 21:04" for one that was answered; the day is the group's.
-fn describe_call(record: &CallRecord, clock: &LocalClock) -> String {
-    let what = match (record.outcome, record.duration) {
-        (Outcome::Answered, Some(duration)) => minutes_seconds(duration),
-        (outcome, _) => outcome_name(outcome).to_owned(),
-    };
-    format!("{what} · {}", clock.clock_of(record.at))
-}
-
-const fn outcome_name(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::Answered => "Answered",
-        Outcome::Missed => "Missed",
-        // Which of us declined is the arrow's to say, as for every other outcome.
-        Outcome::Declined | Outcome::Rejected => "Declined",
-        Outcome::Cancelled => "Cancelled",
-        Outcome::NoAnswer => "No answer",
-        Outcome::Unreachable => "Couldn't reach them",
-        Outcome::Incompatible => "Needs an update",
-        Outcome::Failed => "Did not connect",
-    }
-}
-
-fn minutes_seconds(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    format!("{}:{:02}", seconds / SECONDS_PER_MINUTE, seconds % SECONDS_PER_MINUTE)
-}
-
-/// Bytes the way a phone's data usage says them: decimal units, one decimal place past a KB.
-fn data_size(bytes: u64) -> String {
-    const UNITS: [(u64, &str); 3] = [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")];
-    const TENTHS: u64 = 10;
-    for (unit, name) in UNITS {
-        if bytes >= unit {
-            // Whole tenths by integer division, so no float rounding decides the last digit.
-            let tenths = bytes.saturating_mul(TENTHS) / unit;
-            return format!("{}.{} {name}", tenths / TENTHS, tenths % TENTHS);
-        }
-    }
-    format!("{bytes} B")
-}
-
-/// "28 avg · 12–30 fps": the mean, then the range, over a call's samples; empty with none.
-fn spread_text(spread: &Spread, scale: f64, decimals: usize, unit: &str) -> String {
-    let Some(mean) = spread.mean() else { return String::new() };
-    let (mean, min, max) = (mean / scale, spread.min / scale, spread.max / scale);
-    format!("{mean:.decimals$} avg · {min:.decimals$}–{max:.decimals$} {unit}")
-}
-
-/// The call-quality half of a call's details; every field empty for a call with no summary.
-#[derive(Default)]
-struct QualityText {
-    target: String,
-    fps_out: String,
-    fps_in: String,
-    frames: String,
-    frames_lost: String,
-    audio_packets: String,
-    audio_repaired: String,
-    speed_up: String,
-    speed_down: String,
-    round_trip: String,
-    path: String,
-    ipv6: String,
-}
-
-fn quality_text(quality: Option<&Quality>) -> QualityText {
-    const KBPS_PER_MBPS: f64 = 1000.0;
-    const WHOLE: usize = 0;
-    const ONE_PLACE: usize = 1;
-    let Some(q) = quality else { return QualityText::default() };
-    let target = q.target.map_or_else(String::new, |t| {
-        format!("{}p · {} fps · {:.1} Mbps", t.height, t.fps, f64::from(t.kbps) / KBPS_PER_MBPS)
-    });
-    let path = if q.paths_recorded { path_breakdown(q) } else { relayed_or_not(q) };
-    let ipv6 = if q.paths_recorded { ipv6_story(q) } else { String::new() };
-    let (video, audio) = (&q.video, &q.audio);
-    QualityText {
-        target,
-        fps_out: spread_text(&q.fps_out, 1.0, WHOLE, "fps"),
-        fps_in: spread_text(&q.fps_in, 1.0, WHOLE, "fps"),
-        frames: format!("{} sent · {} received", video.sent, video.received),
-        frames_lost: format!("{} late · {} held back · {} discarded", video.late, video.congested, video.discarded),
-        audio_packets: format!("{} sent · {} received", audio.sent, audio.received),
-        audio_repaired: format!("{} rebuilt · {} filled in · {} late", audio.rebuilt, audio.concealed, audio.late),
-        speed_up: spread_text(&q.kbps_up, KBPS_PER_MBPS, ONE_PLACE, "Mbps"),
-        speed_down: spread_text(&q.kbps_down, KBPS_PER_MBPS, ONE_PLACE, "Mbps"),
-        round_trip: spread_text(&q.rtt_ms, 1.0, WHOLE, "ms"),
-        path,
-        ipv6,
-    }
-}
-
-/// For a call from before paths were recorded by family: only relayed or not.
-fn relayed_or_not(q: &Quality) -> String {
-    match q.relayed_share() {
-        None => String::new(),
-        Some(share) if share <= 0.0 => "Direct".to_owned(),
-        Some(share) if share >= 1.0 => "Relayed".to_owned(),
-        Some(share) => format!("Relayed {:.0}% of the call", share * PERCENT),
-    }
-}
-
-/// "IPv6 72% · relay 28%", or the one way it went when it went only one way.
-fn path_breakdown(q: &Quality) -> String {
-    let (Some((v4, v6)), Some(relay)) = (q.direct_shares(), q.relayed_share()) else { return String::new() };
-    let parts: Vec<(&str, f64)> = [("IPv6", v6), ("IPv4", v4), ("relay", relay)]
-        .into_iter()
-        .filter(|&(_, share)| share > 0.0)
-        .collect();
-    match parts.as_slice() {
-        [] => String::new(),
-        [(name, _)] if *name == "relay" => "Relayed".to_owned(),
-        [(name, _)] => format!("Direct over {name}"),
-        _ => parts.iter().map(|(name, share)| format!("{name} {:.0}%", share * PERCENT)).collect::<Vec<_>>().join(" · "),
-    }
-}
-
-/// What happened with IPv6: used, or where it stopped — the question a relayed call raises.
-fn ipv6_story(q: &Quality) -> String {
-    let used = q.direct_shares().is_some_and(|(_, v6)| v6 > 0.0);
-    match (q.we_offered_v6, q.they_offered_v6, q.v6_path_opened) {
-        _ if used => "Used",
-        (_, _, true) => "Opened, not used",
-        (true, true, false) => "Both had it, never opened",
-        (true, false, _) => "They had none",
-        (false, true, _) => "You had none",
-        (false, false, _) => "Neither side had it",
-    }
-    .to_owned()
-}
-
-/// Everything the call details page shows, formatted.
-fn call_detail(state: &Rc<RefCell<State>>, logged: &Logged) -> CallDetail {
-    let record = &logged.call;
-    let q = quality_text(record.quality.as_ref());
-    let saved = with_contacts(state, |contacts| contacts.name_of(&record.peer).map(str::to_owned)).flatten();
-    let name = saved.clone().unwrap_or_else(|| short(&record.peer));
-    let (sent, received) = record
-        .traffic
-        .map(|t| (data_size(t.sent), data_size(t.received)))
-        .unwrap_or_default();
-    CallDetail {
-        entry: logged.id.to_string().into(),
-        peer: record.peer.to_string().into(),
-        initial: name.chars().next().unwrap_or('?').to_uppercase().to_string().into(),
-        name: name.into(),
-        known: saved.is_some(),
-        fingerprint: fingerprint_lines(&record.peer),
-        status: outcome_name(record.outcome).into(),
-        incoming: record.incoming,
-        answered: record.outcome == Outcome::Answered,
-        when: with_state_value(state, |s| format!("{} · {}", s.clock.day_label(record.at), s.clock.clock_of(record.at)))
-            .unwrap_or_default()
-            .into(),
-        duration: record.duration.map(minutes_seconds).unwrap_or_default().into(),
-        sent: sent.into(),
-        received: received.into(),
-        target: q.target.into(),
-        fps_out: q.fps_out.into(),
-        fps_in: q.fps_in.into(),
-        frames: q.frames.into(),
-        frames_lost: q.frames_lost.into(),
-        audio_packets: q.audio_packets.into(),
-        audio_repaired: q.audio_repaired.into(),
-        speed_up: q.speed_up.into(),
-        speed_down: q.speed_down.into(),
-        round_trip: q.round_trip.into(),
-        path: q.path.into(),
-        ipv6: q.ipv6.into(),
-    }
-}
-
-const SECONDS_PER_HOUR: i64 = 3_600;
-const SECONDS_PER_DAY: i64 = 86_400;
-const DAYS_PER_WEEK: i64 = 7;
-
-/// Times as the phone's own clock shows them. The log keeps UTC, and the time of day and the day
-/// boundaries both depend on where the phone is — its zone asked of Android for each moment, so a
-/// call from before a daylight-saving change still reads the way the clock read then.
-struct LocalClock {
-    context: AppContext,
-    /// Offsets already asked for, by UTC hour: a list of a hundred calls would otherwise cross
-    /// into Java three times a row. Daylight saving needs nothing more — each hour keeps the
-    /// offset that was right for it — so only a change of zone empties this ([`Self::forget`]).
-    /// Near enough: nearly every zone changes offset on the hour, and the few that do not could
-    /// show a time half an hour off in that one hour of the year.
-    offsets: RefCell<FxHashMap<i64, i64>>,
-}
-
-impl LocalClock {
-    fn new(context: AppContext) -> Self {
-        Self { context, offsets: RefCell::default() }
-    }
-
-    /// The phone moved to another zone, or its clock was set: every cached offset may be wrong.
-    fn forget(&self) {
-        self.offsets.borrow_mut().clear();
-    }
-
-    /// Seconds since the epoch as a wall clock here reads them. UTC if the zone cannot be read,
-    /// which is wrong by the offset but never by more.
-    fn local_seconds(&self, at: SystemTime) -> i64 {
-        let epoch = match at.duration_since(UNIX_EPOCH) {
-            Ok(since) => i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
-            Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
-        };
-        let hour = epoch.div_euclid(SECONDS_PER_HOUR);
-        let cached = self.offsets.borrow().get(&hour).copied();
-        let offset = cached.unwrap_or_else(|| {
-            let offset = self.context.utc_offset(at).unwrap_or_else(|e| {
-                tracing::warn!("reading the timezone: {e}");
-                0
-            });
-            self.offsets.borrow_mut().insert(hour, offset);
-            offset
-        });
-        epoch.saturating_add(offset)
-    }
-
-    /// The day a call happened, as the heading above its group: calendar days here, so a call at
-    /// 23:00 is yesterday by the next morning, not today for another fourteen hours.
-    fn day_of(&self, at: SystemTime) -> String {
-        let day = |moment| self.local_seconds(moment).div_euclid(SECONDS_PER_DAY);
-        match day(SystemTime::now()) - day(at) {
-            ..=0 => "TODAY".to_owned(),
-            1 => "YESTERDAY".to_owned(),
-            days if days < DAYS_PER_WEEK => format!("{days} DAYS AGO"),
-            days => format!("{} WEEKS AGO", days / DAYS_PER_WEEK),
-        }
-    }
-
-    /// The day heading, in sentence case for a line of prose rather than a group label.
-    fn day_label(&self, at: SystemTime) -> String {
-        let heading = self.day_of(at);
-        let mut chars = heading.chars();
-        chars.next().map(|first| first.to_string() + &chars.as_str().to_lowercase()).unwrap_or(heading)
-    }
-
-    /// Time of day is what a log row wants; the group heading already carries the date.
-    fn clock_of(&self, at: SystemTime) -> String {
-        const MINUTES_PER_HOUR: i64 = 60;
-        let minutes = self.local_seconds(at).rem_euclid(SECONDS_PER_DAY) / (SECONDS_PER_HOUR / MINUTES_PER_HOUR);
-        format!("{:02}:{:02}", minutes / MINUTES_PER_HOUR, minutes % MINUTES_PER_HOUR)
-    }
-}
-
-/// Coarse on purpose: the second line of a contact row answers "recently?", not "when exactly?".
-fn last_called(at: Option<SystemTime>) -> String {
-    let Some(at) = at else {
-        return "Never called".to_owned();
-    };
-    let Ok(ago) = SystemTime::now().duration_since(at) else {
-        return "Called just now".to_owned();
-    };
-    let minutes = ago.as_secs() / 60;
-    let (hours, days) = (minutes / 60, minutes / 60 / 24);
-    if minutes < 1 {
-        "Called just now".to_owned()
-    } else if minutes < 60 {
-        format!("Called {minutes} minute{} ago", plural(minutes))
-    } else if hours < 24 {
-        format!("Called {hours} hour{} ago", plural(hours))
-    } else if days < 7 {
-        format!("Called {days} day{} ago", plural(days))
-    } else {
-        let weeks = days / 7;
-        format!("Called {weeks} week{} ago", plural(weeks))
-    }
-}
-
-const fn plural(n: u64) -> &'static str {
-    if n == 1 { "" } else { "s" }
 }
 
 fn with_contacts<T>(state: &Rc<RefCell<State>>, f: impl FnOnce(&Contacts) -> T) -> Option<T> {
@@ -1012,22 +609,7 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
 }
 
 /// The gate's three, in the order they are asked for and shown.
-const GATE: [(Permission, &str, &str); 3] = [
-    (Permission::Camera, "Camera", "So they can see you"),
-    (Permission::RecordAudio, "Microphone", "So they can hear you"),
-    (Permission::PostNotifications, "Notifications", "So you know when someone calls"),
-];
-
-fn gate_icon(permission: Permission) -> slint::Image {
-    match permission {
-        Permission::Camera => slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/camera.svg")),
-        Permission::RecordAudio => slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/mic.svg")),
-        Permission::PostNotifications => {
-            slint::Image::load_from_svg_data(include_bytes!("../../../assets/icons/bell.svg"))
-        }
-    }
-    .unwrap_or_default()
-}
+const GATE: [Permission; 3] = [Permission::Camera, Permission::RecordAudio, Permission::PostNotifications];
 
 /// Reads back what the Settings rows about staying reachable say. Each is changed in a system
 /// screen, so this runs whenever the app returns to the front. A failed read leaves the row as it
@@ -1062,7 +644,7 @@ fn refresh_gate(ui: &App, platform: &Platform) -> bool {
     let mut items = Vec::with_capacity(GATE.len());
     let mut blocked = false;
     let mut all = true;
-    for (permission, name, why) in GATE {
+    for permission in GATE {
         let granted = platform.has_permission(permission).unwrap_or(false);
         let explains = platform.should_explain(permission).unwrap_or(false);
         let grant = if granted {
@@ -1075,14 +657,9 @@ fn refresh_gate(ui: &App, platform: &Platform) -> bool {
         tracing::info!(?permission, granted, explains, asked, "gate");
         all &= granted;
         blocked |= grant == Grant::Blocked;
-        items.push(PermissionItem {
-            name: name.into(),
-            why: why.into(),
-            grant,
-            icon: gate_icon(permission),
-        });
+        items.push(PermissionItem { permission: view::permission(permission), grant });
     }
-    ui.set_permissions(slint::ModelRc::new(slint::VecModel::from(items)));
+    ui.set_permissions(view::list(items));
     ui.set_permissions_blocked(blocked);
     ui.set_gate(!all);
     all
@@ -1102,9 +679,8 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 /// the background when there is nothing left to close. Java hands every press here rather than
 /// finishing the activity, because finishing it takes the endpoint with it.
 fn went_back(ui: &App) -> bool {
-    if !ui.get_notice_title().is_empty() {
-        ui.set_notice_title(Default::default());
-        ui.set_notice_body(Default::default());
+    if ui.get_notice().row_count() > 0 {
+        ui.set_notice(none());
     } else if ui.get_confirming() != Confirm::None {
         ui.set_confirming(Confirm::None);
     } else if ui.get_battery_ask() && !ui.get_gate() {
@@ -1114,14 +690,12 @@ fn went_back(ui: &App) -> bool {
         // Back out of the sheet is Cancel, not Save: nothing here is meant to happen by accident.
         ui.set_editing_relays(false);
         ui.invoke_cancel_relays();
-    } else if !ui.get_peer_key().is_empty() {
-        ui.set_peer_key(Default::default());
-        ui.set_new_name(Default::default());
-        ui.set_add_error(Default::default());
-    } else if !ui.get_open_contact_id().is_empty() {
-        ui.set_open_contact_id(Default::default());
-    } else if ui.get_call_open() {
-        ui.set_call_open(false);
+    } else if ui.get_pending_key().row_count() > 0 {
+        forget_pending_key(ui);
+    } else if ui.get_open_contact().row_count() > 0 {
+        ui.set_open_contact(none());
+    } else if ui.get_open_call().row_count() > 0 {
+        ui.set_open_call(none());
     } else if ui.get_scanning() {
         ui.invoke_scan(false);
     } else if ui.get_call_state() != CallState::Idle && !ui.get_call_folded() {
@@ -1139,14 +713,11 @@ fn went_back(ui: &App) -> bool {
     true
 }
 
-/// What the call screen calls the route. Empty until a path is known, which is what keeps the
-/// marker off the screen rather than showing a guess while the call is still being set up.
-const fn route_name(route: Route) -> &'static str {
-    match route {
-        Route::Unknown => "",
-        Route::Direct => "Direct",
-        Route::Relay => "Relayed",
-    }
+/// The naming sheet is done with: added, or dismissed.
+fn forget_pending_key(ui: &App) {
+    ui.set_pending_key(none());
+    ui.set_new_name(Default::default());
+    ui.set_add_problem(none());
 }
 
 /// Stored as a word rather than a number, so a row stays readable and reordering the enum cannot
@@ -1164,6 +735,47 @@ fn appearance_from(stored: Option<&str>) -> Appearance {
         Some("light") => Appearance::Light,
         Some("dark") => Appearance::Dark,
         _ => Appearance::System,
+    }
+}
+
+/// Stored by its code, as the bundle names it; anything unrecognised means following the phone.
+const fn language_code(language: Language) -> &'static str {
+    match language {
+        Language::System => "system",
+        Language::English => "en",
+        Language::Arabic => ARABIC,
+    }
+}
+
+fn language_from(stored: Option<&str>) -> Language {
+    match stored {
+        Some("en") => Language::English,
+        Some(ARABIC) => Language::Arabic,
+        _ => Language::System,
+    }
+}
+
+/// What following the phone comes to: a language uplink has words for, else English.
+fn system_language() -> Language {
+    let locale = sys_locale::get_locale().unwrap_or_default();
+    let base = locale.split(['-', '_', '@']).next().unwrap_or_default();
+    match language_from(Some(base)) {
+        Language::System => Language::English,
+        known => known,
+    }
+}
+
+/// Switches the words to `language`, which the theme has already been told; the theme mirrors the
+/// layout from the same setting.
+fn show_language(ui: &App, language: Language) {
+    let shown = if language == Language::System { ui.global::<Theme>().get_system_language() } else { language };
+    let code = match shown {
+        Language::Arabic => ARABIC,
+        // English is the markup's own text: the bundle's empty name.
+        Language::System | Language::English => "",
+    };
+    if let Err(e) = slint::select_bundled_translation(code) {
+        tracing::warn!(code, "selecting the translation: {e}");
     }
 }
 
@@ -1193,7 +805,7 @@ fn battery_offered(ui: &App, settings: &Settings) {
 fn request_gate(ui: &App, platform: &Rc<Platform>, settings: &Settings) {
     let (weak, platform, settings) = (ui.as_weak(), Rc::clone(platform), settings.clone());
     let task = slint::spawn_local(async move {
-        for (permission, _, _) in GATE {
+        for permission in GATE {
             match platform.request_permission(permission).await {
                 Ok(granted) => tracing::info!(?permission, granted, "gate"),
                 Err(e) => tracing::warn!(?permission, "gate: {e}"),
@@ -1477,9 +1089,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let ui = App::new()?;
     state.borrow_mut().ui = ui.as_weak();
-    ui.set_my_id(identity.to_string().into());
-    ui.set_my_fingerprint_lines(fingerprint_lines(&identity));
-    ui.set_my_short_fingerprint(groups(&identity, FINGERPRINT_SELF_GROUPS, " · ").into());
+    ui.set_my_fingerprint(view::fingerprint_lines(&identity));
     match qr_image(&identity) {
         Ok((image, mark)) => {
             ui.set_qr(image);
@@ -1520,22 +1130,22 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     ui.on_remove_selected(move || {
         // Taken first so a failure part-way leaves the rest of the list alone.
         let chosen = with_state_value(&s, |state| state.selected.drain().collect::<Vec<_>>()).unwrap_or_default();
-        let mut failed = 0;
-        for peer in &chosen {
-            if save_contact(&s, |contacts| contacts.remove_id(*peer).map(drop)).is_err() {
-                failed += 1;
-            }
-        }
+        let failed = chosen
+            .iter()
+            .filter(|peer| save_contact(&s, |contacts| contacts.remove_id(**peer).map(drop)).is_err())
+            .count();
         if let Some(ui) = weak.upgrade() {
             ui.set_selecting(false);
             show_contacts(&s, &ui);
             if failed > 0 {
-                toast(&ui, format!("{failed} of {} could not be removed", chosen.len()));
+                let (count, total) = (i32::try_from(failed), i32::try_from(chosen.len()));
+                let (count, total) = (count.unwrap_or(i32::MAX), total.unwrap_or(i32::MAX));
+                view::say_counted(&ui, Toast { say: Say::SomeNotRemoved, subject: Default::default(), count, total });
             }
         }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
-    ui.on_open_contact(move |id| {
+    ui.on_open_contact_page(move |id| {
         let Some(ui) = weak.upgrade() else { return };
         let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
         show_open_contact(&s, &ui, peer);
@@ -1550,7 +1160,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                     show_contacts(&s, &ui);
                     refresh_open_contact(&s, &ui, peer);
                 }
-                Err(e) => set_call_status(&ui.as_weak(), e),
+                Err(e) => toast(&ui, Say::Failed, e),
             }
         }
     });
@@ -1572,14 +1182,19 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     ui.on_show_call(move |entry| {
         let Some(ui) = weak.upgrade() else { return };
         let Ok(id) = entry.parse::<CallId>() else { return };
-        match with_state_value(&s, |state| state.log.get(id)) {
-            Some(Ok(Some(logged))) => {
-                ui.set_open_call(call_detail(&s, &logged));
-                ui.set_call_open(true);
-            }
+        let found = with_state_value(&s, |state| {
+            state.log.get(id).map(|logged| {
+                logged.map(|logged| {
+                    let saved = state.contacts.name_of(&logged.call.peer).map(str::to_owned);
+                    view::call_detail(&logged, saved, &state.clock)
+                })
+            })
+        });
+        match found {
+            Some(Ok(Some(detail))) => ui.set_open_call(one(detail)),
             // Removed or trimmed since the list was drawn: the list is what is stale.
             Some(Ok(None)) => show_calls(&s, &ui),
-            Some(Err(e)) => toast(&ui, format!("Could not open that call: {e}")),
+            Some(Err(e)) => toast(&ui, Say::CallUnreadable, e),
             None => {}
         }
     });
@@ -1590,7 +1205,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if let Some(ui) = weak.upgrade() {
             show_calls(&s, &ui);
             if let Some(Err(e)) = removed {
-                toast(&ui, format!("Could not remove that call: {e}"));
+                toast(&ui, Say::CallNotRemoved, e);
             }
         }
     });
@@ -1629,7 +1244,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             ui.set_selecting_calls(false);
             show_calls(&s, &ui);
             if let Some(Err(e)) = removed {
-                toast(&ui, format!("Could not remove those calls: {e}"));
+                toast(&ui, Say::CallsNotRemoved, e);
             }
         }
     });
@@ -1649,8 +1264,10 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
     let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
     ui.on_open_settings(move || {
-        if let Err(e) = p.open_app_settings() {
-            set_call_status(&weak, format!("could not open settings: {e}"));
+        if let Err(e) = p.open_app_settings()
+            && let Some(ui) = weak.upgrade()
+        {
+            toast(&ui, Say::SettingUnopened, e);
         }
     });
 
@@ -1671,7 +1288,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                         battery_offered(&ui, &s);
                     }
                 }
-                Err(e) => toast(&ui, format!("Could not open battery settings: {e}")),
+                Err(e) => toast(&ui, Say::BatterySettings, e),
             }
         });
     });
@@ -1687,7 +1304,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if let Err(e) = p.open_full_screen_calls_settings()
             && let Some(ui) = weak.upgrade()
         {
-            toast(&ui, format!("Could not open that setting: {e}"));
+            toast(&ui, Say::SettingUnopened, e);
         }
     });
     let (weak, p) = (ui.as_weak(), Rc::clone(&platform));
@@ -1695,7 +1312,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if let Err(e) = p.open_maker_list()
             && let Some(ui) = weak.upgrade()
         {
-            toast(&ui, format!("Could not open that list: {e}"));
+            toast(&ui, Say::ListUnopened, e);
         }
     });
 
@@ -1714,7 +1331,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         }
     });
     theme.set_appearance(appearance_from(settings.get(settings::APPEARANCE).as_deref()));
-    theme.set_rtl(settings.flag(settings::LAYOUT_RTL));
+    // The phone's language is read once, at launch: Android restarts the activity when it changes.
+    theme.set_system_language(system_language());
+    let language = language_from(settings.get(settings::LANGUAGE).as_deref());
+    theme.set_language(language);
+    show_language(&ui, language);
 
     let s = settings.clone();
     ui.on_appearance_changed(move |appearance| {
@@ -1722,10 +1343,23 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             tracing::warn!("storing the appearance: {e}");
         }
     });
-    let s = settings.clone();
-    ui.on_rtl_changed(move |rtl| {
-        if let Err(e) = s.set_flag(settings::LAYOUT_RTL, rtl) {
-            tracing::warn!("storing the layout direction: {e}");
+    let (s, weak) = (settings.clone(), ui.as_weak());
+    let p = Rc::clone(&platform);
+    ui.on_language_changed(move |language| {
+        if let Some(ui) = weak.upgrade() {
+            show_language(&ui, language);
+        }
+        let code = language_code(language);
+        if let Err(e) = s.set(settings::LANGUAGE, code) {
+            tracing::warn!("storing the language: {e}");
+        }
+        // Notifications speak it too. Restarting the listening service re-posts the one that is
+        // always up; the rest pick it up the next time they are posted.
+        if let Err(e) = p.context().set_language(core::locale(Some(code))) {
+            tracing::warn!("telling Java the language: {e}");
+        }
+        if let Err(e) = p.set_listening(true) {
+            tracing::warn!("re-posting the listening notification: {e}");
         }
     });
     let (s, weak, c) = (settings.clone(), ui.as_weak(), Arc::clone(&core));
@@ -1773,7 +1407,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 ui.set_new_relay_url(Default::default());
                 show_relays(&ui, &s);
             }
-            Err(e) => toast(&ui, e.to_string()),
+            Err(uplink_core::Error::RelayUrl(url)) => toast(&ui, Say::RelayInvalid, url),
+            Err(e) => toast(&ui, Say::Failed, e),
         }
     });
     let (s, weak) = (settings.clone(), ui.as_weak());
@@ -1851,7 +1486,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         // silent, and the optimistic Dialing below would have renamed the call that is up.
         Ok(_) if weak.upgrade().is_some_and(|ui| ui.get_call_state() != CallState::Idle) => {
             if let Some(ui) = weak.upgrade() {
-                toast(&ui, "You're already in a call");
+                toast(&ui, Say::AlreadyInCall, "");
             }
         }
         Ok(peer) => {
@@ -1860,15 +1495,14 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             {
                 // Optimistic: the node confirms with Dialing, or reverts via Ended.
                 ui.set_call_state(CallState::Dialing);
-                let name = with_contacts(&s, |contacts| contacts.name_of(&peer).map(str::to_owned));
-                let name = name.flatten().unwrap_or_else(|| short(&peer));
+                let name = with_contacts(&s, |contacts| view::name_of(contacts, &peer)).unwrap_or_else(|| view::short(&peer));
                 set_peer(&ui, &name);
                 start_call_service(&p, &name);
             }
         }
         Err(unusable) => {
             if let Some(ui) = weak.upgrade() {
-                toast(&ui, unusable.message());
+                toast(&ui, unusable.say(), "");
             }
         }
     });
@@ -1922,30 +1556,37 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
         let Some(ui) = weak.upgrade() else { return };
+        let name = name.trim();
+        let problem = |error, subject: &str| AddProblem { error, subject: subject.into() };
         let outcome = peer_key(&key, &identity)
-            .map_err(|unusable| unusable.message().to_owned())
+            .map_err(|unusable| problem(unusable.add_error(), ""))
             .and_then(|id| {
-                // The same key is a different mistake from the same name, and the store's one
-                // error for both cannot say which: a new name would not fix this one.
-                match with_contacts(&s, |contacts| contacts.name_of(&id).map(str::to_owned)).flatten() {
-                    Some(saved) => Err(format!("Already saved as {saved}")),
-                    None => Ok(id),
+                // The same key and the same name are different mistakes, and the store's one
+                // error for both cannot say which: a new name would fix only the second.
+                let taken = with_contacts(&s, |contacts| {
+                    let saved = contacts.name_of(&id).map(str::to_owned);
+                    (saved, contacts.iter().any(|contact| contact.name == name))
+                });
+                match taken {
+                    Some((Some(saved), _)) => Err(problem(AddError::AlreadySaved, &saved)),
+                    Some((None, true)) => Err(problem(AddError::NameTaken, name)),
+                    _ => Ok(id),
                 }
             })
-            .and_then(|id| save_contact(&s, |contacts| contacts.add(name.trim(), id)).map(|()| id));
+            .and_then(|id| {
+                save_contact(&s, |contacts| contacts.add(name, id)).map(|()| id).map_err(|e| problem(AddError::Failed, &e))
+            });
         match outcome {
             Ok(id) => {
-                ui.set_peer_key(Default::default());
-                ui.set_new_name(Default::default());
-                ui.set_add_error(Default::default());
+                forget_pending_key(&ui);
                 // Added from a call's details, perhaps: that page has done its job.
-                ui.set_call_open(false);
+                ui.set_open_call(none());
                 show_added(&s, &ui, id);
             }
             // Under the field, in the sheet that is still open: the user can fix it right there.
-            Err(e) => {
-                tracing::info!("adding a contact: {e}");
-                ui.set_add_error(e.into());
+            Err(problem) => {
+                tracing::info!(error = ?problem.error, subject = %problem.subject, "adding a contact");
+                ui.set_add_problem(one(problem));
             }
         }
     });
@@ -1960,7 +1601,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                     // keeps showing the old name until it is closed and opened again.
                     refresh_open_contact(&s, &ui, id);
                 }
-                (Err(e), _) => set_call_status(&weak, e),
+                (Err(e), Some(ui)) => toast(&ui, Say::Failed, e),
                 _ => {}
             }
         }
@@ -1971,7 +1612,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             let outcome = save_contact(&s, |contacts| contacts.remove_id(id).map(drop));
             match (outcome, weak.upgrade()) {
                 (Ok(()), Some(ui)) => show_contacts(&s, &ui),
-                (Err(e), _) => set_call_status(&weak, e),
+                (Err(e), Some(ui)) => toast(&ui, Say::Failed, e),
                 _ => {}
             }
         }
@@ -1990,26 +1631,37 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (p, weak, dir) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf());
     let handle = runtime.clone();
     ui.on_share_key(move || {
-        let Some(ui) = weak.upgrade() else { return };
         // The picture, not the key: a code is what someone points a camera at, and it is what
         // arrives if they save it and open it from the other side. Drawing and writing it are
-        // the runtime's work, not this tap's.
-        let card = write_identity_card(dir.clone(), ui.get_my_id().to_string());
-        share_when_written(&handle, &p, &weak, SHARE_FILE, SHARE_TITLE, "Could not share your code", card);
+        // the runtime's work, not this tap's. The caption is read here: Java is the UI thread's.
+        let caption = match p.context().text(Text::CardCaption) {
+            Ok(caption) => caption,
+            Err(e) => {
+                tracing::error!("reading the card's caption: {e}");
+                if let Some(ui) = weak.upgrade() {
+                    toast(&ui, Say::CodeNotShared, "");
+                }
+                return;
+            }
+        };
+        let card = write_identity_card(dir.clone(), identity.to_string(), caption);
+        share_when_written(&handle, &p, &weak, SHARE_FILE, Text::ShareIdentity, Say::CodeNotShared, card);
     });
     let (p, weak) = (Rc::clone(&platform), ui.as_weak());
     ui.on_copy_key(move || {
-        let Some(ui) = weak.upgrade() else { return };
-        if let Err(e) = p.copy_text(COPY_LABEL, &ui.get_my_id()) {
-            toast(&ui, format!("Could not copy your key: {e}"));
+        // What Android calls the copied key in its own confirmation.
+        let copied = p.context().text(Text::CopyKeyLabel).and_then(|label| p.copy_text(&label, &identity.to_string()));
+        if let Err(e) = copied
+            && let Some(ui) = weak.upgrade()
+        {
+            toast(&ui, Say::KeyNotCopied, e);
         }
     });
     let (p, weak, dir, handle) = (Rc::clone(&platform), ui.as_weak(), data_dir.to_path_buf(), runtime.clone());
     ui.on_share_diagnostics(move || {
         // The set can be a hundred megabytes before it compresses; packing it is the runtime's.
         let packing = pack_diagnostics(dir.clone());
-        let trouble = "Could not pack the log";
-        share_when_written(&handle, &p, &weak, DIAGNOSTICS_FILE, DIAGNOSTICS_TITLE, trouble, packing);
+        share_when_written(&handle, &p, &weak, DIAGNOSTICS_FILE, Text::ShareDiagnostics, Say::LogNotPacked, packing);
     });
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
     ui.on_scan(move |on| {
@@ -2085,7 +1737,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             state.recover_audio();
             // A codec that dies mid-call takes the picture with it and says nothing otherwise.
             if state.call.as_ref().is_some_and(|call| !call.codecs_running()) {
-                state.trouble(NO_VIDEO);
+                state.video_failed();
             }
             // Counted every second, written every few: the log is read by whoever is fixing a
             // call that has already happened, and a line a second would bury it.
@@ -2099,7 +1751,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             let route = state.call.as_ref().map_or(Route::Unknown, |call| call.stats.route());
             if let Some(ui) = state.ui.upgrade() {
                 ui.set_call_timer(state.call_timer().into());
-                ui.set_call_route(route_name(route).into());
+                ui.set_call_route(view::route(route));
             }
         });
     });
@@ -2121,13 +1773,6 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     Ok(outcome?)
 }
 
-/// Says something went wrong and gets out of the way; the markup's own Timer dismisses it.
-fn toast(ui: &App, message: impl Into<String>) {
-    let message = message.into();
-    tracing::info!("{message}");
-    ui.set_toast(message.into());
-}
-
 /// Why a code cannot be someone to call.
 #[derive(Clone, Copy, Debug)]
 enum Unusable {
@@ -2139,10 +1784,19 @@ enum Unusable {
 }
 
 impl Unusable {
-    const fn message(self) -> &'static str {
+    /// Said on its own, as a toast.
+    const fn say(self) -> Say {
         match self {
-            Self::NotAKey => "That code is not an uplink key",
-            Self::Yours => "That's your own code. Scan theirs instead",
+            Self::NotAKey => Say::NotAKey,
+            Self::Yours => Say::OwnCode,
+        }
+    }
+
+    /// Said under the name field, in the sheet that asked.
+    const fn add_error(self) -> AddError {
+        match self {
+            Self::NotAKey => AddError::NotAKey,
+            Self::Yours => AddError::OwnCode,
         }
     }
 }
@@ -2155,13 +1809,6 @@ fn peer_key(text: &str, me: &EndpointId) -> Result<EndpointId, Unusable> {
         return Err(Unusable::Yours);
     }
     Ok(key)
-}
-
-fn set_call_status(ui: &slint::Weak<App>, status: String) {
-    tracing::info!("{status}");
-    if let Some(ui) = ui.upgrade() {
-        ui.set_call_status(status.into());
-    }
 }
 
 /// Starts the call's foreground service on the tap that places or answers it. Camera and
@@ -2178,7 +1825,7 @@ fn start_call_service(platform: &Platform, peer: &str) {
 /// while the window is already showing.
 fn send_call_command(state: &Rc<RefCell<State>>, command: Command, ui: &slint::Weak<App>) -> bool {
     let Some(core) = state.borrow().core.clone() else {
-        set_call_status(ui, "still starting up".into());
+        tracing::warn!(?command, "the endpoint is still starting");
         return false;
     };
     // Asked for here, not cached: a rebind between two calls replaces it.
@@ -2186,7 +1833,9 @@ fn send_call_command(state: &Rc<RefCell<State>>, command: Command, ui: &slint::W
         Ok(()) => true,
         Err(e) => {
             tracing::error!(?command, "node command: {e}");
-            set_call_status(ui, format!("{command:?} failed: {e}"));
+            if let Some(ui) = ui.upgrade() {
+                toast(&ui, Say::Failed, e);
+            }
             false
         }
     }
@@ -2240,21 +1889,19 @@ async fn handle_node_events(
     platform: Rc<Platform>,
 ) {
     while let Some(event) = events.recv().await {
-        let status = describe(&event);
-        tracing::info!("{status}");
+        tracing::info!("{}", describe(&event));
         let Some(ui) = ui.upgrade() else { break };
-        ui.set_call_status(status.into());
         if let Some(call_state) = call_state(&event) {
             ui.set_call_state(call_state);
         }
         // Name whoever is on the other end, by nickname when we know them.
         if let Some(peer) = peer_of(&event) {
-            let name = with_contacts(&state, |contacts| contacts.name_of(&peer).map(str::to_owned));
-            set_peer(&ui, &name.flatten().unwrap_or_else(|| short(&peer)));
+            let name = with_contacts(&state, |contacts| view::name_of(contacts, &peer));
+            set_peer(&ui, &name.unwrap_or_else(|| view::short(&peer)));
         }
         match &event {
             // Whatever went wrong last time was about last time.
-            Event::Dialing { .. } | Event::Incoming { .. } => ui.set_call_trouble(Default::default()),
+            Event::Dialing { .. } | Event::Incoming { .. } => ui.set_video_failed(false),
             // The core has already written the call and stamped the contact; read both back.
             Event::Ended { peer, reason } => {
                 with_state(&state, |s| {
@@ -2266,18 +1913,21 @@ async fn handle_node_events(
                 show_contacts(&state, &ui);
                 // In front, the notice is on screen; the core's notification is for when it is not.
                 if let (Some(peer), EndReason::Incompatible { behind, theirs }) = (peer, reason) {
-                    let name = with_contacts(&state, |contacts| contacts.name_of(peer).map(str::to_owned));
-                    let name = name.flatten().unwrap_or_else(|| short(peer));
-                    let ours = state.borrow().core.as_ref().map(|core| core.app().to_owned()).unwrap_or_default();
-                    let (title, body) = core::update_notice(*behind, &name, theirs, &ours);
-                    ui.set_notice_title(title.into());
-                    ui.set_notice_body(body.into());
+                    let name = with_contacts(&state, |contacts| view::name_of(contacts, peer));
+                    let ours = state.borrow().core.as_ref().map(|core| core.app().to_owned());
+                    // The wire and the core say an unknown version with an empty one.
+                    let version = |version: Option<&str>| maybe(version.filter(|v| !v.is_empty()).map(Into::into));
+                    ui.set_notice(one(Mismatch {
+                        ours_behind: *behind == Behind::Us,
+                        name: name.unwrap_or_else(|| view::short(peer)).into(),
+                        theirs: version(Some(theirs)),
+                        ours: version(ours.as_deref()),
+                    }));
                 }
             }
             _ => {}
         }
         match event {
-            Event::Ready { id } => ui.set_my_id(id.to_string().into()),
             Event::Online => ui.set_online(true),
             Event::Offline => ui.set_online(false),
             Event::Connected { media, key_exchange, .. } => {

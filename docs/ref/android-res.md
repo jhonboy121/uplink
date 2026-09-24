@@ -26,7 +26,8 @@ Real XML, not element trees in Rust — change the manifest without recompiling 
 
 ```
 android/AndroidManifest.xml      ${package}, ${label}, ${minSdk}… from --define
-android/res/values.xml           <color>, <style> → resources.arsc
+android/res/values/values.xml    <color>, <style>, <string>, <plurals> → resources.arsc
+android/res/values-ar/values.xml Arabic <string>/<plurals>: a second, locale-tagged table
 android/res/mipmap/launcher.xml  <adaptive-icon>, compiled to binary XML
 android/res/drawable/*.png       copied, referenced by name
 ```
@@ -72,3 +73,25 @@ The splash needs no `values-v31` work: Android 12+ builds its own from `android:
 theme's `windowBackground`, so setting those to the mark and to `@color/ground` makes the system
 splash and our in-app one match. On API 30 the same `windowBackground` paints the window before the
 first frame instead of flashing white.
+
+## Strings, languages and `R` ✅ (2026-09-24)
+
+- `<string>` and `<plurals>` compile into the `string` and `plurals` types. New types are appended
+  to `TYPES`, so existing ids never move.
+- **A language is a second type chunk** for the same type: `ResTable_config` with only its
+  `language` bytes set (offset 8, e.g. `ar`), entries aligned with the default by index and
+  `0xFFFFFFFF` where there is no translation (the lookup falls back to the default). The type
+  spec flags each translated entry with `CONFIG_LOCALE` (`0x0004`).
+- **A plural is a map entry** with no parent, keyed by `ResTable_map`'s quantity names:
+  `ATTR_OTHER` … `ATTR_MANY` = `0x01000004` … `0x01000009`. `other` is required.
+- A string's text is read as aapt2 does: whitespace folds, `\'` `\"` `\\` `\n` `\t` `\@` `\?`
+  unescape, and a leading `@`/`?` must be escaped.
+- The string pool's first length is **UTF-16 units**, not chars.
+- Verified with `apkanalyzer resources configs|value --config ar` — the Arabic table, the six
+  Arabic plural forms, and the colour/style ids unchanged.
+- **`android-res r-class --package dev.uplink --out <dir>`** writes `R.java` from the same symbol
+  table `compile` uses (`just dex` generates it into a temp dir and compiles it with the rest),
+  so Java writes `R.string.mute` / `R.drawable.call_end` instead of `getIdentifier` by name.
+- The app's language, not the phone's: Rust calls `UplinkApplication.setLanguage(code)` on every
+  core start and on a change; Java keeps it in SharedPreferences (a boot posts before the core is
+  up) and reads every string through `createConfigurationContext` with that locale.

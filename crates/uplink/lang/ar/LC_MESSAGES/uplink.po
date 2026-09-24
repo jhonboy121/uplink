@@ -1,0 +1,1052 @@
+# Arabic for uplink. Modern Standard Arabic, written for a phone screen: short, and "uplink"
+# stays in Latin letters as the app's name. `just tr-check` lists anything the markup has that
+# this file lacks.
+#
+# A placeholder that carries a name, a version or an error's own text is wrapped in the invisible
+# U+2068 FIRST STRONG ISOLATE … U+2069 POP DIRECTIONAL ISOLATE, so a Latin name ending in "." or
+# ")" keeps its punctuation on its own side of an Arabic sentence.
+msgid ""
+msgstr ""
+"Language: ar\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5);\n"
+
+msgctxt "App"
+msgid "Clear"
+msgstr "مسح"
+
+msgctxt "App"
+msgid "Clear the call log?"
+msgstr "مسح سجل المكالمات؟"
+
+msgctxt "App"
+msgid "Every call is forgotten. It does not affect your contacts."
+msgstr "تُنسى كل المكالمات. لا يؤثر ذلك في جهات اتصالك."
+
+msgctxt "App"
+msgid "It leaves the call log. It does not affect your contacts."
+msgstr "تُحذف من سجل المكالمات. لا يؤثر ذلك في جهات اتصالك."
+
+msgctxt "App"
+msgid "Remove"
+msgstr "حذف"
+
+msgctxt "App"
+msgid "Remove this call?"
+msgstr "حذف هذه المكالمة؟"
+
+msgctxt "App"
+msgid "Remove {n} call?"
+msgid_plural "Remove {n} calls?"
+msgstr[0] "حذف {n} مكالمة؟"
+msgstr[1] "حذف مكالمة واحدة؟"
+msgstr[2] "حذف مكالمتين؟"
+msgstr[3] "حذف {n} مكالمات؟"
+msgstr[4] "حذف {n} مكالمة؟"
+msgstr[5] "حذف {n} مكالمة؟"
+
+msgctxt "App"
+msgid "Remove {n} contact?"
+msgid_plural "Remove {n} contacts?"
+msgstr[0] "حذف {n} جهة اتصال؟"
+msgstr[1] "حذف جهة اتصال واحدة؟"
+msgstr[2] "حذف جهتَي اتصال؟"
+msgstr[3] "حذف {n} جهات اتصال؟"
+msgstr[4] "حذف {n} جهة اتصال؟"
+msgstr[5] "حذف {n} جهة اتصال؟"
+
+msgctxt "App"
+msgid "Remove {}?"
+msgstr "حذف ⁨{}⁩؟"
+
+msgctxt "App"
+msgid "Their key goes with them. You would need it again to call them, and they can still call you."
+msgstr "يُحذف مفتاحهم معهم. ستحتاج إليه مجددًا للاتصال بهم، وما زال بإمكانهم الاتصال بك."
+
+msgctxt "BatteryPage"
+msgid "Allow"
+msgstr "سماح"
+
+msgctxt "BatteryPage"
+msgid "Android asks next. You can change it later in Settings."
+msgstr "سيسألك Android الآن. يمكنك تغيير ذلك لاحقًا من الإعدادات."
+
+msgctxt "BatteryPage"
+msgid "Calls while the phone sleeps"
+msgstr "المكالمات أثناء سكون الهاتف"
+
+msgctxt "BatteryPage"
+msgid "Not now"
+msgstr "ليس الآن"
+
+msgctxt "BatteryPage"
+msgid "Stay reachable"
+msgstr "ابقَ متاحًا"
+
+msgctxt "BatteryPage"
+msgid "To save battery, Android stops apps it thinks nobody is using. uplink has to keep listening, or a call can't reach you while the phone sleeps."
+msgstr "لتوفير البطارية، يوقف Android التطبيقات التي يظن أن أحدًا لا يستخدمها. على uplink أن يبقى منتظرًا، وإلا فلن تصلك المكالمات أثناء سكون الهاتف."
+
+msgctxt "BatteryPage"
+msgid "optional"
+msgstr "اختياري"
+
+msgctxt "CallPage"
+msgid "Add to contacts"
+msgstr "إضافة إلى جهات الاتصال"
+
+msgctxt "CallPage"
+msgid "Call back"
+msgstr "معاودة الاتصال"
+
+msgctxt "CallPage"
+msgid "Done"
+msgstr "تم"
+
+msgctxt "CallPage"
+msgid "Duration"
+msgstr "المدة"
+
+msgctxt "CallPage"
+msgid "From answer to hang-up"
+msgstr "من الرد حتى الإنهاء"
+
+msgctxt "CallPage"
+msgid "IPv6"
+msgstr "IPv6"
+
+msgctxt "CallPage"
+msgid "Incoming call"
+msgstr "مكالمة واردة"
+
+msgctxt "CallPage"
+msgid "NETWORK"
+msgstr "الشبكة"
+
+msgctxt "CallPage"
+msgid "Only this call; nobody else's log changes"
+msgstr "هذه المكالمة فقط، ولا يتغير سجل أي أحد آخر"
+
+msgctxt "CallPage"
+msgid "Outgoing call"
+msgstr "مكالمة صادرة"
+
+msgctxt "CallPage"
+msgid "Path"
+msgstr "المسار"
+
+msgctxt "CallPage"
+msgid "Received"
+msgstr "المستلَم"
+
+msgctxt "CallPage"
+msgid "Remove from log"
+msgstr "حذف من السجل"
+
+msgctxt "CallPage"
+msgid "Sent"
+msgstr "المرسَل"
+
+msgctxt "CallPage"
+msgid "Their video and voice"
+msgstr "صورتهم وصوتهم"
+
+msgctxt "CallPage"
+msgid "VIDEO"
+msgstr "الفيديو"
+
+msgctxt "CallPage"
+msgid "VOICE"
+msgstr "الصوت"
+
+msgctxt "CallPage"
+msgid "Your video and voice"
+msgstr "صورتك وصوتك"
+
+msgctxt "CallScreen"
+msgid "Answer"
+msgstr "رد"
+
+msgctxt "CallScreen"
+msgid "Calling…"
+msgstr "جارٍ الاتصال…"
+
+msgctxt "CallScreen"
+msgid "Decline"
+msgstr "رفض"
+
+msgctxt "CallScreen"
+msgid "Direct"
+msgstr "مباشر"
+
+msgctxt "CallScreen"
+msgid "End call"
+msgstr "إنهاء المكالمة"
+
+msgctxt "CallScreen"
+msgid "Fold away"
+msgstr "تصغير"
+
+msgctxt "CallScreen"
+msgid "Incoming video call"
+msgstr "مكالمة فيديو واردة"
+
+msgctxt "CallScreen"
+msgid "Mute"
+msgstr "كتم الصوت"
+
+msgctxt "CallScreen"
+msgid "Relayed"
+msgstr "عبر خادم وسيط"
+
+msgctxt "CallScreen"
+msgid "Speaker"
+msgstr "مكبر الصوت"
+
+msgctxt "CallScreen"
+msgid "Switch camera"
+msgstr "تبديل الكاميرا"
+
+msgctxt "CallScreen"
+msgid "Unmute"
+msgstr "إلغاء الكتم"
+
+msgctxt "CallScreen"
+msgid "Video isn't working on this phone — audio only"
+msgstr "الفيديو لا يعمل على هذا الهاتف — صوت فقط"
+
+msgctxt "CallWords"
+msgid "Answered"
+msgstr "تم الرد"
+
+msgctxt "CallWords"
+msgid "Both had it, never opened"
+msgstr "متاح لدى الطرفين، ولم يُفتح"
+
+msgctxt "CallWords"
+msgid "Cancelled"
+msgstr "أُلغيت"
+
+msgctxt "CallWords"
+msgid "Couldn't reach them"
+msgstr "تعذّر الوصول إليهم"
+
+msgctxt "CallWords"
+msgid "Declined"
+msgstr "مرفوضة"
+
+msgctxt "CallWords"
+msgid "Did not connect"
+msgstr "لم يتم الاتصال"
+
+msgctxt "CallWords"
+msgid "Direct"
+msgstr "مباشر"
+
+msgctxt "CallWords"
+msgid "Direct over IPv4"
+msgstr "مباشر عبر IPv4"
+
+msgctxt "CallWords"
+msgid "Direct over IPv6"
+msgstr "مباشر عبر IPv6"
+
+msgctxt "CallWords"
+msgid "Download"
+msgstr "التنزيل"
+
+msgctxt "CallWords"
+msgid "Frame rate received"
+msgstr "معدل الإطارات المستلَمة"
+
+msgctxt "CallWords"
+msgid "Frame rate sent"
+msgstr "معدل الإطارات المرسَلة"
+
+msgctxt "CallWords"
+msgid "Frames"
+msgstr "الإطارات"
+
+msgctxt "CallWords"
+msgid "Frames lost"
+msgstr "الإطارات المفقودة"
+
+msgctxt "CallWords"
+msgid "IPv4 {}%"
+msgstr "IPv4 {}%"
+
+msgctxt "CallWords"
+msgid "IPv6 {}%"
+msgstr "IPv6 {}%"
+
+msgctxt "CallWords"
+msgid "Missed"
+msgstr "فائتة"
+
+msgctxt "CallWords"
+msgid "Needs an update"
+msgstr "يلزم التحديث"
+
+msgctxt "CallWords"
+msgid "Neither side had it"
+msgstr "غير متاح لدى الطرفين"
+
+msgctxt "CallWords"
+msgid "No answer"
+msgstr "لا رد"
+
+msgctxt "CallWords"
+msgid "Opened, not used"
+msgstr "فُتح ولم يُستخدم"
+
+msgctxt "CallWords"
+msgid "Packets"
+msgstr "الحزم"
+
+msgctxt "CallWords"
+msgid "Relayed"
+msgstr "عبر خادم وسيط"
+
+msgctxt "CallWords"
+msgid "Relayed {}% of the call"
+msgstr "عبر خادم وسيط في {}% من المكالمة"
+
+msgctxt "CallWords"
+msgid "Repaired"
+msgstr "المُصلَح"
+
+msgctxt "CallWords"
+msgid "Round trip"
+msgstr "زمن الذهاب والإياب"
+
+msgctxt "CallWords"
+msgid "Set up for"
+msgstr "مُعدّة لـ"
+
+msgctxt "CallWords"
+msgid "TODAY"
+msgstr "اليوم"
+
+msgctxt "CallWords"
+msgid "They had none"
+msgstr "غير متاح لديهم"
+
+msgctxt "CallWords"
+msgid "Today"
+msgstr "اليوم"
+
+msgctxt "CallWords"
+msgid "Upload"
+msgstr "الرفع"
+
+msgctxt "CallWords"
+msgid "Used"
+msgstr "مُستخدم"
+
+msgctxt "CallWords"
+msgid "YESTERDAY"
+msgstr "أمس"
+
+msgctxt "CallWords"
+msgid "Yesterday"
+msgstr "أمس"
+
+msgctxt "CallWords"
+msgid "You had none"
+msgstr "غير متاح لديك"
+
+msgctxt "CallWords"
+msgid "relay {}%"
+msgstr "خادم وسيط {}%"
+
+msgctxt "CallWords"
+msgid "{0} avg · {1}–{2} Mbps"
+msgstr "{0} بالمتوسط · {1}–{2} ميغابت/ث"
+
+msgctxt "CallWords"
+msgid "{0} avg · {1}–{2} fps"
+msgstr "{0} بالمتوسط · {1}–{2} إطار/ث"
+
+msgctxt "CallWords"
+msgid "{0} avg · {1}–{2} ms"
+msgstr "{0} بالمتوسط · {1}–{2} مللي ث"
+
+msgctxt "CallWords"
+msgid "{0} late · {1} held back · {2} discarded"
+msgstr "{0} متأخر · {1} محجوز · {2} مُهمَل"
+
+msgctxt "CallWords"
+msgid "{0} rebuilt · {1} filled in · {2} late"
+msgstr "{0} مُعاد بناؤه · {1} مُكمَّل · {2} متأخر"
+
+msgctxt "CallWords"
+msgid "{0} sent · {1} received"
+msgstr "{0} مرسَل · {1} مستلَم"
+
+msgctxt "CallWords"
+msgid "{0}p · {1} fps · {2} Mbps"
+msgstr "{0}p · {1} إطار/ث · {2} ميغابت/ث"
+
+msgctxt "CallWords"
+msgid "{n} DAY AGO"
+msgid_plural "{n} DAYS AGO"
+msgstr[0] "قبل {n} يوم"
+msgstr[1] "قبل يوم"
+msgstr[2] "قبل يومين"
+msgstr[3] "قبل {n} أيام"
+msgstr[4] "قبل {n} يومًا"
+msgstr[5] "قبل {n} يوم"
+
+msgctxt "CallWords"
+msgid "{n} WEEK AGO"
+msgid_plural "{n} WEEKS AGO"
+msgstr[0] "قبل {n} أسبوع"
+msgstr[1] "قبل أسبوع"
+msgstr[2] "قبل أسبوعين"
+msgstr[3] "قبل {n} أسابيع"
+msgstr[4] "قبل {n} أسبوعًا"
+msgstr[5] "قبل {n} أسبوع"
+
+msgctxt "CallWords"
+msgid "{n} day ago"
+msgid_plural "{n} days ago"
+msgstr[0] "قبل {n} يوم"
+msgstr[1] "قبل يوم"
+msgstr[2] "قبل يومين"
+msgstr[3] "قبل {n} أيام"
+msgstr[4] "قبل {n} يومًا"
+msgstr[5] "قبل {n} يوم"
+
+msgctxt "CallWords"
+msgid "{n} week ago"
+msgid_plural "{n} weeks ago"
+msgstr[0] "قبل {n} أسبوع"
+msgstr[1] "قبل أسبوع"
+msgstr[2] "قبل أسبوعين"
+msgstr[3] "قبل {n} أسابيع"
+msgstr[4] "قبل {n} أسبوعًا"
+msgstr[5] "قبل {n} أسبوع"
+
+msgctxt "CallsPage"
+msgid "Calls"
+msgstr "المكالمات"
+
+msgctxt "CallsPage"
+msgid "Calls you make and calls you miss both end up here."
+msgstr "المكالمات التي تجريها والتي تفوتك تظهر هنا."
+
+msgctxt "CallsPage"
+msgid "Clear"
+msgstr "مسح"
+
+msgctxt "CallsPage"
+msgid "Incoming"
+msgstr "واردة"
+
+msgctxt "CallsPage"
+msgid "No calls yet"
+msgstr "لا مكالمات بعد"
+
+msgctxt "CallsPage"
+msgid "Outgoing"
+msgstr "صادرة"
+
+msgctxt "CallsPage"
+msgid "Remove"
+msgstr "حذف"
+
+msgctxt "CallsPage"
+msgid "{n} selected"
+msgid_plural "{n} selected"
+msgstr[0] "المحدد: {n}"
+msgstr[1] "المحدد: {n}"
+msgstr[2] "المحدد: {n}"
+msgstr[3] "المحدد: {n}"
+msgstr[4] "المحدد: {n}"
+msgstr[5] "المحدد: {n}"
+
+msgctxt "ConfirmSheet"
+msgid "Keep"
+msgstr "إبقاء"
+
+msgctxt "ConnectPage"
+msgid "Choose an image"
+msgstr "اختيار صورة"
+
+msgctxt "ConnectPage"
+msgid "Connect"
+msgstr "تواصل"
+
+msgctxt "ConnectPage"
+msgid "Copy key"
+msgstr "نسخ المفتاح"
+
+msgctxt "ConnectPage"
+msgid "Key copied"
+msgstr "تم نسخ المفتاح"
+
+msgctxt "ConnectPage"
+msgid "Scan a code"
+msgstr "مسح رمز"
+
+msgctxt "ConnectPage"
+msgid "Share my identity"
+msgstr "مشاركة هويتي"
+
+msgctxt "ContactPage"
+msgid "Call"
+msgstr "اتصال"
+
+msgctxt "ContactPage"
+msgid "Cancel"
+msgstr "إلغاء"
+
+msgctxt "ContactPage"
+msgid "Done"
+msgstr "تم"
+
+msgctxt "ContactPage"
+msgid "Edit"
+msgstr "تعديل"
+
+msgctxt "ContactPage"
+msgid "Favourite"
+msgstr "مفضّل"
+
+msgctxt "ContactPage"
+msgid "Keep them at the top of People"
+msgstr "أبقِهم في أعلى قائمة الأشخاص"
+
+msgctxt "ContactPage"
+msgid "Kept at the top of People"
+msgstr "في أعلى قائمة الأشخاص"
+
+msgctxt "ContactPage"
+msgid "Remove"
+msgstr "حذف"
+
+msgctxt "ContactPage"
+msgid "Rename"
+msgstr "إعادة التسمية"
+
+msgctxt "ContactPage"
+msgid "Save"
+msgstr "حفظ"
+
+msgctxt "ContactPage"
+msgid "Their key goes; they can still call you"
+msgstr "يُحذف مفتاحهم، وما زال بإمكانهم الاتصال بك"
+
+msgctxt "ContactPage"
+msgid "Their name"
+msgstr "اسمهم"
+
+msgctxt "ContactPage"
+msgid "What you call them, only on this phone"
+msgstr "الاسم الذي تسمّيهم به، على هذا الهاتف فقط"
+
+msgctxt "ContactPage"
+msgid "calls themselves “{}”"
+msgstr "يسمّون أنفسهم «⁨{}⁩»"
+
+msgctxt "NameSheet"
+msgid "Add"
+msgstr "إضافة"
+
+msgctxt "NameSheet"
+msgid "Already saved as {}"
+msgstr "محفوظ مسبقًا باسم ⁨{}⁩"
+
+msgctxt "NameSheet"
+msgid "Could not add them: {}"
+msgstr "تعذّرت إضافتهم: ⁨{}⁩"
+
+msgctxt "NameSheet"
+msgid "Name this contact"
+msgstr "سمِّ جهة الاتصال هذه"
+
+msgctxt "NameSheet"
+msgid "Not now"
+msgstr "ليس الآن"
+
+msgctxt "NameSheet"
+msgid "Only you see this name. They are saved by their key either way."
+msgstr "هذا الاسم لا يراه غيرك. يُحفظون بمفتاحهم في كل الأحوال."
+
+msgctxt "NameSheet"
+msgid "That code is not an uplink key"
+msgstr "هذا الرمز ليس مفتاح uplink"
+
+msgctxt "NameSheet"
+msgid "That's your own code. Scan theirs instead"
+msgstr "هذا رمزك أنت. امسح رمزهم بدلًا منه"
+
+msgctxt "NameSheet"
+msgid "Their name"
+msgstr "اسمهم"
+
+msgctxt "NameSheet"
+msgid "{} is already the name of a contact"
+msgstr "⁨{}⁩ اسم جهة اتصال موجودة"
+
+msgctxt "NoticeSheet"
+msgid "OK"
+msgstr "حسنًا"
+
+msgctxt "NoticeSheet"
+msgid "Their uplink ({0}) is older than yours ({1}). You can call each other once they update."
+msgstr "إصدار uplink لديهم (⁨{0}⁩) أقدم من إصدارك (⁨{1}⁩). يمكنكما الاتصال ببعضكما بعد أن يحدّثوه."
+
+msgctxt "NoticeSheet"
+msgid "Update uplink"
+msgstr "حدّث uplink"
+
+msgctxt "NoticeSheet"
+msgid "an unknown version"
+msgstr "إصدار غير معروف"
+
+msgctxt "NoticeSheet"
+msgid "{0} has a newer uplink ({1}) than yours ({2}). Update yours to call each other."
+msgstr "لدى ⁨{0}⁩ إصدار uplink أحدث (⁨{1}⁩) من إصدارك (⁨{2}⁩). حدّث إصدارك لتتمكنا من الاتصال ببعضكما."
+
+msgctxt "NoticeSheet"
+msgid "{} needs to update uplink"
+msgstr "على ⁨{}⁩ تحديث uplink"
+
+msgctxt "PeoplePage"
+msgid "ALL"
+msgstr "الكل"
+
+msgctxt "PeoplePage"
+msgid "Called just now"
+msgstr "آخر مكالمة الآن"
+
+msgctxt "PeoplePage"
+msgid "Called {n} day ago"
+msgid_plural "Called {n} days ago"
+msgstr[0] "آخر مكالمة قبل {n} يوم"
+msgstr[1] "آخر مكالمة قبل يوم"
+msgstr[2] "آخر مكالمة قبل يومين"
+msgstr[3] "آخر مكالمة قبل {n} أيام"
+msgstr[4] "آخر مكالمة قبل {n} يومًا"
+msgstr[5] "آخر مكالمة قبل {n} يوم"
+
+msgctxt "PeoplePage"
+msgid "Called {n} hour ago"
+msgid_plural "Called {n} hours ago"
+msgstr[0] "آخر مكالمة قبل {n} ساعة"
+msgstr[1] "آخر مكالمة قبل ساعة"
+msgstr[2] "آخر مكالمة قبل ساعتين"
+msgstr[3] "آخر مكالمة قبل {n} ساعات"
+msgstr[4] "آخر مكالمة قبل {n} ساعة"
+msgstr[5] "آخر مكالمة قبل {n} ساعة"
+
+msgctxt "PeoplePage"
+msgid "Called {n} minute ago"
+msgid_plural "Called {n} minutes ago"
+msgstr[0] "آخر مكالمة قبل {n} دقيقة"
+msgstr[1] "آخر مكالمة قبل دقيقة"
+msgstr[2] "آخر مكالمة قبل دقيقتين"
+msgstr[3] "آخر مكالمة قبل {n} دقائق"
+msgstr[4] "آخر مكالمة قبل {n} دقيقة"
+msgstr[5] "آخر مكالمة قبل {n} دقيقة"
+
+msgctxt "PeoplePage"
+msgid "Called {n} week ago"
+msgid_plural "Called {n} weeks ago"
+msgstr[0] "آخر مكالمة قبل {n} أسبوع"
+msgstr[1] "آخر مكالمة قبل أسبوع"
+msgstr[2] "آخر مكالمة قبل أسبوعين"
+msgstr[3] "آخر مكالمة قبل {n} أسابيع"
+msgstr[4] "آخر مكالمة قبل {n} أسبوعًا"
+msgstr[5] "آخر مكالمة قبل {n} أسبوع"
+
+msgctxt "PeoplePage"
+msgid "Connect"
+msgstr "تواصل"
+
+msgctxt "PeoplePage"
+msgid "FAVOURITES"
+msgstr "المفضّلون"
+
+msgctxt "PeoplePage"
+msgid "Never called"
+msgstr "لم تجرِ مكالمة بعد"
+
+msgctxt "PeoplePage"
+msgid "No one here yet"
+msgstr "لا أحد هنا بعد"
+
+msgctxt "PeoplePage"
+msgid "Offline"
+msgstr "غير متصل"
+
+msgctxt "PeoplePage"
+msgid "Online"
+msgstr "متصل"
+
+msgctxt "PeoplePage"
+msgid "Open Connect to scan a code, or send them yours."
+msgstr "افتح «تواصل» لمسح رمز، أو أرسل لهم رمزك."
+
+msgctxt "PeoplePage"
+msgid "People"
+msgstr "الأشخاص"
+
+msgctxt "PeoplePage"
+msgid "Remove"
+msgstr "حذف"
+
+msgctxt "PeoplePage"
+msgid "{n} selected"
+msgid_plural "{n} selected"
+msgstr[0] "المحدد: {n}"
+msgstr[1] "المحدد: {n}"
+msgstr[2] "المحدد: {n}"
+msgstr[3] "المحدد: {n}"
+msgstr[4] "المحدد: {n}"
+msgstr[5] "المحدد: {n}"
+
+msgctxt "PermissionsPage"
+msgid "A call needs all three. uplink asks once, and asks for nothing else — no contacts, no location, no storage."
+msgstr "تحتاج المكالمة إلى الثلاثة كلها. يسأل uplink مرة واحدة، ولا يطلب شيئًا آخر — لا جهات اتصال، ولا موقع، ولا تخزين."
+
+msgctxt "PermissionsPage"
+msgid "Android won't ask again, so these have to be turned on in settings. uplink will be waiting when you come back."
+msgstr "لن يسأل Android مرة أخرى، لذا يجب تفعيلها من الإعدادات. سيكون uplink بانتظارك حين تعود."
+
+msgctxt "PermissionsPage"
+msgid "Before your first call"
+msgstr "قبل مكالمتك الأولى"
+
+msgctxt "PermissionsPage"
+msgid "Camera"
+msgstr "الكاميرا"
+
+msgctxt "PermissionsPage"
+msgid "Continue"
+msgstr "متابعة"
+
+msgctxt "PermissionsPage"
+msgid "Microphone"
+msgstr "الميكروفون"
+
+msgctxt "PermissionsPage"
+msgid "Notifications"
+msgstr "الإشعارات"
+
+msgctxt "PermissionsPage"
+msgid "Open settings"
+msgstr "فتح الإعدادات"
+
+msgctxt "PermissionsPage"
+msgid "So they can hear you"
+msgstr "ليسمعوك"
+
+msgctxt "PermissionsPage"
+msgid "So they can see you"
+msgstr "ليروك"
+
+msgctxt "PermissionsPage"
+msgid "So you know when someone calls"
+msgstr "لتعرف حين يتصل بك أحد"
+
+msgctxt "PermissionsPage"
+msgid "needed"
+msgstr "مطلوب"
+
+msgctxt "PermissionsPage"
+msgid "off"
+msgstr "معطّل"
+
+msgctxt "PermissionsPage"
+msgid "on"
+msgstr "مفعّل"
+
+msgctxt "PermissionsPage"
+msgid "uplink can't call yet"
+msgstr "لا يمكن لـ uplink الاتصال بعد"
+
+msgctxt "PersonRow"
+msgid "Call"
+msgstr "اتصال"
+
+msgctxt "RelayRow"
+msgid "Added by you"
+msgstr "أضفته أنت"
+
+msgctxt "RelayRow"
+msgid "Asia-Pacific"
+msgstr "آسيا والمحيط الهادئ"
+
+msgctxt "RelayRow"
+msgid "Europe"
+msgstr "أوروبا"
+
+msgctxt "RelayRow"
+msgid "North America, east"
+msgstr "أمريكا الشمالية، الشرق"
+
+msgctxt "RelayRow"
+msgid "North America, west"
+msgstr "أمريكا الشمالية، الغرب"
+
+msgctxt "RelayRow"
+msgid "Remove"
+msgstr "حذف"
+
+msgctxt "RelayRow"
+msgid "Remove {}"
+msgstr "حذف ⁨{}⁩"
+
+msgctxt "RelayRow"
+msgid "n0 relay"
+msgstr "خادم وسيط من n0"
+
+msgctxt "RelaySheet"
+msgid "Add one below to use your own."
+msgstr "أضف واحدًا أدناه لتستخدم خوادمك."
+
+msgctxt "RelaySheet"
+msgid "Add this relay"
+msgstr "إضافة هذا الخادم"
+
+msgctxt "RelaySheet"
+msgid "Cancel"
+msgstr "إلغاء"
+
+msgctxt "RelaySheet"
+msgid "Each one is contacted every few seconds, call or no call. Using only the ones near you costs nothing and saves battery and mobile data."
+msgstr "يُتصل بكل واحد منها كل بضع ثوانٍ، في مكالمة أو من دونها. استخدام القريبة منك فقط لا يكلّف شيئًا ويوفّر البطارية وبيانات الجوال."
+
+msgctxt "RelaySheet"
+msgid "My own"
+msgstr "خوادمي"
+
+msgctxt "RelaySheet"
+msgid "Name, e.g. Home"
+msgstr "الاسم، مثل: المنزل"
+
+msgctxt "RelaySheet"
+msgid "Relays"
+msgstr "الخوادم الوسيطة"
+
+msgctxt "RelaySheet"
+msgid "Save"
+msgstr "حفظ"
+
+msgctxt "RelaySheet"
+msgid "n0's"
+msgstr "خوادم n0"
+
+msgctxt "ScanPage"
+msgid "Choose an image"
+msgstr "اختيار صورة"
+
+msgctxt "ScanPage"
+msgid "Point at the code on their phone."
+msgstr "وجّه الكاميرا إلى الرمز على هاتفهم."
+
+msgctxt "ScanPage"
+msgid "Scan their code"
+msgstr "امسح رمزهم"
+
+msgctxt "ScanPage"
+msgid "Starting camera…"
+msgstr "جارٍ تشغيل الكاميرا…"
+
+msgctxt "ScanPage"
+msgid "Stop scanning"
+msgstr "إيقاف المسح"
+
+msgctxt "SettingsPage"
+msgid "Allow"
+msgstr "سماح"
+
+msgctxt "SettingsPage"
+msgid "Allowed"
+msgstr "مسموح"
+
+msgctxt "SettingsPage"
+msgid "Background apps"
+msgstr "تطبيقات الخلفية"
+
+msgctxt "SettingsPage"
+msgid "Battery"
+msgstr "البطارية"
+
+msgctxt "SettingsPage"
+msgid "Call quality"
+msgstr "جودة المكالمة"
+
+msgctxt "SettingsPage"
+msgid "Caps what the camera sends"
+msgstr "حدّ أقصى لما ترسله الكاميرا"
+
+msgctxt "SettingsPage"
+msgid "Dark"
+msgstr "داكن"
+
+msgctxt "SettingsPage"
+msgid "Diagnostics"
+msgstr "التشخيص"
+
+msgctxt "SettingsPage"
+msgid "Follows the phone"
+msgstr "يتبع الهاتف"
+
+msgctxt "SettingsPage"
+msgid "Follows the system"
+msgstr "يتبع النظام"
+
+msgctxt "SettingsPage"
+msgid "Language"
+msgstr "اللغة"
+
+msgctxt "SettingsPage"
+msgid "Light"
+msgstr "فاتح"
+
+msgctxt "SettingsPage"
+msgid "Lock screen calls"
+msgstr "المكالمات على شاشة القفل"
+
+msgctxt "SettingsPage"
+msgid "Open"
+msgstr "فتح"
+
+msgctxt "SettingsPage"
+msgid "Relays"
+msgstr "الخوادم الوسيطة"
+
+msgctxt "SettingsPage"
+msgid "Ring over the lock screen"
+msgstr "الرنين فوق شاشة القفل"
+
+msgctxt "SettingsPage"
+msgid "Send the log to the fixer"
+msgstr "أرسل السجل لمن يصلح المشكلة"
+
+msgctxt "SettingsPage"
+msgid "Set on this phone"
+msgstr "مضبوط على هذا الهاتف"
+
+msgctxt "SettingsPage"
+msgid "Settings"
+msgstr "الإعدادات"
+
+msgctxt "SettingsPage"
+msgid "Share"
+msgstr "مشاركة"
+
+msgctxt "SettingsPage"
+msgid "System"
+msgstr "النظام"
+
+msgctxt "SettingsPage"
+msgid "Theme"
+msgstr "المظهر"
+
+msgctxt "SettingsPage"
+msgid "Wait for calls while asleep"
+msgstr "انتظار المكالمات أثناء السكون"
+
+msgctxt "SettingsPage"
+msgid "When a direct path won't form"
+msgstr "حين يتعذّر الاتصال المباشر"
+
+msgctxt "SettingsPage"
+msgid "Your phone's own list"
+msgstr "قائمة هاتفك الخاصة"
+
+msgctxt "SettingsPage"
+msgid "{} on"
+msgstr "{} مفعّل"
+
+msgctxt "Tabs"
+msgid "Calls"
+msgstr "المكالمات"
+
+msgctxt "Tabs"
+msgid "Connect"
+msgstr "تواصل"
+
+msgctxt "Tabs"
+msgid "People"
+msgstr "الأشخاص"
+
+msgctxt "Tabs"
+msgid "Settings"
+msgstr "الإعدادات"
+
+msgctxt "ToastCard"
+msgid "Could not copy your key: {}"
+msgstr "تعذّر نسخ مفتاحك: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not open battery settings: {}"
+msgstr "تعذّر فتح إعدادات البطارية: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not open that call: {}"
+msgstr "تعذّر فتح تلك المكالمة: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not open that image: {}"
+msgstr "تعذّر فتح تلك الصورة: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not open that list: {}"
+msgstr "تعذّر فتح تلك القائمة: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not open that setting: {}"
+msgstr "تعذّر فتح ذلك الإعداد: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not pack the log"
+msgstr "تعذّر تجهيز السجل"
+
+msgctxt "ToastCard"
+msgid "Could not remove that call: {}"
+msgstr "تعذّر حذف تلك المكالمة: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not remove those calls: {}"
+msgstr "تعذّر حذف تلك المكالمات: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "Could not share your code"
+msgstr "تعذّرت مشاركة رمزك"
+
+msgctxt "ToastCard"
+msgid "No code in that image"
+msgstr "لا يوجد رمز في تلك الصورة"
+
+msgctxt "ToastCard"
+msgid "Something went wrong: {}"
+msgstr "حدث خطأ: ⁨{}⁩"
+
+msgctxt "ToastCard"
+msgid "That code is not an uplink key"
+msgstr "هذا الرمز ليس مفتاح uplink"
+
+msgctxt "ToastCard"
+msgid "That's your own code. Scan theirs instead"
+msgstr "هذا رمزك أنت. امسح رمزهم بدلًا منه"
+
+msgctxt "ToastCard"
+msgid "You're already in a call"
+msgstr "أنت في مكالمة بالفعل"
+
+msgctxt "ToastCard"
+msgid "{0} of {1} could not be removed"
+msgstr "تعذّر حذف {0} من {1}"
+
+msgctxt "ToastCard"
+msgid "{} is already in your contacts"
+msgstr "⁨{}⁩ موجود في جهات اتصالك"
+
+msgctxt "ToastCard"
+msgid "{} is not a relay address"
+msgstr "⁨{}⁩ ليس عنوان خادم وسيط"

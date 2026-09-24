@@ -1,0 +1,236 @@
+// How anyone becomes a contact: your own code to show, and the camera to read theirs.
+
+import { Theme } from "theme.slint";
+import { AppBar, Brand, Fingerprint, PageTitle, Row, Tap, Wide } from "controls.slint";
+
+export component ConnectPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <image> qr;
+    // The share of the code's width the mark in its middle may cover; uplink-core picks it.
+    in property <float> mark;
+    in property <[string]> fingerprint;
+    callback scan();
+    callback pick();
+    callback share();
+    callback copy();
+    background: Theme.ground;
+
+    // Shows the check for a moment after a copy, then goes back to offering another.
+    property <bool> copied: false;
+    function copy-key() {
+        root.copy();
+        root.copied = true;
+    }
+    Timer {
+        interval: Theme.copied-for;
+        running: root.copied;
+        triggered => { root.copied = false; }
+    }
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: @tr("Connect");
+                horizontal-stretch: 1;
+            }
+            Brand { }
+        }
+
+        // Code, fingerprint and actions are one stack, as the design has them; the slack
+        // collects below rather than pushing them apart.
+        VerticalLayout {
+            vertical-stretch: 0;
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            padding-top: Theme.stack-top;
+            spacing: Theme.stack-gap;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: min(root.width - Theme.edge * 2, Theme.qr-size);
+                    height: self.width;
+                    border-radius: Theme.wide-radius;
+                    background: #FFFFFF;
+                    clip: true;
+                    code := Image {
+                        width: parent.width - Theme.qr-pad * 2;
+                        height: self.width;
+                        source: root.qr;
+                        image-fit: contain;
+                    }
+                    // The mark in the middle, the way a payment app puts its own there. The
+                    // code is drawn with the error correction to lose it: `mark` is the share
+                    // of its width uplink-core says can go, and the plate stays inside that.
+                    Rectangle {
+                        width: code.width * root.mark;
+                        height: self.width;
+                        border-radius: self.width / 2;
+                        background: #FFFFFF;
+                        Image {
+                            source: @image-url("icons/mark-badge.png");
+                            width: parent.width * Theme.mark-in-plate;
+                            height: self.width;
+                        }
+                    }
+                }
+            }
+            // The key, and a button that copies it: the CLI and chat both want text, not a
+            // picture. An empty box of the button's width on the other side keeps the key
+            // itself centred.
+            Row {
+                alignment: center;
+                spacing: Theme.gap;
+                Rectangle { width: Theme.copy-target; }
+                Fingerprint { lines: root.fingerprint; }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Theme.copy-target;
+                        height: self.width;
+                        border-radius: self.width / 2;
+                        background: copy-touch.pressed ? Theme.surface : transparent;
+                        accessible-role: button;
+                        accessible-label: root.copied ? @tr("Key copied") : @tr("Copy key");
+                        accessible-action-default => { root.copy-key(); }
+                        copy-touch := Tap {
+                            tapped => { root.copy-key(); }
+                        }
+                        Image {
+                            source: root.copied ? @image-url("icons/check.svg") : @image-url("icons/copy.svg");
+                            width: Theme.key-icon;
+                            height: self.width;
+                            colorize: root.copied ? Theme.answer : Theme.beacon;
+                        }
+                    }
+                }
+            }
+
+            // Naming a scanned key happens in a sheet over whatever screen you are on, so this
+            // stays the two things that ever add someone. Scanning takes the whole screen
+            // (`ScanPage`); this only opens it.
+            Wide {
+                text: @tr("Scan a code");
+                primary: true;
+                clicked => { root.scan(); }
+            }
+            Wide {
+                text: @tr("Choose an image");
+                clicked => { root.pick(); }
+            }
+            Wide {
+                text: @tr("Share my identity");
+                clicked => { root.share(); }
+            }
+        }
+        // Whatever is left over ends up here rather than between the rows above.
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+// Scanning someone's code: the back camera over the whole screen, dimmed around a square that
+// says where the code should go. The decoder reads the whole frame, so the square is a guide
+// for the hand, not a limit. Dark whatever the theme, like a call: it is a camera.
+export component ScanPage inherits Rectangle {
+    in property <image> frame;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    callback close();
+    callback pick();
+    background: Theme.under-video;
+
+    property <length> window: min(root.width, root.height) * Theme.scan-window;
+    property <length> window-x: (root.width - self.window) / 2;
+    property <length> window-y: (root.height - self.window) / 2;
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.frame;
+        image-fit: cover;
+    }
+    // Until the first frame, something rather than a black screen that looks broken.
+    if root.frame.width == 0 : Text {
+        text: @tr("Starting camera…");
+        color: Theme.on-video-muted;
+        font-size: 0.9375rem;
+    }
+    // The dim around the square, as one frame whose border is the dim: Slint has no cut-out,
+    // and four bands left their inner corners square inside the outline's rounded ones. A
+    // border's inner corners are its outer radius less its width, so an outer radius of the
+    // outline's plus the border's makes the dim follow the outline exactly. The border is as
+    // wide as the screen is long, so it covers everything around the square.
+    property <length> dim-reach: max(root.width, root.height);
+    Rectangle {
+        x: root.window-x - root.dim-reach;
+        y: root.window-y - root.dim-reach;
+        width: root.window + root.dim-reach * 2;
+        height: self.width;
+        border-width: root.dim-reach;
+        border-color: Theme.scan-dim;
+        border-radius: Theme.radius + root.dim-reach;
+    }
+    Rectangle {
+        x: root.window-x;
+        y: root.window-y;
+        width: root.window;
+        height: root.window;
+        border-width: Theme.scan-border;
+        border-color: Theme.on-video;
+        border-radius: Theme.radius;
+    }
+
+    // The bar: a way out at the start, the title beside it.
+    Row {
+        y: root.top-inset + Theme.bar-top;
+        height: Theme.copy-target;
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        spacing: Theme.gap;
+        Rectangle {
+            width: Theme.copy-target;
+            border-radius: self.width / 2;
+            background: close-touch.pressed ? Theme.on-video.with-alpha(0.2) : transparent;
+            accessible-role: button;
+            accessible-label: @tr("Stop scanning");
+            accessible-action-default => { root.close(); }
+            close-touch := Tap {
+                tapped => { root.close(); }
+            }
+            Image {
+                source: @image-url("icons/close.svg");
+                width: Theme.key-icon;
+                height: self.width;
+                colorize: Theme.on-video;
+            }
+        }
+        Text {
+            text: @tr("Scan their code");
+            color: Theme.on-video;
+            font-family: Theme.display;
+            font-size: 1.1875rem;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: Theme.start;
+            horizontal-stretch: 1;
+        }
+    }
+    Text {
+        x: Theme.edge;
+        y: root.window-y + root.window + Theme.gap-large;
+        width: parent.width - Theme.edge * 2;
+        text: @tr("Point at the code on their phone.");
+        color: Theme.on-video;
+        font-size: 0.9375rem;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+    // A code that came as a picture has no phone to point at: the other way in, from here.
+    Wide {
+        x: Theme.edge;
+        y: parent.height - root.bottom-inset - Theme.gap-large - self.height;
+        width: parent.width - Theme.edge * 2;
+        text: @tr("Choose an image");
+        clicked => { root.pick(); }
+    }
+}

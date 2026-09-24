@@ -1,0 +1,533 @@
+// The window: one root layout holds the page area and the tab bar, so the bar takes space instead
+// of covering content; the call, the sheets and the gate are declared after it, as overlays
+// (later siblings draw on top).
+
+// The design's three faces, vendored in assets/fonts and registered from the markup itself, so no
+// build script is involved. Outfit names things, Public Sans carries prose, and IBM Plex Mono is
+// for anything read character by character: keys, fingerprints, the timer.
+import "fonts/Outfit-Regular.ttf";
+import "fonts/Outfit-SemiBold.ttf";
+import "fonts/PublicSans-Regular.ttf";
+import "fonts/PublicSans-SemiBold.ttf";
+import "fonts/PublicSans-Bold.ttf";
+import "fonts/IBMPlexMono-Regular.ttf";
+import "fonts/IBMPlexMono-Medium.ttf";
+
+import { Appearance, Language, Theme } from "theme.slint";
+import {
+    AddProblem, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, PermissionItem,
+    RelayItem, Route, Screen, Toast, Mismatch,
+} from "types.slint";
+import { Row, Tap } from "controls.slint";
+import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
+import { ConfirmSheet, NameSheet, NoticeSheet, RelaySheet, ToastCard } from "sheets.slint";
+import { ContactPage, PeoplePage } from "people.slint";
+import { CallPage, CallsPage } from "calls.slint";
+import { ConnectPage, ScanPage } from "connect.slint";
+import { SettingsPage } from "settings.slint";
+import { CallScreen, MiniCall } from "call.slint";
+
+export { Appearance, Language, Theme } from "theme.slint";
+export {
+    AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
+    DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Path, PathKind, Permission, PermissionItem,
+    Region, RelayItem, Route, Say, Screen, Stat, Toast, Traffic, Unit,
+} from "types.slint";
+
+// No "call" tab: there is nothing to show when no call is running, and a call takes over the
+// whole window when there is one. People is who you can call, Connect is how anyone becomes one
+// of them, Settings is the rest; your own identity is not a contact, so it lives in Connect.
+component Tabs inherits Rectangle {
+    in-out property <Screen> screen;
+    // The gesture bar sits under the tabs, so the row clears it from the inside.
+    in property <length> bottom-inset;
+    height: Theme.tab-height + bottom-inset;
+    background: Theme.surface;
+    Row {
+        padding: 6px;
+        padding-bottom: 6px + root.bottom-inset;
+        spacing: 4px;
+        for tab in [
+            { label: @tr("People"), screen: Screen.people },
+            { label: @tr("Calls"), screen: Screen.calls },
+            { label: @tr("Connect"), screen: Screen.connect },
+            { label: @tr("Settings"), screen: Screen.settings },
+        ] : Rectangle {
+            border-radius: 12px;
+            background: root.screen == tab.screen ? Theme.raised : transparent;
+            accessible-role: AccessibleRole.tab;
+            accessible-label: tab.label;
+            Text {
+                text: tab.label;
+                font-size: 0.85rem;
+                color: root.screen == tab.screen ? Theme.beacon : Theme.muted;
+            }
+            Tap {
+                tapped => { root.screen = tab.screen; }
+            }
+            animate background { duration: Theme.feedback; easing: ease-out; }
+        }
+    }
+}
+
+export component App inherits Window {
+    in property <image> frame;
+    in property <image> remote-frame;
+    in property <image> qr;
+    // The share of the code's width the mark in its middle may cover; uplink-core picks it.
+    in property <float> qr-mark;
+    in property <[string]> my-fingerprint;
+    // A running call folded into a corner so the rest of the app can be used. Its position
+    // is kept here so a drag outlives being restored and folded away again.
+    in-out property <bool> call-folded: false;
+    // The window itself has been shrunk by the system. Everything but the picture goes: at
+    // that size chrome is unreadable, and the controls are the window's own buttons.
+    in property <bool> call-pip: false;
+    in-out property <length> call-fold-x;
+    in-out property <length> call-fold-y;
+    in-out property <bool> call-fold-placed: false;
+    in property <Route> call-route: Route.unknown;
+    // Cleared when a call starts; set if its video never came up, or stopped.
+    in property <bool> video-failed: false;
+    in property <string> peer-name;
+    in property <string> peer-initial: "?";
+    in property <string> call-timer;
+    in property <string> key-exchange;
+    in property <[ContactItem]> contacts;
+    in property <[CallItem]> calls;
+    in property <bool> online: false;
+    // At most one; the markup's own timer empties it.
+    in-out property <[Toast]> toast;
+    in-out property <Confirm> confirming: Confirm.none;
+    // Two phones that cannot call each other until one updates. OK or Back empties it.
+    in-out property <[Mismatch]> notice;
+    in-out property <bool> selecting: false;
+    in property <int> selected-count: 0;
+    // The call log's own selection, apart from the contacts': the two lists are different
+    // things, and switching tabs should not carry ticks across.
+    in-out property <bool> selecting-calls: false;
+    in property <int> selected-calls-count: 0;
+    callback toggle-call-selected(string);
+    callback remove-selected-calls();
+    callback clear-call-selection();
+    // The call whose details are open, if one is; emptying it closes the page.
+    in-out property <[CallDetail]> open-call;
+    callback show-call(string);
+    callback remove-call(string);
+    // The contact being looked at, if any; emptying it closes the page.
+    in-out property <[ContactDetail]> open-contact;
+
+    in property <bool> booting: true;
+    in property <bool> gate: false;
+    // Nothing explains itself before it has been asked, so a fresh install would otherwise
+    // look identical to a refusal.
+    in-out property <bool> asked: false;
+    in property <bool> permissions-blocked: false;
+    in property <[PermissionItem]> permissions;
+    in-out property <Screen> screen: Screen.people;
+    in-out property <bool> scanning: false;
+    in-out property <bool> swapped: false;
+    in-out property <bool> mic-on: true;
+    in-out property <bool> speaker-on: true;
+    // A key that has arrived and has no name yet, if one has.
+    in-out property <[string]> pending-key;
+    in-out property <string> new-name;
+    in-out property <[AddProblem]> add-problem;
+    // Where in the People list a just-added contact sits, so the list opens on it; negative
+    // when there is nothing to show.
+    in property <length> contacts-reveal: -1px;
+    in property <CallState> call-state: CallState.idle;
+
+    callback call(string);
+    callback accept();
+    callback reject();
+    callback hangup();
+    callback flip-camera();
+    callback toggle-mic();
+    callback toggle-speaker();
+    callback add-contact(string, string);
+    callback rename-contact(string, string);
+    callback remove-contact(string);
+    callback pick-key();
+    callback share-key();
+    callback copy-key();
+    // A key read off the camera, handed over from the decoding thread to be offered or
+    // said to be known already. Rust's own; no markup invokes it.
+    callback key-found(string);
+    callback share-diagnostics();
+    // Which relays the endpoint may use. The sheet edits this model in place; saving writes
+    // it and rebinds, cancelling throws it away and reads the stored set back.
+    in property <[RelayItem]> relays;
+    in property <[RelayItem]> custom-relays;
+    // How many are on, counted where the model is built rather than in the markup.
+    in property <int> relays-on;
+    in-out property <bool> relays-custom;
+    // Read from Android on start and on every return to the front, since each of them is
+    // changed in a system screen the app sends the user to. Assumed fine until read.
+    in property <bool> battery-unrestricted: true;
+    in property <bool> full-screen-calls: true;
+    in property <bool> maker-list: false;
+    callback allow-battery();
+    callback allow-full-screen-calls();
+    callback open-maker-list();
+    // The one-time explainer for the battery exemption, shown after the gate.
+    in-out property <bool> battery-ask: false;
+    callback skip-battery();
+    in-out property <bool> editing-relays: false;
+    in-out property <string> new-relay-name;
+    in-out property <string> new-relay-url;
+    callback save-relays();
+    callback cancel-relays();
+    callback add-relay(string, string);
+    callback remove-relay(string);
+    callback scan(bool);
+    callback grant-permissions();
+    callback open-settings();
+    callback clear-calls();
+    callback open-contact-page(string);
+    callback set-favourite(string, bool);
+    callback toggle-selected(string);
+    callback long-pressed();
+    callback clear-selection();
+    callback remove-selected();
+    // The system back gesture, already accepted by `back-stop`. Whoever handles it closes the
+    // innermost thing on screen, or steps the app into the background.
+    callback back();
+    // The window draws under the system bars, so what shows through them is our own ground.
+    // Android paints their icons, and only we know which shade they have to read against.
+    // A change callback is evaluated eagerly, so this fires even though nothing reads it.
+    // What is behind the bars is whatever is on top: a call, a dimmed sheet and the scanner
+    // are dark whatever the theme says, so only a bare page follows it.
+    callback bars-changed(bool);
+    // The two settings the user can change. Read back rather than driven from here: the rows
+    // write straight to the theme, and this says so afterwards for whoever stores it.
+    callback appearance-changed(Appearance);
+    out property <Appearance> appearance: Theme.appearance;
+    changed appearance => { root.appearance-changed(self.appearance); }
+    callback language-changed(Language);
+    out property <Language> language: Theme.language;
+    changed language => { root.language-changed(self.language); }
+    out property <bool> bars-light: !Theme.dark
+        && root.call-state == CallState.idle
+        && root.confirming == Confirm.none
+        && !root.editing-relays
+        && !root.scanning
+        && root.pending-key.length == 0;
+    changed bars-light => { root.bars-changed(self.bars-light); }
+
+    title: "uplink";
+    background: Theme.ground;
+    // 1rem is Material 3's body-large, so the design's sizes read as their roles: 1.5rem
+    // headline-small, 0.8125rem the 13px fingerprints. Android scales it with the system size.
+    default-font-size: 16px;
+    // Prose is Public Sans; Outfit and Plex Mono are asked for by the elements that want them.
+    default-font-family: "Public Sans";
+    // The palette is left alone: Slint's Android backend fills it from the system's night
+    // mode, and writing it here would pin the app to one theme and make `Theme.system-dark`
+    // read back whatever we just wrote.
+
+    // A call that ends while folded unfolds, so the next one opens on the call screen. These
+    // sit outside the scope below because `changed` belongs to whatever declares it.
+    changed call-state => {
+        if (self.call-state == CallState.idle) {
+            self.call-folded = false;
+        }
+    }
+    // A second message restarts the clock instead of inheriting what is left of the first's.
+    changed toast => {
+        if (self.toast.length > 0) {
+            toast-timer.restart();
+        }
+    }
+
+    // Everything lives inside this, so that Back reaches it. Slint's Android backend turns
+    // the system gesture into a `Key.Back` press, and if nothing *accepts* it, finishes the
+    // activity — which for this app means dropping the endpoint that incoming calls arrive
+    // at. Rejected keys travel up to the parent, so a scope wrapping the window sees Back
+    // even when a text field has focus and ignored it. Accepting it always is the point.
+    back-stop := FocusScope {
+        // Qualified: a bare `accept` would resolve to this window's own `accept` callback,
+        // the one that answers a ringing call.
+        key-pressed(event) => {
+            if (event.text == Key.Back) {
+                root.back();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        // Nothing else takes focus on its own, so keys start here; anything that borrows it
+        // rejects Back anyway, and a rejected key travels back up to this scope.
+        init => { self.focus(); }
+
+        // Pages and the tab bar share the window: the bar takes space, not the content's.
+        VerticalLayout {
+            Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+                if root.screen == Screen.people : PeoplePage {
+                    top-inset: root.safe-area-insets.top;
+                    online: root.online;
+                    contacts: root.contacts;
+                    reveal: root.contacts-reveal;
+                    selecting: root.selecting;
+                    selected-count: root.selected-count;
+                    call(id) => { root.call(id); }
+                    open(id) => { root.open-contact-page(id); }
+                    connect => { root.screen = Screen.connect; }
+                    select(id) => { root.toggle-selected(id); }
+                    start-selecting => { root.selecting = true; }
+                    long-pressed => { root.long-pressed(); }
+                    remove-selected => { root.confirming = Confirm.remove-selected; }
+                }
+                if root.screen == Screen.calls : CallsPage {
+                    top-inset: root.safe-area-insets.top;
+                    calls: root.calls;
+                    selecting: root.selecting-calls;
+                    selected-count: root.selected-calls-count;
+                    call(id) => { root.call(id); }
+                    clear => { root.confirming = Confirm.clear-calls; }
+                    select(entry) => { root.toggle-call-selected(entry); }
+                    open(entry) => { root.show-call(entry); }
+                    start-selecting => { root.selecting-calls = true; }
+                    long-pressed => { root.long-pressed(); }
+                    remove-selected => { root.confirming = Confirm.remove-selected-calls; }
+                }
+                if root.screen == Screen.connect : ConnectPage {
+                    top-inset: root.safe-area-insets.top;
+                    qr: root.qr;
+                    mark: root.qr-mark;
+                    fingerprint: root.my-fingerprint;
+                    scan => { root.scan(true); }
+                    pick => { root.pick-key(); }
+                    share => { root.share-key(); }
+                    copy => { root.copy-key(); }
+                }
+                if root.screen == Screen.settings : SettingsPage {
+                    top-inset: root.safe-area-insets.top;
+                    relays-on: root.relays-on;
+                    battery-unrestricted: root.battery-unrestricted;
+                    full-screen-calls: root.full-screen-calls;
+                    maker-list: root.maker-list;
+                    share-diagnostics => { root.share-diagnostics(); }
+                    edit-relays => { root.editing-relays = true; }
+                    allow-battery => { root.allow-battery(); }
+                    allow-full-screen-calls => { root.allow-full-screen-calls(); }
+                    open-maker-list => { root.open-maker-list(); }
+                }
+            }
+            Tabs {
+                screen <=> root.screen;
+                bottom-inset: root.safe-area-insets.bottom;
+            }
+        }
+
+        // Shrunk by the system: the remote picture fills the window and nothing else is
+        // drawn, because the system draws the buttons over it and there is room for no more.
+        if root.call-pip : Rectangle {
+            background: Theme.video;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                // Always the other person, whatever the full screen was showing when it
+                // shrank. A window this small is for watching them, not yourself.
+                source: root.remote-frame;
+                image-fit: cover;
+            }
+        }
+
+        // Overlays: declared last, so they cover the pages and the tab bar.
+        if root.call-state != CallState.idle && !root.call-folded && !root.call-pip : CallScreen {
+            frame: root.frame;
+            remote-frame: root.remote-frame;
+            peer-name: root.peer-name;
+            peer-initial: root.peer-initial;
+            timer: root.call-timer;
+            key-exchange: root.key-exchange;
+            route: root.call-route;
+            video-failed: root.video-failed;
+            state: root.call-state;
+            swapped <=> root.swapped;
+            mic-on: root.mic-on;
+            speaker-on: root.speaker-on;
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            accept => { root.accept(); }
+            reject => { root.reject(); }
+            hangup => { root.hangup(); }
+            toggle-mic => { root.toggle-mic(); }
+            toggle-speaker => { root.toggle-speaker(); }
+            flip-camera => { root.flip-camera(); }
+            minimise => { root.call-folded = true; }
+        }
+
+        // The folded call, over the pages and the tab bar but under anything that wants an
+        // answer.
+        if root.call-state != CallState.idle && root.call-folded && !root.call-pip : MiniCall {
+            // The other person, like the shrunken window: your own face is the one thing you
+            // do not need a corner of the screen for.
+            frame: root.remote-frame;
+            timer: root.call-timer;
+            top-clear: root.safe-area-insets.top;
+            bottom-clear: root.safe-area-insets.bottom + Theme.tab-height;
+            area-width: root.width;
+            area-height: root.height;
+            pos-x <=> root.call-fold-x;
+            pos-y <=> root.call-fold-y;
+            placed <=> root.call-fold-placed;
+            restore => { root.call-folded = false; }
+        }
+
+        // The scanner takes the whole screen, tabs and all. Under the toast, which is how a
+        // code that is not ours gets said while it runs.
+        if root.scanning : ScanPage {
+            frame: root.frame;
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            close => { root.scan(false); }
+            pick => {
+                root.scan(false);
+                root.pick-key();
+            }
+        }
+
+        // Slint has no toast widget, but it has a Timer, so the dismissal lives here rather
+        // than in every caller.
+        toast-timer := Timer {
+            interval: Theme.toast-life;
+            running: root.toast.length > 0;
+            triggered() => { root.toast = []; }
+        }
+        for message in root.toast : ToastCard {
+            toast: message;
+            y: parent.height - self.height - root.safe-area-insets.bottom - Theme.toast-bottom;
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+        }
+
+        if root.editing-relays : RelaySheet {
+            relays: root.relays;
+            custom-relays: root.custom-relays;
+            custom <=> root.relays-custom;
+            new-name <=> root.new-relay-name;
+            new-url <=> root.new-relay-url;
+            keyboard: root.virtual-keyboard-size.height;
+            add(name, url) => { root.add-relay(name, url); }
+            remove(host) => { root.remove-relay(host); }
+            save => {
+                root.editing-relays = false;
+                root.save-relays();
+            }
+            cancel => {
+                root.editing-relays = false;
+                root.cancel-relays();
+            }
+        }
+
+        // One call from the log, over the tabs. Under the naming sheet, which Add opens, and
+        // under the confirm sheet, which Remove opens.
+        for call in root.open-call : CallPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            call: call;
+            call-back => {
+                root.call(call.peer);
+                root.open-call = [];
+            }
+            add => { root.pending-key = [call.peer]; }
+            remove => { root.confirming = Confirm.remove-call; }
+            close => { root.open-call = []; }
+        }
+
+        // A key that has arrived and has no name yet, over everything below it.
+        for key in root.pending-key : NameSheet {
+            key: key;
+            keyboard: root.virtual-keyboard-size.height;
+            name <=> root.new-name;
+            problem <=> root.add-problem;
+            add(name) => { root.add-contact(name, key); }
+            cancel => {
+                root.pending-key = [];
+                root.new-name = "";
+                root.add-problem = [];
+            }
+        }
+
+        // A contact takes the window, over the tabs, until it is dismissed.
+        for contact in root.open-contact : ContactPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            contact: contact;
+            draft <=> root.new-name;
+            call => { root.call(contact.id); }
+            toggle-favourite => { root.set-favourite(contact.id, !contact.favourite); }
+            rename(name) => { root.rename-contact(contact.id, name); }
+            remove => { root.confirming = Confirm.remove-contact; }
+            close => { root.open-contact = []; }
+        }
+
+        // Nothing here happens on the tap that asked for it. Above every page and sheet that
+        // can ask, since later siblings draw on top: under the contact page it was invisible,
+        // and closing the page to find it cleared the contact it was meant to remove.
+        if root.confirming != Confirm.none : ConfirmSheet {
+            title: root.confirming == Confirm.clear-calls ? @tr("Clear the call log?")
+                : root.confirming == Confirm.remove-call ? @tr("Remove this call?")
+                : root.confirming == Confirm.remove-selected-calls
+                    ? @tr("Remove {n} call?" | "Remove {n} calls?" % root.selected-calls-count)
+                : root.confirming == Confirm.remove-selected
+                    ? @tr("Remove {n} contact?" | "Remove {n} contacts?" % root.selected-count)
+                : @tr("Remove {}?", root.open-contact[0].name);
+            body: root.confirming == Confirm.clear-calls
+                ? @tr("Every call is forgotten. It does not affect your contacts.")
+                : root.confirming == Confirm.remove-selected-calls || root.confirming == Confirm.remove-call
+                ? @tr("It leaves the call log. It does not affect your contacts.")
+                : @tr("Their key goes with them. You would need it again to call them, and they can still call you.");
+            confirm-label: root.confirming == Confirm.clear-calls ? @tr("Clear") : @tr("Remove");
+            confirm => {
+                if (root.confirming == Confirm.clear-calls) {
+                    root.clear-calls();
+                } else if (root.confirming == Confirm.remove-call) {
+                    root.remove-call(root.open-call[0].entry);
+                    root.open-call = [];
+                } else if (root.confirming == Confirm.remove-selected-calls) {
+                    root.remove-selected-calls();
+                } else if (root.confirming == Confirm.remove-selected) {
+                    root.remove-selected();
+                } else {
+                    root.remove-contact(root.open-contact[0].id);
+                    root.open-contact = [];
+                }
+                root.confirming = Confirm.none;
+            }
+            cancel => { root.confirming = Confirm.none; }
+        }
+
+        // A notice over everything the user might be doing: a call that could not happen
+        // is news whichever screen it arrives on.
+        for mismatch in root.notice : NoticeSheet {
+            mismatch: mismatch;
+            close => { root.notice = []; }
+        }
+
+        // Nothing behind this is reachable until all three are granted.
+        if root.gate : PermissionsPage {
+            top-inset: root.safe-area-insets.top;
+            permissions: root.permissions;
+            blocked: root.permissions-blocked;
+            grant => { root.grant-permissions(); }
+            settings => { root.open-settings(); }
+        }
+
+        if root.battery-ask && !root.gate : BatteryPage {
+            top-inset: root.safe-area-insets.top;
+            allow => { root.allow-battery(); }
+            skip => { root.skip-battery(); }
+        }
+
+        // Over everything until the endpoint is up. It fades rather than being torn out: the
+        // ground does not change across the handover, so all that leaves is the mark.
+        splash := Splash {
+            opacity: root.booting ? 1.0 : 0.0;
+            visible: self.opacity > 0.0;
+            animate opacity { duration: 420ms; easing: ease-out; }
+        }
+    }
+}

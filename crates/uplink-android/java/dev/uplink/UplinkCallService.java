@@ -83,7 +83,7 @@ public class UplinkCallService extends Service {
      */
     private static void createChannel(Context context) {
         NotificationChannel channel =
-                new NotificationChannel(CHANNEL, "Calls", NotificationManager.IMPORTANCE_DEFAULT);
+                new NotificationChannel(CHANNEL, app(context).text(R.string.channel_calls), NotificationManager.IMPORTANCE_DEFAULT);
         channel.setSound(null, null);
         channel.enableVibration(false);
         context.getSystemService(NotificationManager.class).createNotificationChannel(channel);
@@ -98,13 +98,14 @@ public class UplinkCallService extends Service {
                 // Our own mark, cropped to its bounds: the system draws a small icon flat from
                 // its alpha, so it is a silhouette that should fill the box rather than sit in
                 // a launcher icon's safe zone.
-                .setSmallIcon(drawable(context, "notification"))
+                .setSmallIcon(R.drawable.notification)
                 .setContentIntent(tap)
                 .setOngoing(true)
                 .setColor(ACCENT)
                 .setColorized(true);
         Notification.Action mute =
-                action(context, micOn ? "mic" : "mic_off", micOn ? "Mute" : "Unmute", UplinkActivity.ACTION_MIC);
+                action(context, micOn ? R.drawable.mic : R.drawable.mic_off, micOn ? R.string.mute : R.string.unmute,
+                        UplinkActivity.ACTION_MIC);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Names the person and owns the hang-up itself; the mute rides along beside it.
             Person who = new Person.Builder().setName(peer).setImportant(true).build();
@@ -119,17 +120,21 @@ public class UplinkCallService extends Service {
                     ? context.getApplicationInfo().loadLabel(context.getPackageManager())
                     : peer;
             builder.setContentTitle(title)
-                    .setContentText("Call in progress")
-                    .addAction(action(context, "call_end", "End call", UplinkActivity.ACTION_HANGUP))
+                    .setContentText(app(context).text(R.string.call_in_progress))
+                    .addAction(action(context, R.drawable.call_end, R.string.end_call, UplinkActivity.ACTION_HANGUP))
                     .addAction(mute);
         }
         return builder.build();
     }
 
-    private static Notification.Action action(Context context, String drawable, String title, int code) {
+    private static Notification.Action action(Context context, int drawable, int title, int code) {
         return new Notification.Action.Builder(
-                        Icon.createWithResource(context, drawable(context, drawable)), title, pending(context, code))
+                        Icon.createWithResource(context, drawable), app(context).text(title), pending(context, code))
                 .build();
+    }
+
+    private static UplinkApplication app(Context context) {
+        return (UplinkApplication) context.getApplicationContext();
     }
 
     /** The same broadcast the picture-in-picture buttons send, so a tap means one thing. */
@@ -139,11 +144,6 @@ public class UplinkCallService extends Service {
                 .putExtra(UplinkActivity.EXTRA_ACTION, code);
         return PendingIntent.getBroadcast(
                 context, code, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-    }
-
-    /** By name: the resource table is ours, and there is no generated R class to look in. */
-    private static int drawable(Context context, String name) {
-        return context.getResources().getIdentifier(name, "drawable", context.getPackageName());
     }
 
     @Override

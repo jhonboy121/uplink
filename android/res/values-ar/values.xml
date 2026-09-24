@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Arabic for what values.xml says outside the window. A name, a version or an error inside an
+  Arabic sentence is wrapped in the invisible U+2068 FIRST STRONG ISOLATE … U+2069 POP DIRECTIONAL
+  ISOLATE, so Latin punctuation stays on its own side of it.
+-->
+<resources>
+    <string name="ready">جاهز للمكالمات</string>
+    <string name="ready_text">uplink متاح للاتصال</string>
+    <string name="starting">جارٍ التشغيل</string>
+    <string name="starting_text">uplink يتصل بالشبكة</string>
+
+    <string name="channel_calls">المكالمات</string>
+    <string name="call_in_progress">مكالمة جارية</string>
+    <string name="mute">كتم الصوت</string>
+    <string name="unmute">إلغاء الكتم</string>
+    <string name="end_call">إنهاء المكالمة</string>
+
+    <string name="channel_ring">المكالمات الواردة</string>
+    <string name="incoming_video_call">مكالمة فيديو واردة</string>
+    <string name="decline">رفض</string>
+    <string name="answer">رد</string>
+
+    <string name="channel_missed">المكالمات الفائتة</string>
+    <plurals name="missed_calls">
+        <item quantity="zero">لا مكالمات فائتة</item>
+        <item quantity="one">مكالمة فائتة</item>
+        <item quantity="two">مكالمتان فائتتان</item>
+        <item quantity="few">%d مكالمات فائتة</item>
+        <item quantity="many">%d مكالمة فائتة</item>
+        <item quantity="other">%d مكالمة فائتة</item>
+    </plurals>
+    <string name="missed_latest">آخرها من ⁨%1$s⁩</string>
+
+    <string name="channel_update">تحديثات مطلوبة</string>
+    <string name="update_ours_title">حدّث uplink</string>
+    <string name="update_theirs_title">على ⁨%1$s⁩ تحديث uplink</string>
+    <string name="update_ours_text">لدى ⁨%1$s⁩ إصدار uplink أحدث (⁨%2$s⁩) من إصدارك (⁨%3$s⁩). حدّث إصدارك لتتمكنا من الاتصال ببعضكما.</string>
+    <string name="update_theirs_text">إصدار uplink لديهم (⁨%1$s⁩) أقدم من إصدارك (⁨%2$s⁩). يمكنكما الاتصال ببعضكما بعد أن يحدّثوه.</string>
+    <string name="unknown_version">إصدار غير معروف</string>
+
+    <string name="share_identity">رمز uplink الخاص بي</string>
+    <string name="share_diagnostics">تشخيص uplink</string>
+    <string name="copy_key_label">مفتاح uplink</string>
+    <string name="card_caption">امسح للتواصل</string>
+</resources>

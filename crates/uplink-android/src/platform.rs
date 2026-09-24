@@ -37,6 +37,17 @@ const SHARE_DIR: &str = "share";
 /// field, which is the whole problem being worked around.
 const NOTIFICATIONS_SDK: jint = 33;
 
+/// Words Rust needs itself, which live with every other word outside the window: in Android's
+/// resources, in the app's language. The order is the index Java looks them up by — must match
+/// `UplinkApplication.RUST_TEXTS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Text {
+    CardCaption,
+    ShareIdentity,
+    ShareDiagnostics,
+    CopyKeyLabel,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
     Camera,
@@ -152,18 +163,40 @@ impl AppContext {
         })
     }
 
-    /// A notification that a call could not happen until one phone updates, when uplink is not in
-    /// front to say it on screen.
-    pub fn update_needed(&self, title: &str, text: &str) -> Result<(), Error> {
+    /// A notification that a call could not happen until one phone updates — ours when
+    /// `ours_behind`, else `name`'s — when uplink is not in front to say it on screen. An unknown
+    /// version is empty; Java words it.
+    pub fn update_needed(&self, ours_behind: bool, name: &str, theirs: &str, ours: &str) -> Result<(), Error> {
         self.with(|env, application| {
-            let (title, text) = (env.new_string(title)?, env.new_string(text)?);
+            let (name, theirs, ours) = (env.new_string(name)?, env.new_string(theirs)?, env.new_string(ours)?);
             env.call_method(
                 application,
                 jni_str!("updateNeeded"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
-                &[JValue::Object(&title), JValue::Object(&text)],
+                jni_sig!("(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+                &[JValue::Bool(ours_behind), JValue::Object(&name), JValue::Object(&theirs), JValue::Object(&ours)],
             )?;
             Ok(())
+        })
+    }
+
+    /// The language everything outside the window speaks, as a `values-` folder names it; empty
+    /// follows the phone. Java keeps it too, for a boot that posts before the core is up.
+    pub fn set_language(&self, code: &str) -> Result<(), Error> {
+        self.with(|env, application| {
+            let code = env.new_string(code)?;
+            env.call_method(application, jni_str!("setLanguage"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&code)])?;
+            Ok(())
+        })
+    }
+
+    /// One of the few words Rust needs itself, in the app's language.
+    pub fn text(&self, text: Text) -> Result<String, Error> {
+        let which = text as jint;
+        self.with(|env, application| {
+            let words = env
+                .call_method(application, jni_str!("rustText"), jni_sig!("(I)Ljava/lang/String;"), &[JValue::Int(which)])?
+                .l()?;
+            java_string(env, words)
         })
     }
 

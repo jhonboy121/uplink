@@ -4,14 +4,14 @@ The design is the specification. Where the build differs, **the build changes** 
 rationale for a divergence. An earlier session marked nine real gaps "closed" by explaining why the
 build's choice was better; all nine were wrong and had to be undone.
 
-Read this before touching `crates/uplink/src/ui.rs`.
+Read this before touching the markup in `crates/uplink/ui/`.
 
 ## The two sources of truth
 
 | | Where | Command |
 |---|---|---|
 | Design | `docs/design/uplink-call-ui.html` (the locked mockup, vendored from the artifact) | `just design-measure`, `just design-shot <Screen>` |
-| Build | `crates/uplink/src/ui.rs`, compiled by `tools/ui-preview` | `just preview` |
+| Build | `crates/uplink/ui/*.slint` (via `src/ui.rs`), compiled by `tools/ui-preview` | `just preview` |
 | Both | — | `just ui-diff <build-name> <Screen>` |
 
 Screens are named by the mockup's own captions: `People`, `Add someone`, `Settings`, `In a call`,
@@ -72,10 +72,21 @@ shows more rows, not bigger ones** — never rescale the design to the canvas.
 - A constant `dx -2` between the two images is antialiasing (a pale circle on white loses its edge
   pixel, the same circle on dark does not), not a layout difference. Check the right edges.
 
+## Refactoring without moving anything
+
+A change that should not move anything (a split, a new shared component) is checked by diffing
+the element tables of `just preview` before and after: keep the painted rows only (text, fill,
+image) and ignore element names, which a refactor changes. The 2026-09-24 split into `ui/*.slint`
+and the move to a flexbox `Row` came out identical but for **1px** shifts: a text centred at
+y=105.5 used to be truncated to 105 and taffy (the flexbox solver) rounds it to 106. That is
+sub-pixel, not a layout change. Anything over 1px is real.
+
 ## Assets
 
 Everything lives in `assets/`, addressed through one `#[include_path = "../../../assets"]` at the
-top of the `slint!` macro — never a relative path repeated at each use.
+top of the `slint!` macro — never a relative path repeated at each use. Slint resolves an include
+path against *each importing file's own folder*, so `crates/uplink/ui/` stays flat and as deep as
+`src/`: a `.slint` file one folder deeper would look for `crates/assets`.
 
 - `assets/fonts/` — Outfit (400/600), Public Sans (400/600/700), IBM Plex Mono (400/500) as static
   per-weight TTFs, with their OFL licences. Google Fonts serves only variable fonts now, so these

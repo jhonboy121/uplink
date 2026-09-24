@@ -1,0 +1,242 @@
+// Everything that is not a person: staying reachable, how the app looks and reads, relays, and
+// the log.
+
+import { ScrollView } from "std-widgets.slint";
+import { Appearance, Language, Theme } from "theme.slint";
+import { AppBar, Brand, PageTitle, Row, Tap } from "controls.slint";
+
+// A group of settings on its own inset surface. The surface does the grouping a label used
+// to, so no group is named.
+component SettingsGroup inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    clip: true;
+    VerticalLayout {
+        @children
+    }
+}
+
+// Between two rows of a group. It starts where the text does, so the tiles read as one
+// column rather than as boxes cut apart.
+component SettingsDivider inherits Rectangle {
+    height: Theme.hairline-width;
+    property <length> inset: Theme.setting-pad + Theme.setting-tile + Theme.setting-gap;
+    Rectangle {
+        x: Theme.rtl ? 0 : root.inset;
+        width: parent.width - root.inset;
+        height: parent.height;
+        background: Theme.group-hairline;
+    }
+}
+
+// What a setting is on the start side, what it is set to on the end side, and a tile with
+// its icon ahead of both. The value is in the accent only when tapping it does something.
+component SettingsRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail;
+    in property <string> value;
+    in property <bool> tappable: true;
+    callback clicked();
+    height: Theme.setting-height;
+    // Must be constant; a row that does nothing when tapped says so through `enabled` below.
+    accessible-role: button;
+    accessible-enabled: root.tappable;
+    accessible-label: root.title;
+    accessible-description: root.detail;
+    accessible-value: root.value;
+    accessible-action-default => {
+        if (root.tappable) {
+            root.clicked();
+        }
+    }
+    touch := Tap {
+        enabled: root.tappable;
+        mouse-cursor: root.tappable ? pointer : default;
+        tapped => { root.clicked(); }
+    }
+    background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+    animate background { duration: Theme.feedback; easing: ease-out; }
+    Row {
+        padding-left: Theme.setting-pad;
+        padding-right: Theme.setting-pad;
+        spacing: Theme.setting-gap;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.setting-tile;
+                height: self.width;
+                border-radius: Theme.setting-tile-radius;
+                background: Theme.raised;
+                Image {
+                    source: root.icon;
+                    width: Theme.setting-icon;
+                    height: self.width;
+                    colorize: Theme.beacon;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 1rem;
+                font-weight: 700;
+                height: Theme.setting-title-box;
+                vertical-alignment: center;
+                horizontal-alignment: Theme.start;
+                overflow: elide;
+            }
+            Text {
+                text: root.detail;
+                color: Theme.muted;
+                font-size: 0.8125rem;
+                height: Theme.setting-detail-box;
+                vertical-alignment: center;
+                horizontal-alignment: Theme.start;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.value;
+                color: root.tappable ? Theme.beacon : Theme.muted;
+                font-size: 0.908rem;
+                font-family: Theme.mono;
+                height: self.font-size * Theme.line-box;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <int> relays-on;
+    in property <bool> battery-unrestricted;
+    in property <bool> full-screen-calls;
+    in property <bool> maker-list;
+    callback share-diagnostics();
+    callback edit-relays();
+    callback allow-battery();
+    callback allow-full-screen-calls();
+    callback open-maker-list();
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: @tr("Settings");
+                horizontal-stretch: 1;
+            }
+            Brand { }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            // A finger drags the list itself; without this only the scrollbar moves it.
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-left: Theme.group-edge;
+                padding-right: Theme.group-edge;
+                padding-bottom: Theme.group-edge;
+                spacing: Theme.group-gap;
+                // First, because it is the one group that silently costs calls. The first
+                // two are read back from Android and say so; the maker's list cannot be read,
+                // so its row offers the screen and claims nothing.
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/battery.svg");
+                        title: @tr("Battery");
+                        detail: @tr("Wait for calls while asleep");
+                        value: root.battery-unrestricted ? @tr("Allowed") : @tr("Allow");
+                        tappable: !root.battery-unrestricted;
+                        clicked => { root.allow-battery(); }
+                    }
+                    SettingsDivider { }
+                    SettingsRow {
+                        icon: @image-url("icons/lock.svg");
+                        title: @tr("Lock screen calls");
+                        detail: @tr("Ring over the lock screen");
+                        value: root.full-screen-calls ? @tr("Allowed") : @tr("Allow");
+                        tappable: !root.full-screen-calls;
+                        clicked => { root.allow-full-screen-calls(); }
+                    }
+                    if root.maker-list : SettingsDivider { }
+                    if root.maker-list : SettingsRow {
+                        icon: @image-url("icons/apps.svg");
+                        title: @tr("Background apps");
+                        detail: @tr("Your phone's own list");
+                        value: @tr("Open");
+                        clicked => { root.open-maker-list(); }
+                    }
+                }
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/theme.svg");
+                        title: @tr("Theme");
+                        detail: Theme.appearance == Appearance.system ? @tr("Follows the system") : @tr("Set on this phone");
+                        value: Theme.appearance == Appearance.system ? @tr("System")
+                            : Theme.appearance == Appearance.light ? @tr("Light")
+                            : @tr("Dark");
+                        clicked => {
+                            Theme.appearance = Theme.appearance == Appearance.system ? Appearance.light
+                                : Theme.appearance == Appearance.light ? Appearance.dark
+                                : Appearance.system;
+                        }
+                    }
+                    SettingsDivider { }
+                    // Each language is named in itself, so someone who cannot read the one on
+                    // screen can still find their own.
+                    SettingsRow {
+                        icon: @image-url("icons/language.svg");
+                        title: @tr("Language");
+                        detail: Theme.language == Language.system ? @tr("Follows the phone") : @tr("Set on this phone");
+                        value: Theme.language == Language.system ? @tr("System")
+                            : Theme.language == Language.english ? "English"
+                            : "العربية";
+                        clicked => {
+                            Theme.language = Theme.language == Language.system ? Language.english
+                                : Theme.language == Language.english ? Language.arabic
+                                : Language.system;
+                        }
+                    }
+                }
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/video.svg");
+                        title: @tr("Call quality");
+                        detail: @tr("Caps what the camera sends");
+                        value: "720p · 30";
+                        tappable: false;
+                    }
+                    SettingsDivider { }
+                    // The count rather than the list: which relays are on is a detail, and
+                    // how many is the part worth seeing without opening anything.
+                    SettingsRow {
+                        icon: @image-url("icons/relays.svg");
+                        title: @tr("Relays");
+                        detail: @tr("When a direct path won't form");
+                        value: @tr("{} on", root.relays-on);
+                        clicked => { root.edit-relays(); }
+                    }
+                }
+                // Not shown, sent. A log on a phone screen helps nobody; a log in a chat
+                // message is the only way a fault on someone else's phone reaches us.
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/share.svg");
+                        title: @tr("Diagnostics");
+                        detail: @tr("Send the log to the fixer");
+                        value: @tr("Share");
+                        clicked => { root.share-diagnostics(); }
+                    }
+                }
+            }
+        }
+    }
+}

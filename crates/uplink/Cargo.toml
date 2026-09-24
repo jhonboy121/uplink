@@ -18,11 +18,16 @@ rtrb.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
 slint.workspace = true
+sys-locale.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 uplink-android.workspace = true
 uplink-core.workspace = true
+
+# Turns on translation bundling in the `slint!` macro; see the workspace manifest.
+[build-dependencies]
+i-slint-compiler.workspace = true
 
 [lints]
 workspace = true
