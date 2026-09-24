@@ -11,7 +11,7 @@ slint::slint! {
     // resolved against this file, so the app and the preview tool both find them.
     #[include_path = "../../../assets"]
 
-    import { LineEdit, ScrollView, Palette } from "std-widgets.slint";
+    import { CheckBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
 
     // The design's three faces, vendored in assets/fonts and registered from the markup itself,
     // so no build script is involved. Outfit names things, Public Sans carries prose, and
@@ -69,6 +69,15 @@ slint::slint! {
         tint: int,
         favourite: bool,
         selected: bool,
+    }
+
+    // A relay the endpoint may use. `host` is what settings store, not what is shown: two relays
+    // in one region would read alike otherwise.
+    export struct RelayItem {
+        host: string,
+        name: string,
+        region: string,
+        on: bool,
     }
 
     export enum Appearance { system, light, dark }
@@ -898,6 +907,182 @@ slint::slint! {
         }
     }
 
+    // Which relays the endpoint may use. A sheet rather than rows on the settings page, because
+    // these are edited as a set: ticking three boxes one at a time would rebind the endpoint
+    // three times, and two of those states are ones nobody asked for.
+    // One relay in the sheet: what it is called, where it is, and the one thing you can do to it.
+    component RelayRow inherits HorizontalLayout {
+        in property <RelayItem> relay;
+        in property <bool> removable: false;
+        in-out property <bool> on;
+        callback remove();
+        spacing: Theme.value-gap;
+        // Fixed, because the list's height is counted in rows rather than measured. A scroll
+        // view has no preferred height of its own to give the sheet.
+        height: Theme.detail-height;
+        if !root.removable : CheckBox {
+            checked: root.on;
+            toggled => { root.on = self.checked; }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.relay.name;
+                color: Theme.text;
+                font-size: 1rem;
+                font-weight: 700;
+                height: self.font-size * Theme.line-box;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.relay.region;
+                color: Theme.muted;
+                font-size: 0.8125rem;
+                height: self.font-size * Theme.line-box;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        if root.removable : VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Remove";
+                color: Theme.end;
+                font-size: 0.8125rem;
+                font-weight: 700;
+                vertical-alignment: center;
+                accessible-role: button;
+                accessible-label: "Remove " + root.relay.name;
+                accessible-action-default => { root.remove(); }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.remove(); }
+                }
+            }
+        }
+    }
+
+    component RelaySheet inherits Rectangle {
+        in property <[RelayItem]> relays;
+        in property <[RelayItem]> custom-relays;
+        in-out property <bool> custom;
+        in-out property <string> new-name;
+        in-out property <string> new-url;
+        in property <length> keyboard;
+        callback save();
+        callback cancel();
+        callback add(string, string);
+        callback remove(string);
+        background: #000000CC;
+
+        // Swallows taps on the dimmed area so nothing behind the sheet reacts.
+        TouchArea { }
+
+        Rectangle {
+            width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
+            height: min(body.preferred-height, parent.height - root.keyboard - Theme.edge * 2);
+            y: max(Theme.edge, (parent.height - root.keyboard - self.height) / 2);
+            animate y { duration: 180ms; easing: ease-out; }
+            border-radius: Theme.wide-radius;
+            background: Theme.ground;
+            body := VerticalLayout {
+                padding: Theme.edge;
+                spacing: Theme.stack-gap;
+                Text {
+                    text: "Relays";
+                    color: Theme.text;
+                    font-family: Theme.display;
+                    font-size: 1.1875rem;
+                    font-weight: 600;
+                    height: self.font-size * Theme.line-box;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Each one is contacted every few seconds, call or no call. Using only the ones near you costs nothing and saves battery and mobile data.";
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    wrap: word-wrap;
+                }
+                // Which set is live. Both are listed whichever it is, because you pick the relay
+                // you are moving to before you move to it.
+                HorizontalLayout {
+                    spacing: Theme.value-gap;
+                    Wide {
+                        text: "n0's";
+                        primary: !root.custom;
+                        clicked => { root.custom = false; }
+                    }
+                    Wide {
+                        text: "My own";
+                        primary: root.custom;
+                        enabled: root.custom-relays.length > 0;
+                        clicked => { root.custom = true; }
+                    }
+                }
+                // Counted rather than measured: a ScrollView reports no preferred height of its
+                // own, so a sheet sized to its content would collapse the list to a single row.
+                ScrollView {
+                    height: min(
+                        (root.custom ? root.custom-relays.length : root.relays.length) * Theme.detail-height,
+                        root.height / 3);
+                    mouse-drag-pan-enabled: true;
+                    VerticalLayout {
+                        alignment: start;
+                        if !root.custom : VerticalLayout {
+                            for relay in root.relays : RelayRow {
+                                relay: relay;
+                                on <=> relay.on;
+                            }
+                        }
+                        if root.custom : VerticalLayout {
+                            for relay in root.custom-relays : RelayRow {
+                                relay: relay;
+                                removable: true;
+                                remove => { root.remove(relay.host); }
+                            }
+                        }
+                    }
+                }
+                if root.custom-relays.length == 0 && root.custom : Text {
+                    text: "Add one below to use your own.";
+                    color: Theme.muted;
+                    font-size: 0.8125rem;
+                    wrap: word-wrap;
+                }
+                LineEdit {
+                    placeholder-text: "Name, e.g. Home";
+                    text <=> root.new-name;
+                }
+                LineEdit {
+                    placeholder-text: "https://relay.example.com";
+                    input-type: text;
+                    text <=> root.new-url;
+                    accepted => {
+                        if (root.new-url != "") {
+                            root.add(root.new-name, root.new-url);
+                        }
+                    }
+                }
+                Wide {
+                    text: "Add this relay";
+                    enabled: root.new-url != "";
+                    clicked => { root.add(root.new-name, root.new-url); }
+                }
+                Wide {
+                    text: "Save";
+                    primary: true;
+                    clicked => { root.save(); }
+                }
+                Wide {
+                    text: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+            }
+        }
+    }
+
     // One contact: what you call them, what they call themselves, and the three things you can do
     // to the row besides ring it.
     component ContactPage inherits Rectangle {
@@ -1280,10 +1465,29 @@ slint::slint! {
         }
     }
 
+    // The label over a group of settings. The same treatment the contact list gives a date, so
+    // the two flat lists in this app are divided the same way.
+    component GroupHead inherits HorizontalLayout {
+        in property <string> text;
+        padding-left: Theme.edge;
+        padding-right: Theme.edge;
+        Text {
+            text: root.text;
+            color: Theme.muted;
+            font-family: Theme.mono;
+            font-size: 0.6875rem;
+            letter-spacing: 1.6px;
+            height: Theme.group-head;
+            vertical-alignment: bottom;
+        }
+    }
+
     component SettingsPage inherits Rectangle {
         in property <length> top-inset;
         in property <string> quality;
+        in property <int> relays-on;
         callback share-diagnostics();
+        callback edit-relays();
         background: Theme.ground;
 
         VerticalLayout {
@@ -1301,40 +1505,59 @@ slint::slint! {
                 }
                 Brand { }
             }
-            // A flat list like the design's, hairline above every row including the first.
-            DetailRow {
-                title: "Appearance";
-                detail: Theme.appearance == Appearance.system ? "Follows the system" : "Set on this phone";
-                value: Theme.appearance == Appearance.system ? "System"
-                    : Theme.appearance == Appearance.light ? "Light"
-                    : "Dark";
-                clicked => {
-                    Theme.appearance = Theme.appearance == Appearance.system ? Appearance.light
-                        : Theme.appearance == Appearance.light ? Appearance.dark
-                        : Appearance.system;
+            ScrollView {
+                vertical-stretch: 1;
+                // A finger drags the list itself; without this only the scrollbar moves it.
+                mouse-drag-pan-enabled: true;
+                VerticalLayout {
+                    alignment: start;
+                    GroupHead { text: "Appearance"; }
+                    // A flat list like the design's, hairline above every row including the first.
+                    DetailRow {
+                        title: "Theme";
+                        detail: Theme.appearance == Appearance.system ? "Follows the system" : "Set on this phone";
+                        value: Theme.appearance == Appearance.system ? "System"
+                            : Theme.appearance == Appearance.light ? "Light"
+                            : "Dark";
+                        clicked => {
+                            Theme.appearance = Theme.appearance == Appearance.system ? Appearance.light
+                                : Theme.appearance == Appearance.light ? Appearance.dark
+                                : Appearance.system;
+                        }
+                    }
+                    DetailRow {
+                        title: "Layout direction";
+                        detail: "Mirrors every screen, for Arabic";
+                        value: Theme.rtl ? "Right to left" : "Left to right";
+                        clicked => { Theme.rtl = !Theme.rtl; }
+                    }
+                    GroupHead { text: "Calls"; }
+                    DetailRow {
+                        title: "Call quality";
+                        detail: "Caps what the camera sends";
+                        value: root.quality;
+                        tappable: false;
+                    }
+                    GroupHead { text: "Network"; }
+                    // The count rather than the list: which relays are on is a detail, and how
+                    // many is the part worth seeing without opening anything.
+                    DetailRow {
+                        title: "Relays";
+                        detail: "Servers that carry a call when a direct path will not form";
+                        value: root.relays-on + " on";
+                        clicked => { root.edit-relays(); }
+                    }
+                    GroupHead { text: "Troubleshooting"; }
+                    // Not shown, sent. A log on a phone screen helps nobody; a log in a chat
+                    // message is the only way a fault on someone else's phone reaches us.
+                    DetailRow {
+                        title: "Diagnostics";
+                        detail: "Send the log to whoever is fixing this";
+                        value: "Share";
+                        clicked => { root.share-diagnostics(); }
+                    }
                 }
             }
-            DetailRow {
-                title: "Layout direction";
-                detail: "Mirrors every screen, for Arabic";
-                value: Theme.rtl ? "Right to left" : "Left to right";
-                clicked => { Theme.rtl = !Theme.rtl; }
-            }
-            DetailRow {
-                title: "Call quality";
-                detail: "Caps what the camera sends";
-                value: root.quality;
-                tappable: false;
-            }
-            // Not shown, sent. A log on a phone screen helps nobody; a log in a chat message is
-            // the only way a fault on someone else's phone ever reaches us.
-            DetailRow {
-                title: "Diagnostics";
-                detail: "Send the log to whoever is fixing this";
-                value: "Share";
-                clicked => { root.share-diagnostics(); }
-            }
-            Rectangle { vertical-stretch: 1; }
         }
     }
 
@@ -1752,6 +1975,20 @@ slint::slint! {
         callback pick-key();
         callback share-key();
         callback share-diagnostics();
+        // Which relays the endpoint may use. The sheet edits this model in place; saving writes
+        // it and rebinds, cancelling throws it away and reads the stored set back.
+        in property <[RelayItem]> relays;
+        in property <[RelayItem]> custom-relays;
+        // How many are on, counted where the model is built rather than in the markup.
+        in property <int> relays-on;
+        in-out property <bool> relays-custom;
+        in-out property <bool> editing-relays: false;
+        in-out property <string> new-relay-name;
+        in-out property <string> new-relay-url;
+        callback save-relays();
+        callback cancel-relays();
+        callback add-relay(string, string);
+        callback remove-relay(string);
         callback scan(bool);
         callback grant-permissions();
         callback open-settings();
@@ -1781,6 +2018,7 @@ slint::slint! {
         out property <bool> bars-light: !Theme.dark
             && root.call-state == CallState.idle
             && root.confirming == Confirm.none
+            && !root.editing-relays
             && root.peer-key == "";
         changed bars-light => { root.bars-changed(self.bars-light); }
 
@@ -1870,7 +2108,9 @@ slint::slint! {
                     if root.screen == Screen.settings : SettingsPage {
                         top-inset: root.safe-area-insets.top;
                         quality: root.quality;
+                        relays-on: root.relays-on;
                         share-diagnostics => { root.share-diagnostics(); }
+                        edit-relays => { root.editing-relays = true; }
                     }
                 }
                 Tabs {
@@ -1985,6 +2225,25 @@ slint::slint! {
                     root.confirming = Confirm.none;
                 }
                 cancel => { root.confirming = Confirm.none; }
+            }
+
+            if root.editing-relays : RelaySheet {
+                relays: root.relays;
+                custom-relays: root.custom-relays;
+                custom <=> root.relays-custom;
+                new-name <=> root.new-relay-name;
+                new-url <=> root.new-relay-url;
+                keyboard: root.virtual-keyboard-size.height;
+                add(name, url) => { root.add-relay(name, url); }
+                remove(host) => { root.remove-relay(host); }
+                save => {
+                    root.editing-relays = false;
+                    root.save-relays();
+                }
+                cancel => {
+                    root.editing-relays = false;
+                    root.cancel-relays();
+                }
             }
 
             // A key that has arrived and has no name yet, over everything below it.

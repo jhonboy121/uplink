@@ -23,7 +23,7 @@ use ndk::native_window::NativeWindow;
 use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
-use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
+use slint::{ComponentHandle, Model as _, RenderingState, Timer, TimerMode};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
@@ -39,15 +39,17 @@ use uplink_core::contacts::Contacts;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
+use uplink_core::relays::{self, Relays};
 use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Command, EndReason, Event, NodeHandle};
+use uplink_core::node::{Command, EndReason, Event};
 use uplink_core::EndpointId;
 
 use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, Screen, Theme,
+    App, Appearance, CallItem, CallState, Confirm, ContactItem, Grant, PermissionItem, RelayItem, Screen,
+    Theme,
 };
 use crate::video::{CallVideo, VideoParts};
 
@@ -141,7 +143,10 @@ struct State {
     stats: Arc<FrameStats>,
     /// Commands to the endpoint, which this window borrows rather than owns — the endpoint
     /// belongs to the process and outlives every window it is shown in.
-    calls: Option<NodeHandle>,
+    /// The core rather than its command sender: rebinding replaces the sender, and asking for it
+    /// at the moment a command is sent is what keeps a relay change from stranding the next call
+    /// on a closed endpoint.
+    core: Option<Arc<Core>>,
 }
 
 impl State {
@@ -378,6 +383,29 @@ fn set_peer(ui: &App, name: &str) {
     ui.set_peer_name(name.into());
     let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
     ui.set_peer_initial(initial.into());
+}
+
+/// The relay list as the settings screen reads it. Taken from the store rather than kept in the
+/// UI, so a switch always shows what the next bind will actually use.
+fn show_relays(ui: &App, settings: &Settings) {
+    // n0's set, always listed: you choose the relay you are switching to before you switch, not
+    // after, so both lists are on screen whichever one is live.
+    let published: Vec<RelayItem> = Relays::N0 { off: settings.lines(settings::RELAYS_OFF) }
+        .listed()
+        .into_iter()
+        .map(item)
+        .collect();
+    let custom: Vec<RelayItem> = Relays::Custom(relays::custom(settings)).listed().into_iter().map(item).collect();
+    let uses_custom = relays::uses_custom(settings);
+    let on = if uses_custom { custom.len() } else { published.iter().filter(|relay| relay.on).count() };
+    ui.set_relays_on(i32::try_from(on).unwrap_or(i32::MAX));
+    ui.set_relays_custom(uses_custom);
+    ui.set_custom_relays(slint::ModelRc::new(slint::VecModel::from(custom)));
+    ui.set_relays(slint::ModelRc::new(slint::VecModel::from(published)));
+}
+
+fn item(relay: relays::Relay) -> RelayItem {
+    RelayItem { host: relay.host.into(), name: relay.name.into(), region: relay.region.into(), on: relay.on }
 }
 
 /// Key as groups of four over two even lines, matching what the peer reads out. Lines rather than
@@ -786,6 +814,10 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 fn went_back(ui: &App) -> bool {
     if ui.get_confirming() != Confirm::None {
         ui.set_confirming(Confirm::None);
+    } else if ui.get_editing_relays() {
+        // Back out of the sheet is Cancel, not Save: nothing here is meant to happen by accident.
+        ui.set_editing_relays(false);
+        ui.invoke_cancel_relays();
     } else if !ui.get_peer_key().is_empty() {
         ui.set_peer_key(Default::default());
         ui.set_new_name(Default::default());
@@ -1040,24 +1072,37 @@ fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
     text
 }
 
-fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, "starting");
+fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
+    // Before logging, because finding out whether this process already has a core is what decides
+    // whether logging needs starting at all.
     let (platform, platform_events) = Platform::attach(&app)?;
     let platform = Rc::new(platform);
-    log_previous_exits(&platform);
-    let avc = platform.avc()?;
 
     // The endpoint belongs to the process, not to this window. A second launch of the activity
-    // finds the one already bound rather than binding another.
+    // finds the one already bound rather than binding another — and with it the log writer, which
+    // has been running all along and must not be started a second time on the same file.
     // SAFETY: the handle is one this process leaked below and Java has held ever since.
     let core = match unsafe { Core::from_handle(platform.core_handle()?) } {
         Some(core) => core,
         None => {
-            let core = Arc::new(Core::start(uplink_core::runtime::build(dispatch)?, data_dir)?);
+            let logging = log::init(LOG_TAG, LOG_FILTER, data_dir)?;
+            let core = Arc::new(Core::start(logging, data_dir)?);
             platform.set_core_handle(Arc::clone(&core).into_handle())?;
             core
         }
     };
+    // This window's threads log through the core's subscriber, whichever run created it.
+    let dispatch = core.dispatch();
+    let _log = tracing::dispatcher::set_default(&dispatch);
+    let _panic_hook = PanicHook::install(dispatch.clone());
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        filter = LOG_FILTER,
+        sdk = platform.sdk(),
+        "starting"
+    );
+    log_previous_exits(&platform);
+    let avc = platform.avc()?;
     // Only once the endpoint is really up, so the notification never claims a readiness the app
     // does not have.
     if let Err(e) = platform.set_listening(true) {
@@ -1089,7 +1134,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         pending: None,
         connected_at: None,
         stats: Arc::default(),
-        calls: None,
+        core: None,
     }));
 
     let lifecycle = Rc::clone(&state);
@@ -1235,6 +1280,63 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
             tracing::warn!("storing the layout direction: {e}");
         }
     });
+    let (s, weak, c) = (settings.clone(), ui.as_weak(), Arc::clone(&core));
+    ui.on_save_relays(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        // The model is the sheet's working copy, so this is the first the store hears of it.
+        for relay in ui.get_relays().iter() {
+            if let Err(e) = relays::set_off(&s, &relay.host, !relay.on) {
+                tracing::warn!(host = %relay.host, "storing the relay: {e}");
+            }
+        }
+        if let Err(e) = relays::set_uses_custom(&s, ui.get_relays_custom()) {
+            tracing::warn!("storing the relay source: {e}");
+        }
+        // From the store, not from the model: saved and in use are the same thing, and the rows
+        // should say so even where a write failed.
+        show_relays(&ui, &s);
+        // Rebind rather than wait for a restart — nobody can be asked to relaunch an app to make
+        // a setting they just saved take hold — but off this thread, because closing an endpoint
+        // and binding another is long enough to be seen as the app hanging.
+        let (core, relays) = (Arc::clone(&c), Relays::load(&s));
+        c.runtime().spawn(async move {
+            match core.rebind(relays).await {
+                // Nothing to hand back: whoever sends the next command asks the core for the
+                // sender it has by then, so there is no stale copy anywhere to correct.
+                Ok(()) => tracing::info!("relays applied"),
+                Err(e) => tracing::error!("rebinding for the new relays: {e}"),
+            }
+        });
+    });
+    let (s, weak) = (settings.clone(), ui.as_weak());
+    ui.on_cancel_relays(move || {
+        if let Some(ui) = weak.upgrade() {
+            show_relays(&ui, &s);
+        }
+    });
+    // Adding and removing write through rather than waiting for Save: a list you are building is
+    // not a switch you are flipping, and the endpoint is not touched until Save either way.
+    let (s, weak) = (settings.clone(), ui.as_weak());
+    ui.on_add_relay(move |name, url| {
+        let Some(ui) = weak.upgrade() else { return };
+        match relays::add_custom(&s, &name, &url) {
+            Ok(()) => {
+                ui.set_new_relay_name(Default::default());
+                ui.set_new_relay_url(Default::default());
+                show_relays(&ui, &s);
+            }
+            Err(e) => toast(&ui, e.to_string()),
+        }
+    });
+    let (s, weak) = (settings.clone(), ui.as_weak());
+    ui.on_remove_relay(move |host| {
+        let Some(ui) = weak.upgrade() else { return };
+        if let Err(e) = relays::remove_custom(&s, &host) {
+            tracing::warn!(%host, "removing the relay: {e}");
+        }
+        show_relays(&ui, &s);
+    });
+    show_relays(&ui, &settings);
 
     // The window's own `init` has already run by the time callbacks are set, so the first state
     // is sent from here; the callback only carries the changes after it.
@@ -1276,7 +1378,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
 
     // The endpoint is already bound by the time the window exists, so the splash only has to last
     // as long as the first frame.
-    state.borrow_mut().calls = Some(core.calls().clone());
+    state.borrow_mut().core = Some(Arc::clone(&core));
     ui.set_booting(false);
     // While this window is up it answers for the app; handing the stream back on the way out is
     // what lets anything else take over.
@@ -1500,7 +1602,7 @@ fn run(app: AndroidApp, data_dir: &Path, dispatch: Dispatch) -> Result<()> {
         state.session = None;
         state.audio = None;
         state.call = None;
-        state.calls = None;
+        state.core = None;
     }
     tracing::info!("window closed, endpoint still bound");
     Ok(outcome?)
@@ -1529,11 +1631,12 @@ fn set_call_status(ui: &slint::Weak<App>, status: String) {
 /// Returns whether the node accepted the command. The endpoint may not exist yet, since it binds
 /// while the window is already showing.
 fn send_call_command(state: &Rc<RefCell<State>>, command: Command, ui: &slint::Weak<App>) -> bool {
-    let Some(calls) = state.borrow().calls.clone() else {
+    let Some(core) = state.borrow().core.clone() else {
         set_call_status(ui, "still starting up".into());
         return false;
     };
-    match calls.try_send(command) {
+    // Asked for here, not cached: a rebind between two calls replaces it.
+    match core.calls().try_send(command) {
         Ok(()) => true,
         Err(e) => {
             tracing::error!(?command, "node command: {e}");
@@ -1686,20 +1789,15 @@ async fn handle_node_events(
     }
 }
 
-/// May run several times per process (Android reuses processes), so nothing here is global:
-/// logging and the panic hook are scoped to this call.
+/// May run several times per process (Android reuses processes), so nothing here is global: the
+/// panic hook is scoped to this call, and logging is the core's, which outlives it.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     let data_dir = app.internal_data_path().unwrap_or_else(|| PathBuf::from(FALLBACK_DATA_DIR));
-    // The guard flushes the log writer's worker; logging stops the moment it is dropped.
-    let (dispatch, _writer) = match log::init(LOG_TAG, LOG_FILTER, &data_dir) {
-        Ok(logging) => logging,
-        Err(e) => return log::logcat(LOG_TAG, Level::ERROR, &format!("logging init failed: {e}")),
-    };
-    let _log = tracing::dispatcher::set_default(&dispatch);
-    let _panic_hook = PanicHook::install(dispatch.clone());
-    if let Err(e) = run(app, &data_dir, dispatch.clone()) {
-        tracing::error!("fatal: {e:#}");
+    // Straight to logcat: this is reached when the subscriber never started, or after it has
+    // gone with the core, so it is the one path that cannot rely on `tracing`.
+    if let Err(e) = run(app, &data_dir) {
+        log::logcat(LOG_TAG, Level::ERROR, &format!("fatal: {e:#}"));
     }
 }
 

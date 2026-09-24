@@ -14,12 +14,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use parking_lot::Mutex;
+use tracing::Dispatch;
+use uplink_android::log::Logging;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use uplink_core::db::Db;
 use uplink_core::node::{Event, Network, Node, NodeHandle};
-use uplink_core::{EndpointId, identity};
+use uplink_core::relays::Relays;
+use uplink_core::settings::Settings;
+use uplink_core::{EndpointId, SecretKey, identity};
 
 /// What the app is, minus the looking at it.
 ///
@@ -27,8 +32,13 @@ use uplink_core::{EndpointId, identity};
 /// so everything that depends on it has to be gone before it is.
 pub struct Core {
     /// Commands in. Cloneable and cheap, which is why the UI never needs the `Node` itself.
-    calls: NodeHandle,
+    /// Swapped rather than fixed, because rebinding replaces the endpoint underneath it and a
+    /// copy taken before that would go on addressing one that has been closed.
+    calls: ArcSwap<NodeHandle>,
     id: EndpointId,
+    /// Kept so the endpoint can be rebound without becoming somebody else. The key is the
+    /// identity: contacts, history and any code already scanned all name it.
+    secret: SecretKey,
     db: Db,
     /// Where a window wants events delivered, while there is one. The core consumes the endpoint's
     /// stream itself and forwards through this — rather than handing the stream to whoever is
@@ -37,6 +47,11 @@ pub struct Core {
     /// Holding this is what keeps the endpoint bound; the handle is what everything else uses.
     node: Mutex<Option<Node>>,
     runtime: Runtime,
+    /// Last, so it outlives every field above: the runtime's threads log as they wind down, and
+    /// the writer stops the moment this drops. It lives here rather than in `android_main`
+    /// because that returns when the activity is destroyed — which is exactly when the endpoint
+    /// carries on alone and the log becomes the only way to see it.
+    logging: Logging,
 }
 
 /// Enough for a burst of call state changes; the endpoint never produces them faster than a
@@ -87,23 +102,78 @@ impl Drop for Core {
 impl Core {
     /// Binds the endpoint and opens the database. Blocks until the endpoint is up, because until
     /// it is there is nothing to answer a call with.
-    pub fn start(runtime: Runtime, data_dir: &Path) -> Result<Self> {
+    pub fn start(logging: Logging, data_dir: &Path) -> Result<Self> {
+        let runtime = uplink_core::runtime::build(logging.dispatch())?;
         let secret = runtime.block_on(identity::load_or_create(data_dir))?;
         let id = secret.public();
         let db = Db::open(data_dir)?;
-        let (node, events) = runtime.block_on(Node::start(secret, Network::N0))?;
+        // Read before binding: the relay map is fixed for the life of the endpoint, so a change
+        // made on the settings screen lands the next time the process starts.
+        let relays = Relays::load(&Settings::open(db.clone())?);
+        let (node, events) = runtime.block_on(Node::start(secret.clone(), Network::Public(relays)))?;
         let inbox = Arc::<Mutex<Option<mpsc::Sender<Event>>>>::default();
         runtime.spawn(deliver(events, Arc::clone(&inbox)));
         tracing::info!(%id, "core up");
-        Ok(Self { calls: node.handle(), id, db, inbox, node: Mutex::new(Some(node)), runtime })
+        Ok(Self {
+            calls: ArcSwap::from_pointee(node.handle()),
+            id,
+            secret,
+            db,
+            inbox,
+            node: Mutex::new(Some(node)),
+            runtime,
+            logging,
+        })
+    }
+
+    /// For a thread that wants to log through the one subscriber this process has.
+    pub fn dispatch(&self) -> Dispatch {
+        self.logging.dispatch()
+    }
+
+    /// Binds a new endpoint in place of the current one, for a relay map that has changed.
+    ///
+    /// The identity is the same key, so nothing anyone has saved about us goes stale — only the
+    /// path to us does. Any call in progress ends: an endpoint cannot be moved out from under a
+    /// live connection, and dropping the media without saying so would be worse.
+    ///
+    /// The old endpoint is closed before the new one binds, rather than briefly running two on
+    /// one key, which is not a thing relays or address lookup would thank us for.
+    ///
+    /// Async, and meant to be spawned: closing an endpoint and binding another takes long enough
+    /// to be felt as a freeze if it is done on the thread that draws.
+    pub async fn rebind(&self, relays: Relays) -> Result<()> {
+        let previous = self.node.lock().take();
+        if let Some(previous) = previous {
+            previous.shutdown().await;
+        }
+        let started = Node::start(self.secret.clone(), Network::Public(relays)).await;
+        let (node, events) = match started {
+            Ok(started) => started,
+            // Left with no endpoint at all: say so rather than let the UI keep claiming we are
+            // reachable, since the next launch is now the only thing that can fix it.
+            Err(e) => {
+                if let Some(window) = self.inbox.lock().clone() {
+                    drop(window.try_send(Event::Offline));
+                }
+                return Err(e.into());
+            }
+        };
+        self.calls.store(Arc::new(node.handle()));
+        self.runtime.spawn(deliver(events, Arc::clone(&self.inbox)));
+        *self.node.lock() = Some(node);
+        tracing::info!("endpoint rebound");
+        Ok(())
     }
 
     pub const fn runtime(&self) -> &Runtime {
         &self.runtime
     }
 
-    pub const fn calls(&self) -> &NodeHandle {
-        &self.calls
+    /// The current command sender. Loaded each time rather than held: a rebind replaces it, and
+    /// whoever cached one would be talking to a closed endpoint.
+    pub fn calls(&self) -> Arc<NodeHandle> {
+        self.calls.load_full()
     }
 
     pub const fn id(&self) -> &EndpointId {

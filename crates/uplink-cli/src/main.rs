@@ -17,6 +17,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
 use uplink_core::node::{Command, Event, Network, Node};
+use uplink_core::relays::Relays;
+use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, identity, runtime};
 
 // mp4_atom warns about every vendor box in a phone recording (`smta`, `cami`, …); not our problem.
@@ -119,8 +121,13 @@ async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) ->
         // Fail early on a bad clip; each call reopens it to start from the beginning.
         clip::Clip::open(path)?;
     }
-    let contacts = Contacts::open(Db::open(dir)?)?;
-    let (node, mut events) = Node::start(identity::load_or_create(dir).await?, Network::N0).await?;
+    let db = Db::open(dir)?;
+    let contacts = Contacts::open(db.clone())?;
+    // The same setting the app reads, out of this data dir. The CLI is the only harness the core
+    // has off a phone, so a relay set that cannot be tried here cannot be tried at all.
+    let relays = Relays::load(&Settings::open(db)?);
+    let (node, mut events) =
+        Node::start(identity::load_or_create(dir).await?, Network::Public(relays)).await?;
     if let Some(peer) = call {
         node.send(Command::Call(peer)).await?;
     }

@@ -189,9 +189,9 @@ impl Platform {
                 .l()?;
             Ok((env.new_global_ref(&activity)?, env.new_global_ref(&application)?, inner, sdk))
         })?;
-        // At info, and once per process: which Android this is decides what the app may ask for,
-        // and it is the first thing worth knowing about a device that behaves oddly.
-        tracing::info!(sdk, "platform bridge attached");
+        // Not logged here: attaching is what tells us whether this process already has a core,
+        // and therefore happens before there is a subscriber to log to. The caller reports `sdk`
+        // once it does — see [`Self::sdk`].
         let activity = ArcSwapOption::from(Some(Arc::new(activity)));
         Ok((Self { vm, context: Arc::new(context), activity, inner, sdk }, incoming))
     }
@@ -470,6 +470,12 @@ impl Platform {
             env.call_method(activity, jni_str!("setInCall"), jni_sig!("(Z)V"), &[JValue::Bool(running)])?;
             Ok(())
         })
+    }
+
+    /// Which Android this is. It decides what the app may ask for, and it is the first thing
+    /// worth knowing about a device that behaves oddly, so the caller logs it at startup.
+    pub const fn sdk(&self) -> jint {
+        self.sdk
     }
 
     /// H.264 codec constants from the SDK (the NDK headers don't carry them).

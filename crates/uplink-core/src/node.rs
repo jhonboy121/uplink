@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, Incoming, SendStream, presets};
 use iroh::address_lookup::MemoryLookup;
-use iroh::{Endpoint, EndpointAddr, SecretKey, TransportAddr, Watcher as _};
+use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -19,6 +19,7 @@ use crate::protocol::{
     self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL, CLOSE_REJECTED, Signal,
 };
 use crate::media::{self, MediaSession};
+use crate::relays::Relays;
 use crate::{EndpointId, Error, crypto};
 
 const COMMAND_QUEUE: usize = 16;
@@ -34,6 +35,9 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long their phone rings before we stop waiting. Longer than dialling, because this one is
 /// a person deciding rather than a network failing.
 const RING_TIMEOUT: Duration = Duration::from_secs(45);
+/// How often the endpoint says what it has been doing. Long enough that the line costs nothing
+/// over a night, short enough to place a stall within the log.
+const BEAT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
@@ -91,7 +95,10 @@ impl Node {
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
         emit(&events, Event::Ready { id: endpoint.id() }).await;
         match network {
-            Network::N0 => drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone()))),
+            Network::Public(_) => {
+                drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone())));
+                drop(tokio::spawn(heartbeat(endpoint.clone())));
+            }
             Network::Local(lookup) => lookup.add_endpoint_info(loopback_addr(&endpoint)),
         }
         let (finished, finished_rx) = mpsc::channel(CONTROL_QUEUE);
@@ -138,15 +145,27 @@ impl NodeHandle {
 /// Where peers are found.
 #[derive(Clone, Debug)]
 pub enum Network {
-    /// n0 relays plus DNS/pkarr address lookup.
-    N0,
+    /// The real internet: relays plus DNS/pkarr address lookup. Which relays is a setting, so it
+    /// is carried rather than assumed — see [`crate::relays`].
+    Public(Relays),
     /// Loopback only; nodes find each other through a shared in-memory lookup (tests, local demos).
     Local(MemoryLookup),
 }
 
 async fn bind(secret: SecretKey, network: &Network) -> Result<Endpoint, Error> {
     let builder = match network {
-        Network::N0 => Endpoint::builder(presets::N0),
+        // Every relay in the map is handshaked with on every net_report — every 20 to 26 seconds,
+        // for the life of the process, call or no call — so the number of them is what the idle
+        // cost is made of, and that is a setting rather than a constant.
+        //
+        // The probes themselves are left at iroh's defaults. Turning the HTTPS latency probe and
+        // the captive-portal check off was measured and saved nothing: the beat put the cost at
+        // ~13.8 KB per relay per sweep before and ~14.0 KB after, so it is QUIC address discovery
+        // that is expensive, not those. They are the only way to find a home relay on a network
+        // that blocks QUIC, which is not a trade worth making for noise.
+        Network::Public(relays) => {
+            Endpoint::builder(presets::N0).relay_mode(RelayMode::Custom(relays.map()))
+        }
         Network::Local(lookup) => Endpoint::builder(presets::Minimal).address_lookup(lookup.clone()),
     };
     Ok(builder
@@ -191,6 +210,90 @@ async fn watch_reachable(endpoint: Endpoint, events: mpsc::Sender<Event>) {
         if status.updated().await.is_err() {
             break;
         }
+    }
+}
+
+/// The endpoint's own counters at one instant. Only differences are ever reported: the totals
+/// since the process started say nothing about whether it is still working now.
+#[derive(Clone, Copy, Default)]
+struct Counters {
+    relay_up: u64,
+    relay_down: u64,
+    direct_up: u64,
+    direct_down: u64,
+    relay_conns: u64,
+    relay_fails: u64,
+    holepunches: u64,
+    reports: u64,
+    portmaps: u64,
+}
+
+impl Counters {
+    fn read(endpoint: &Endpoint) -> Self {
+        let metrics = endpoint.metrics();
+        let (socket, net) = (&metrics.socket, &metrics.net_report);
+        Self {
+            relay_up: socket.send_relay.get(),
+            relay_down: socket.recv_data_relay.get(),
+            direct_up: socket.send_ipv4.get() + socket.send_ipv6.get(),
+            direct_down: socket.recv_data_ipv4.get() + socket.recv_data_ipv6.get(),
+            relay_conns: socket.relay_conns_success.get(),
+            relay_fails: socket.relay_conns_failed.get(),
+            holepunches: socket.holepunch_attempts.get(),
+            reports: net.reports.get(),
+            portmaps: net.portmap_attempts.get(),
+        }
+    }
+
+    /// Saturating, because a counter can only be reset by a restart, which resets us too.
+    const fn since(self, earlier: Self) -> Self {
+        Self {
+            relay_up: self.relay_up.saturating_sub(earlier.relay_up),
+            relay_down: self.relay_down.saturating_sub(earlier.relay_down),
+            direct_up: self.direct_up.saturating_sub(earlier.direct_up),
+            direct_down: self.direct_down.saturating_sub(earlier.direct_down),
+            relay_conns: self.relay_conns.saturating_sub(earlier.relay_conns),
+            relay_fails: self.relay_fails.saturating_sub(earlier.relay_fails),
+            holepunches: self.holepunches.saturating_sub(earlier.holepunches),
+            reports: self.reports.saturating_sub(earlier.reports),
+            portmaps: self.portmaps.saturating_sub(earlier.portmaps),
+        }
+    }
+}
+
+/// What the endpoint did between two beats, for as long as it lives.
+///
+/// A backgrounded app leaves no other trace: the window is gone, nothing else logs, and a night
+/// of silence reads the same whether the endpoint was listening or long dead. This says which,
+/// and splits the bytes by path, so an idle app that is nonetheless busy on the wire shows up
+/// here rather than only as a battery figure the next morning.
+///
+/// `elapsed` is reported because it is not `BEAT`. A tokio timer waits on a clock that does not
+/// wake a suspended CPU, so a beat that took much longer than it asked for is the measure of how
+/// long the device was actually asleep — the one thing Doze otherwise hides.
+async fn heartbeat(endpoint: Endpoint) {
+    let mut last = Counters::read(&endpoint);
+    let mut at = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(BEAT).await;
+        let (now, counters) = (std::time::Instant::now(), Counters::read(&endpoint));
+        let beat = counters.since(last);
+        let relay = endpoint.home_relay_status().get().into_iter().any(|relay| relay.is_connected());
+        tracing::info!(
+            elapsed_s = now.duration_since(at).as_secs(),
+            relay,
+            relay_up = beat.relay_up,
+            relay_down = beat.relay_down,
+            direct_up = beat.direct_up,
+            direct_down = beat.direct_down,
+            relay_conns = beat.relay_conns,
+            relay_fails = beat.relay_fails,
+            holepunches = beat.holepunches,
+            reports = beat.reports,
+            portmaps = beat.portmaps,
+            "beat"
+        );
+        (last, at) = (counters, now);
     }
 }
 

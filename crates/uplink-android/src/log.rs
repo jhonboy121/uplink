@@ -18,13 +18,32 @@ use crate::Error;
 /// What the log files are called; see [`uplink_core::logs`] for how they roll.
 pub const LOG_STEM: &str = "uplink";
 
+/// Logging, for as long as whoever holds this keeps it.
+///
+/// The two belong together and neither is much use alone: the dispatch is where lines go, and
+/// the guard is what keeps the thread that writes them alive. Dropping this stops the file log
+/// — not just for the dropper, but for every thread still using the dispatch, which is the
+/// whole process. So it is held by the thing that lives longest, never by a window.
+pub struct Logging {
+    dispatch: Dispatch,
+    /// Never read. Its `Drop` shuts the writer's worker thread down and flushes what is queued.
+    _guard: WorkerGuard,
+}
+
+impl Logging {
+    /// A handle for another thread to log through. Cheap; they all point at one subscriber.
+    pub fn dispatch(&self) -> Dispatch {
+        self.dispatch.clone()
+    }
+}
+
 /// Builds the subscriber. It is *not* installed globally: `android_main` can run several
 /// times per process, so callers scope it (`dispatcher::set_default`) and hand it to other
 /// threads. `filter` uses `Targets` syntax, e.g. `info,uplink=debug`.
 ///
-/// The returned guard flushes the writer's worker thread; logging stops when it is dropped, so
-/// it belongs beside the dispatch for as long as the app runs.
-pub fn init(tag: &'static CStr, filter: &str, dir: &Path) -> Result<(Dispatch, WorkerGuard), Error> {
+/// Call this once per process. A second appender on the same file would write to it from its own
+/// thread, against the first one's idea of how large the file has grown.
+pub fn init(tag: &'static CStr, filter: &str, dir: &Path) -> Result<Logging, Error> {
     let rolling = Rolling::new(dir, LOG_STEM, logs::MAX_BYTES, logs::KEEP)?;
     // Lossy: under a flood a dropped line beats blocking the thread that logged it, and the
     // threads that log most here are carrying a call.
@@ -33,7 +52,7 @@ pub fn init(tag: &'static CStr, filter: &str, dir: &Path) -> Result<(Dispatch, W
         .with(Logcat { tag })
         .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
         .with(Targets::from_str(filter)?);
-    Ok((Dispatch::new(subscriber), guard))
+    Ok(Logging { dispatch: Dispatch::new(subscriber), _guard: guard })
 }
 
 /// Writes straight to logcat, for when the subscriber is unavailable.

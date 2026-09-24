@@ -479,3 +479,36 @@ default); keep disk usage lean. Avoid build scripts.
   path. Back now closes the innermost thing on screen and, with nothing left, calls
   `moveTaskToBack` — the activity is never finished. Details in
   [docs/ref/slint-1.18-android.md](ref/slint-1.18-android.md).
+- **2026-09-24**: **what the endpoint costs when nobody is looking.** An overnight run put uplink
+  at 237 mAh over 7h16m — about half the device's whole drain — of which 233 mAh was
+  `mobile_radio` and 15.6 mAh was CPU. It holds no wakelock of its own. The cause was 40 MB up
+  and 37 MB down across the night on a metered roaming SIM, from an endpoint with no call and no
+  peer.
+  - **It is iroh's re-STUN, by design.** `new_re_stun_timer` picks a random 20–26 s interval
+    ("just under 30s, a common UDP NAT timeout") and runs a full net_report forever, with or
+    without a call, to keep NAT bindings warm. Right for a desktop, expensive in a pocket. It is
+    **not configurable**: no env var, nothing derived, no hook, and the same on `main` today. n0
+    take mobile battery reports ([#4475], [#4386]) but nobody has filed this one.
+  - **The cost is QUIC address discovery, not the optional probes.** Measured per sweep: ~13.8 KB
+    sent per relay before turning the HTTPS latency probe and captive-portal check off, ~14.0 KB
+    after — noise. So `NetReportConfig::minimal()` was reverted; those probes are the only way to
+    find a home relay on a network that blocks QUIC, and they are free.
+  - **What is left is the number of relays**, which is now a setting rather than a constant. n0's
+    map has four, two of them across an ocean from either of us. Halving it halved the idle
+    traffic (~275 → ~150 MB/day). Storage keeps the relays switched **off**, never the ones on, so
+    a relay n0 adds later arrives switched on instead of silently missing for anyone who had
+    opened the screen; a custom set is stored whole, names and all. The map is never allowed to be
+    empty. Changing it rebinds the endpoint on the spot — same key, so nothing anyone saved goes
+    stale — rather than asking for a restart nobody can be asked for.
+  - **A `beat` line every five minutes** is how any of this was measurable: relay and direct bytes
+    each way, relay connects and failures, holepunch attempts, net reports, portmap attempts, and
+    the elapsed time, which is also the only record of how long the device slept. It needs iroh's
+    `metrics` feature, which `default-features = false` had been compiling out to no-ops.
+  - **Logging died with the window, and had all along.** The writer's `WorkerGuard` was a local in
+    `android_main`, which returns when the activity is destroyed — so the file log stopped exactly
+    when the core carried on alone, and the headless case had never once been observed. It lives
+    in `Core` now, declared last so it outlives the runtime whose threads log on the way down, and
+    is created once per process beside the core rather than once per window.
+
+  [#4475]: https://github.com/n0-computer/iroh/issues/4475
+  [#4386]: https://github.com/n0-computer/iroh/issues/4386

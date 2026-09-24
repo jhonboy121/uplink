@@ -14,6 +14,8 @@ pub enum Error {
     DuplicateContact(String),
     #[error("unknown contact `{0}`")]
     UnknownContact(String),
+    #[error("`{0}` is not a relay address")]
+    RelayUrl(String),
     #[error(transparent)]
     Bind(#[from] iroh::endpoint::BindError),
     #[error(transparent)]

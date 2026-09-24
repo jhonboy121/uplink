@@ -15,6 +15,12 @@ pub const GATE_EXPLAINED: &str = "gate-explained";
 pub const APPEARANCE: &str = "appearance";
 /// Whether every screen is mirrored, for Arabic.
 pub const LAYOUT_RTL: &str = "layout-rtl";
+/// `custom`, or anything else for n0's own relays. See [`crate::relays`].
+pub const RELAY_SOURCE: &str = "relay-source";
+/// Which of n0's relays are switched off, one host per line.
+pub const RELAYS_OFF: &str = "relays-off";
+/// The relays to use instead of n0's, one `<url> <name>` per line.
+pub const RELAYS_CUSTOM: &str = "relays-custom";
 
 const TRUE: &str = "1";
 
@@ -71,6 +77,19 @@ impl Settings {
 
     pub fn set_flag(&self, key: &str, on: bool) -> Result<(), Error> {
         self.set(key, if on { TRUE } else { "0" })
+    }
+
+    /// A setting holding a list, one entry per line. Blank lines are not entries: they are what
+    /// an emptied list leaves behind.
+    pub fn lines(&self, key: &str) -> Vec<String> {
+        let Some(stored) = self.get(key) else {
+            return Vec::new();
+        };
+        stored.lines().filter(|line| !line.is_empty()).map(str::to_owned).collect()
+    }
+
+    pub fn set_lines(&self, key: &str, lines: &[String]) -> Result<(), Error> {
+        self.set(key, &lines.join("\n"))
     }
 }
 

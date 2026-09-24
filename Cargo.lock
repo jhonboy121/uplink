@@ -7049,6 +7049,7 @@ name = "uplink"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "i-slint-core",
  "ndk 0.9.0",
  "parking_lot",
