@@ -94,6 +94,31 @@ pub struct CallRecord {
     pub duration: Option<Duration>,
 }
 
+/// One row of the log, so a screen can point back at it: selecting calls to remove, for one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CallId(i64);
+
+impl std::fmt::Display for CallId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for CallId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.parse().map(Self)
+    }
+}
+
+/// A call as the log holds it: the record, and which row it is.
+#[derive(Clone, Debug)]
+pub struct Logged {
+    pub id: CallId,
+    pub call: CallRecord,
+}
+
 pub struct CallLog {
     db: Db,
 }
@@ -135,36 +160,50 @@ impl CallLog {
     }
 
     /// Most recent first.
-    pub fn recent(&self, limit: i64) -> Result<Vec<CallRecord>, Error> {
+    pub fn recent(&self, limit: i64) -> Result<Vec<Logged>, Error> {
         self.db.with(|db| {
             let mut statement = db.prepare(
-                "SELECT peer, incoming, outcome, at, seconds FROM calls ORDER BY at DESC, id DESC LIMIT ?1",
+                "SELECT id, peer, incoming, outcome, at, seconds FROM calls ORDER BY at DESC, id DESC LIMIT ?1",
             )?;
             let rows = statement.query_map(params![limit], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, bool>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (peer, incoming, outcome, at, seconds) = row?;
+                let (id, peer, incoming, outcome, at, seconds) = row?;
                 let Ok(peer) = peer.parse::<EndpointId>() else {
                     tracing::warn!(peer, "a logged key no longer parses; skipping");
                     continue;
                 };
-                out.push(CallRecord {
+                let call = CallRecord {
                     peer,
                     incoming,
                     outcome: Outcome::parse(&outcome),
                     at: UNIX_EPOCH + Duration::from_secs(u64::try_from(at).unwrap_or_default()),
                     duration: seconds.and_then(|s| u64::try_from(s).ok()).map(Duration::from_secs),
-                });
+                };
+                out.push(Logged { id: CallId(id), call });
             }
             Ok(out)
+        })
+    }
+
+    /// Forgets the given calls, in one transaction, so a selection goes all at once or not at all.
+    pub fn remove(&self, ids: &[CallId]) -> Result<(), Error> {
+        self.db.with(|db| {
+            let transaction = db.unchecked_transaction()?;
+            for id in ids {
+                transaction.execute("DELETE FROM calls WHERE id = ?1", params![id.0])?;
+            }
+            transaction.commit()?;
+            Ok(())
         })
     }
 
@@ -212,8 +251,25 @@ mod tests {
         log.record(&record(false, Outcome::Answered, new))?;
         let recent = log.recent(10)?;
         assert_eq!(recent.len(), 2);
-        assert_eq!(recent[0].at, new);
-        assert!(!recent[0].incoming);
+        assert_eq!(recent[0].call.at, new);
+        assert!(!recent[0].call.incoming);
+        Ok(())
+    }
+
+    #[test]
+    fn removing_takes_only_the_chosen_calls() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
+        for second in 1..=3 {
+            log.record(&record(false, Outcome::Answered, UNIX_EPOCH + Duration::from_secs(second)))?;
+        }
+        let before = log.recent(10)?;
+        log.remove(&[before[0].id, before[2].id])?;
+        let after = log.recent(10)?;
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, before[1].id);
+        // An id survives the trip through the screen as text.
+        assert_eq!(before[1].id.to_string().parse::<CallId>()?, before[1].id);
         Ok(())
     }
 
@@ -224,7 +280,7 @@ mod tests {
         let mut call = record(false, Outcome::Answered, SystemTime::now());
         call.duration = Some(Duration::from_secs(252));
         log.record(&call)?;
-        assert_eq!(log.recent(1)?[0].duration, Some(Duration::from_secs(252)));
+        assert_eq!(log.recent(1)?[0].call.duration, Some(Duration::from_secs(252)));
         Ok(())
     }
 

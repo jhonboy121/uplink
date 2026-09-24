@@ -33,7 +33,7 @@ use uplink_android::platform::{Permission, Platform, PlatformEvent};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
-use uplink_core::calls::{CallLog, CallRecord, Outcome};
+use uplink_core::calls::{CallId, CallLog, CallRecord, Outcome};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::logs;
@@ -141,6 +141,8 @@ struct State {
     /// Contacts ticked for removal. Kept here rather than in the model, which is rebuilt whenever
     /// the list changes and would drop the ticks with it.
     selected: FxHashSet<EndpointId>,
+    /// Calls ticked for removal, kept here for the same reason.
+    selected_calls: FxHashSet<CallId>,
     /// For the on-screen timer only; the call log is the core's to write.
     connected_at: Option<Instant>,
     /// This phone's own key, which is never anyone to call or save.
@@ -643,9 +645,11 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
             }
         };
         let mut previous = String::new();
+        let selected = &s.selected_calls;
         records
             .iter()
-            .map(|record| {
+            .map(|logged| {
+                let record = &logged.call;
                 let day = day_of(record.at);
                 let header = if day == previous { String::new() } else { day.clone() };
                 previous = day;
@@ -664,6 +668,8 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
                     missed: record.outcome == Outcome::Missed,
                     incoming: record.incoming,
                     answered: record.outcome == Outcome::Answered,
+                    entry: logged.id.to_string().into(),
+                    selected: selected.contains(&logged.id),
                     header: header.into(),
                 }
             })
@@ -672,6 +678,8 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
     if let Some(items) = items {
         ui.set_calls(slint::ModelRc::new(slint::VecModel::from(items)));
     }
+    let count = with_state_value(state, |s| i32::try_from(s.selected_calls.len()).unwrap_or(i32::MAX));
+    ui.set_selected_calls_count(count.unwrap_or_default());
 }
 
 /// "Missed · 20 minutes ago", or "4:12 · Tuesday" for one that was answered.
@@ -898,6 +906,8 @@ fn went_back(ui: &App) -> bool {
         ui.set_call_folded(true);
     } else if ui.get_selecting() {
         ui.invoke_clear_selection();
+    } else if ui.get_selecting_calls() {
+        ui.invoke_clear_call_selection();
     } else if ui.get_screen() != Screen::People {
         ui.set_screen(Screen::People);
     } else {
@@ -1212,6 +1222,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         contacts,
         log,
         selected: FxHashSet::default(),
+        selected_calls: FxHashSet::default(),
         connected_at: None,
         me: identity,
         fresh: None,
@@ -1329,6 +1340,45 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         });
         if let Some(ui) = weak.upgrade() {
             show_calls(&s, &ui);
+        }
+    });
+    // Selecting calls works as selecting contacts does, on its own set of ticks.
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_toggle_call_selected(move |entry| {
+        let Ok(id) = entry.parse::<CallId>() else { return };
+        let empty = with_state_value(&s, |state| {
+            if !state.selected_calls.remove(&id) {
+                state.selected_calls.insert(id);
+            }
+            state.selected_calls.is_empty()
+        });
+        if let Some(ui) = weak.upgrade() {
+            if empty == Some(true) {
+                ui.set_selecting_calls(false);
+            }
+            show_calls(&s, &ui);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_clear_call_selection(move || {
+        with_state(&s, |state| state.selected_calls.clear());
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selecting_calls(false);
+            show_calls(&s, &ui);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_remove_selected_calls(move || {
+        let removed = with_state_value(&s, |state| {
+            let chosen = state.selected_calls.drain().collect::<Vec<_>>();
+            state.log.remove(&chosen)
+        });
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selecting_calls(false);
+            show_calls(&s, &ui);
+            if let Some(Err(e)) = removed {
+                toast(&ui, format!("Could not remove those calls: {e}"));
+            }
         }
     });
 

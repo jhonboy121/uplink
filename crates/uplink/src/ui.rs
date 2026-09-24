@@ -41,6 +41,10 @@ slint::slint! {
         incoming: bool,
         // Whether anyone talked: the arrow is the accent if so, red for every other ending.
         answered: bool,
+        // Which row of the log this is (`id` is the peer, for calling back), and whether it is
+        // ticked for removal.
+        entry: string,
+        selected: bool,
         // Set when this row is the first of a day, so the list can date its groups.
         header: string,
     }
@@ -51,7 +55,7 @@ slint::slint! {
     export enum Grant { needed, granted, blocked }
 
     // What is waiting on a yes. `none` is the usual state.
-    export enum Confirm { none, remove-contact, remove-selected, clear-calls }
+    export enum Confirm { none, remove-contact, remove-selected, clear-calls, remove-selected-calls }
 
     export struct PermissionItem {
         name: string,
@@ -615,6 +619,46 @@ slint::slint! {
         animate opacity { duration: 160ms; easing: ease-out; }
     }
 
+    // A row's touch: a tap, or a hold. Slint 1.18's TouchArea has no long press, so this is one —
+    // a press held within `drag-slop` for `Theme.long-press` (the user's own touch-and-hold
+    // delay). A finger that wanders is scrolling, not holding, and the release that ends a hold
+    // is not also a tap.
+    component HoldArea inherits TouchArea {
+        callback tapped();
+        callback held();
+        property <bool> holding: false;
+        property <bool> long-pressed: false;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                self.long-pressed = false;
+                self.holding = true;
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                self.holding = false;
+            }
+        }
+        moved => {
+            if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+                || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+                self.holding = false;
+            }
+        }
+        clicked => {
+            if (!self.long-pressed) {
+                root.tapped();
+            }
+        }
+        Timer {
+            interval: Theme.long-press;
+            running: root.holding;
+            triggered => {
+                root.holding = false;
+                root.long-pressed = true;
+                root.held();
+            }
+        }
+    }
+
     // What a thing is on the start side, what it is set to on the end side, on a flat list with a
     // hairline above each row. The contact screen's rows; Settings has its own, in groups.
     component DetailRow inherits Rectangle {
@@ -834,43 +878,15 @@ slint::slint! {
                             // The pill calls; the rest of the row opens them, because a contact
                             // now has more to do to it than one button can carry. Holding a row
                             // starts selecting with it, which is the only way into selection.
-                            property <bool> holding: false;
-                            // The release that ends a long press is not also a tap.
-                            property <bool> long-pressed: false;
-                            open-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                pointer-event(event) => {
-                                    if (event.kind == PointerEventKind.down) {
-                                        parent.long-pressed = false;
-                                        parent.holding = true;
-                                    } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                                        parent.holding = false;
-                                    }
-                                }
-                                // A finger that wanders is scrolling the list, not holding a row.
-                                moved => {
-                                    if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
-                                        || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
-                                        parent.holding = false;
-                                    }
-                                }
-                                clicked => {
-                                    if (parent.long-pressed) {
-                                        return;
-                                    }
+                            open-touch := HoldArea {
+                                tapped => {
                                     if (root.selecting) {
                                         root.select(contact.id);
                                     } else {
                                         root.open(contact.id);
                                     }
                                 }
-                            }
-                            Timer {
-                                interval: Theme.long-press;
-                                running: parent.holding;
-                                triggered => {
-                                    parent.holding = false;
-                                    parent.long-pressed = true;
+                                held => {
                                     root.long-pressed();
                                     if (!root.selecting) {
                                         root.start-selecting();
@@ -1406,8 +1422,16 @@ slint::slint! {
     component CallsPage inherits Rectangle {
         in property <[CallItem]> calls;
         in property <length> top-inset;
+        // As People does it: holding a row starts selecting, Remove takes the ticked ones, and
+        // unticking the last one or Back ends it.
+        in property <bool> selecting;
+        in property <int> selected-count;
         callback call(string);
         callback clear();
+        callback select(string);
+        callback start-selecting();
+        callback long-pressed();
+        callback remove-selected();
         background: Theme.ground;
 
         VerticalLayout {
@@ -1419,11 +1443,20 @@ slint::slint! {
                 padding-bottom: Theme.bar-bottom;
                 spacing: Theme.gap;
                 PageTitle {
-                    text: "Calls";
+                    text: root.selecting ? root.selected-count + " selected" : "Calls";
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
-                if root.calls.length > 0 : VerticalLayout {
+                if root.selecting : VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Remove";
+                        danger: true;
+                        enabled: root.selected-count > 0;
+                        clicked => { root.remove-selected(); }
+                    }
+                }
+                if !root.selecting && root.calls.length > 0 : VerticalLayout {
                     alignment: center;
                     Pill {
                         text: "Clear";
@@ -1481,6 +1514,26 @@ slint::slint! {
                         }
                         Rectangle {
                             height: Theme.row-height;
+                            // A tap only means something while selecting; outside it the row is
+                            // read, and the pill is what calls.
+                            call-touch := HoldArea {
+                                tapped => {
+                                    if (root.selecting) {
+                                        root.select(entry.entry);
+                                    }
+                                }
+                                held => {
+                                    root.long-pressed();
+                                    if (!root.selecting) {
+                                        root.start-selecting();
+                                    }
+                                    root.select(entry.entry);
+                                }
+                            }
+                            background: entry.selected ? Theme.raised
+                                : call-touch.pressed && root.selecting ? Theme.surface
+                                : transparent;
+                            animate background { duration: 160ms; easing: ease-out; }
                             HorizontalLayout {
                                 padding-left: Theme.edge;
                                 padding-right: Theme.edge;
@@ -1538,9 +1591,17 @@ slint::slint! {
                                 }
                                 VerticalLayout {
                                     alignment: center;
-                                    Pill {
+                                    if !root.selecting : Pill {
                                         text: "Call";
                                         clicked => { root.call(entry.id); }
+                                    }
+                                    if root.selecting : Image {
+                                        source: entry.selected
+                                            ? @image-url("icons/check-on.svg")
+                                            : @image-url("icons/check-off.svg");
+                                        width: Theme.key-icon;
+                                        height: self.width;
+                                        colorize: entry.selected ? Theme.beacon : Theme.muted;
                                     }
                                 }
                             }
@@ -2322,6 +2383,13 @@ slint::slint! {
         in-out property <Confirm> confirming: Confirm.none;
         in-out property <bool> selecting: false;
         in property <int> selected-count: 0;
+        // The call log's own selection, apart from the contacts': the two lists are different
+        // things, and switching tabs should not carry ticks across.
+        in-out property <bool> selecting-calls: false;
+        in property <int> selected-calls-count: 0;
+        callback toggle-call-selected(string);
+        callback remove-selected-calls();
+        callback clear-call-selection();
         // The contact being looked at. Empty means none, which is also how it is dismissed.
         in-out property <string> open-contact-id;
         in property <string> open-contact-name;
@@ -2494,8 +2562,14 @@ slint::slint! {
                     if root.screen == Screen.calls : CallsPage {
                         top-inset: root.safe-area-insets.top;
                         calls: root.calls;
+                        selecting: root.selecting-calls;
+                        selected-count: root.selected-calls-count;
                         call(id) => { root.call(id); }
                         clear => { root.confirming = Confirm.clear-calls; }
+                        select(entry) => { root.toggle-call-selected(entry); }
+                        start-selecting => { root.selecting-calls = true; }
+                        long-pressed => { root.long-pressed(); }
+                        remove-selected => { root.confirming = Confirm.remove-selected-calls; }
                     }
                     if root.screen == Screen.connect : KeyPage {
                         top-inset: root.safe-area-insets.top;
@@ -2672,15 +2746,21 @@ slint::slint! {
             // and closing the page to find it cleared the contact it was meant to remove.
             if root.confirming != Confirm.none : ConfirmSheet {
                 title: root.confirming == Confirm.clear-calls ? "Clear the call log?"
+                    : root.confirming == Confirm.remove-selected-calls
+                        ? "Remove " + root.selected-calls-count + (root.selected-calls-count == 1 ? " call?" : " calls?")
                     : root.confirming == Confirm.remove-selected ? "Remove " + root.selected-count + " contacts?"
                     : "Remove " + root.open-contact-name + "?";
                 body: root.confirming == Confirm.clear-calls
                     ? "Every call is forgotten. It does not affect your contacts."
+                    : root.confirming == Confirm.remove-selected-calls
+                    ? "They leave the call log. It does not affect your contacts."
                     : "Their key goes with them. You would need it again to call them, and they can still call you.";
                 confirm-label: root.confirming == Confirm.clear-calls ? "Clear" : "Remove";
                 confirm => {
                     if (root.confirming == Confirm.clear-calls) {
                         root.clear-calls();
+                    } else if (root.confirming == Confirm.remove-selected-calls) {
+                        root.remove-selected-calls();
                     } else if (root.confirming == Confirm.remove-selected) {
                         root.remove-selected();
                     } else {

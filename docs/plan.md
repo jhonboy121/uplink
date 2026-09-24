@@ -633,6 +633,10 @@ default); keep disk usage lean. Avoid build scripts.
   instead of ↓/↑ text, in the accent when the call was answered and red for any other ending —
   the user's choice, widening "red means end" to "ended without a call". The words stay muted,
   and say the ending themselves; "They declined" is now "Declined", since the arrow says whose.
+- **2026-09-24**: **calls are selected and removed the way contacts are.** Holding a row starts
+  selection; Remove (confirmed) takes the ticked calls in one transaction; unticking the last one
+  or Back ends it; Clear stays for the whole log. The log now hands back each row's id
+  (`calls::CallId`, `Logged`), and the long press is one `HoldArea` component both lists use.
 
   [#4475]: https://github.com/n0-computer/iroh/issues/4475
   [#4386]: https://github.com/n0-computer/iroh/issues/4386
