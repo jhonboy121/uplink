@@ -7,7 +7,7 @@ import { AppBar, Brand, PageTitle, Row, Tap } from "controls.slint";
 
 // A group of settings on its own inset surface. The surface does the grouping a label used
 // to, so no group is named.
-component SettingsGroup inherits Rectangle {
+export component SettingsGroup inherits Rectangle {
     background: Theme.surface;
     border-radius: Theme.radius;
     clip: true;
@@ -18,7 +18,7 @@ component SettingsGroup inherits Rectangle {
 
 // Between two rows of a group. It starts where the text does, so the tiles read as one
 // column rather than as boxes cut apart.
-component SettingsDivider inherits Rectangle {
+export component SettingsDivider inherits Rectangle {
     height: Theme.hairline-width;
     property <length> inset: Theme.setting-pad + Theme.setting-tile + Theme.setting-gap;
     Rectangle {
@@ -31,7 +31,7 @@ component SettingsDivider inherits Rectangle {
 
 // What a setting is on the start side, what it is set to on the end side, and a tile with
 // its icon ahead of both. The value is in the accent only when tapping it does something.
-component SettingsRow inherits Rectangle {
+export component SettingsRow inherits Rectangle {
     in property <image> icon;
     in property <string> title;
     in property <string> detail;
@@ -116,6 +116,7 @@ component SettingsRow inherits Rectangle {
 export component SettingsPage inherits Rectangle {
     in property <length> top-inset;
     in property <int> relays-on;
+    in property <bool> relays-auto;
     in property <bool> battery-unrestricted;
     in property <bool> full-screen-calls;
     in property <bool> maker-list;
@@ -215,13 +216,12 @@ export component SettingsPage inherits Rectangle {
                         tappable: false;
                     }
                     SettingsDivider { }
-                    // The count rather than the list: which relays are on is a detail, and
-                    // how many is the part worth seeing without opening anything.
+                    // The mode, or in manual how many: which relays is a detail for the page.
                     SettingsRow {
                         icon: @image-url("icons/relays.svg");
                         title: @tr("Relays");
                         detail: @tr("When a direct path won't form");
-                        value: @tr("{} on", root.relays-on);
+                        value: root.relays-auto ? @tr("Auto") : @tr("{} on", root.relays-on);
                         clicked => { root.edit-relays(); }
                     }
                 }

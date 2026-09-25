@@ -6,7 +6,7 @@ Source: `~/.cargo/registry/src/*/iroh-1.2.0/src/` (endpoint.rs, endpoint/{preset
 ## Cargo
 
 ```toml
-iroh = { version = "1.2", default-features = false, features = ["tls-aws-lc-rs", "portmapper"] }
+iroh = { version = "1.2", default-features = false, features = ["tls-aws-lc-rs", "portmapper", "metrics", "unstable-net-report"] }
 rustls = { version = "0.23.33", default-features = false, features = ["aws_lc_rs", "std"] }  # iroh's pin
 noq-proto = { version = "1.3", default-features = false }   # only to downcast HandshakeData
 ```
@@ -54,6 +54,27 @@ connection.handshake_data()?.downcast::<HandshakeData>().ok()?.negotiated_key_ex
 The provider uses `kx_groups: vec![aws_lc_rs::kx_group::X25519MLKEM768, aws_lc_rs::kx_group::X25519]`. X25519 is only for
 relay/HTTPS servers; uplink **refuses peer connections that aren't `X25519MLKEM768`** (`crypto::require_post_quantum`, close
 code `CLOSE_NOT_POST_QUANTUM`).
+
+## Relays at runtime ✅ (read from 1.2's source; used by `uplink_core::pilot`)
+
+- **Home relay choice** (`net_report.rs`, `add_report_history_and_set_preferred_relay`): every sweep (20–26 s, not
+  configurable) probes **every relay in the map**; the home relay is the lowest latency seen over the last 5 min, and
+  it only moves when the new one is **under 2/3** of the current one's latency. A relay that stops answering drops out
+  of the report, so failover inside the map is iroh's own.
+- **Live map changes:** `Endpoint::insert_relay(RelayUrl, Arc<RelayConfig>)` / `remove_relay(&RelayUrl)` (async).
+  Each one is a major update that starts a fresh net report at once. No rebind is needed.
+- **There is no getter for the map** on `Endpoint` (`relay_map()` exists only on `RelayMode`), so whoever changes it
+  keeps its own copy.
+- `RelayConfig::from(RelayUrl)` assumes QUIC address discovery on the default port (7842).
+- Reaching a peer goes through **their** home relay whether or not it is in our map. The relay actor only looks the URL
+  up in the map for an auth token.
+- **Per-relay latencies:** `Endpoint::net_report()` → `Watcher<Value = Option<NetReport>>`, behind the
+  `unstable-net-report` feature; types in `iroh::unstable_net_report::{NetReport, Probe, RelayLatencies}`.
+  `report.relay_latency.iter()` yields `(Probe, &RelayUrl, Duration)`, one per probe kind (HTTPS, QAD v4/v6), so take
+  the min per URL. `report.global_v4` / `global_v6` are the public addresses (compare the IPs, not the ports, to
+  detect a new network).
+- `home_relay_status()` → `Vec<RelayStatus>` with `url()` and `is_connected()`. It passes briefly through "none
+  connected" while the home relay moves, so wait a few seconds before calling that a loss.
 
 ## Logging with explicit dispatch
 

@@ -15,23 +15,24 @@ import "fonts/IBMPlexMono-Medium.ttf";
 
 import { Appearance, Language, Theme } from "theme.slint";
 import {
-    AddProblem, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, PermissionItem,
+    AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, PermissionItem,
     RelayItem, Route, Screen, Toast, Mismatch,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
-import { ConfirmSheet, NameSheet, NoticeSheet, RelaySheet, ToastCard, VideoAskSheet } from "sheets.slint";
+import { AddRelaySheet, ConfirmSheet, NameSheet, NoticeSheet, ToastCard, VideoAskSheet } from "sheets.slint";
 import { ContactPage, PeoplePage } from "people.slint";
 import { CallPage, CallsPage } from "calls.slint";
 import { ConnectPage, ScanPage } from "connect.slint";
 import { SettingsPage } from "settings.slint";
+import { RelaysPage } from "relays.slint";
 import { CallScreen, MiniCall } from "call.slint";
 
 export { Appearance, Language, Theme } from "theme.slint";
 export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
     DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Path, PathKind, Permission, PermissionItem,
-    Region, RelayItem, Route, Say, Screen, Stat, Toast, Traffic, Unit,
+    Region, RelayItem, RelayUse, Route, Say, Screen, Stat, Toast, Traffic, Unit,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -169,13 +170,17 @@ export component App inherits Window {
     // said to be known already. Rust's own; no markup invokes it.
     callback key-found(string);
     callback share-diagnostics();
-    // Which relays the endpoint may use. The sheet edits this model in place; saving writes
-    // it and rebinds, cancelling throws it away and reads the stored set back.
-    in property <[RelayItem]> relays;
-    in property <[RelayItem]> custom-relays;
-    // How many are on, counted where the model is built rather than in the markup.
+    // The relay page. Every change is applied as it is made: the endpoint's pilot changes the
+    // map on the live endpoint, so there is nothing to save and nothing to rebind.
+    in property <[RelayItem]> uplink-relays;
+    in property <[RelayItem]> n0-relays;
+    in property <[RelayItem]> your-relays;
+    in property <bool> relays-auto: true;
+    in property <[Ago]> relays-checked;
+    // How many are ticked, counted where the model is built rather than in the markup.
     in property <int> relays-on;
-    in-out property <bool> relays-custom;
+    in-out property <bool> relays-open: false;
+    in-out property <bool> adding-relay: false;
     // Read from Android on start and on every return to the front, since each of them is
     // changed in a system screen the app sends the user to. Assumed fine until read.
     in property <bool> battery-unrestricted: true;
@@ -187,11 +192,12 @@ export component App inherits Window {
     // The one-time explainer for the battery exemption, shown after the gate.
     in-out property <bool> battery-ask: false;
     callback skip-battery();
-    in-out property <bool> editing-relays: false;
     in-out property <string> new-relay-name;
     in-out property <string> new-relay-url;
-    callback save-relays();
-    callback cancel-relays();
+    callback set-relays-auto(bool);
+    callback check-relays();
+    // A relay's URL, and whether it is now ticked.
+    callback tick-relay(string, bool);
     callback add-relay(string, string);
     callback remove-relay(string);
     callback scan(bool);
@@ -224,7 +230,7 @@ export component App inherits Window {
     out property <bool> bars-light: !Theme.dark
         && root.call-state == CallState.idle
         && root.confirming == Confirm.none
-        && !root.editing-relays
+        && !root.adding-relay
         && !root.scanning
         && root.pending-key.length == 0;
     changed bars-light => { root.bars-changed(self.bars-light); }
@@ -319,11 +325,12 @@ export component App inherits Window {
                 if root.screen == Screen.settings : SettingsPage {
                     top-inset: root.safe-area-insets.top;
                     relays-on: root.relays-on;
+                    relays-auto: root.relays-auto;
                     battery-unrestricted: root.battery-unrestricted;
                     full-screen-calls: root.full-screen-calls;
                     maker-list: root.maker-list;
                     share-diagnostics => { root.share-diagnostics(); }
-                    edit-relays => { root.editing-relays = true; }
+                    edit-relays => { root.relays-open = true; }
                     allow-battery => { root.allow-battery(); }
                     allow-full-screen-calls => { root.allow-full-screen-calls(); }
                     open-maker-list => { root.open-maker-list(); }
@@ -423,6 +430,35 @@ export component App inherits Window {
             }
         }
 
+        // The relay page takes the window, over the tabs, like a contact does. Under the toast,
+        // which is how an address that is not a relay's gets said.
+        if root.relays-open : RelaysPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            auto: root.relays-auto;
+            checked: root.relays-checked;
+            uplink: root.uplink-relays;
+            n0: root.n0-relays;
+            yours: root.your-relays;
+            set-auto(on) => { root.set-relays-auto(on); }
+            check => { root.check-relays(); }
+            tick(url, on) => { root.tick-relay(url, on); }
+            add => { root.adding-relay = true; }
+            remove(url) => { root.remove-relay(url); }
+        }
+
+        if root.adding-relay : AddRelaySheet {
+            name <=> root.new-relay-name;
+            url <=> root.new-relay-url;
+            keyboard: root.virtual-keyboard-size.height;
+            add(name, url) => { root.add-relay(name, url); }
+            cancel => {
+                root.adding-relay = false;
+                root.new-relay-name = "";
+                root.new-relay-url = "";
+            }
+        }
+
         // Slint has no toast widget, but it has a Timer, so the dismissal lives here rather
         // than in every caller.
         toast-timer := Timer {
@@ -434,25 +470,6 @@ export component App inherits Window {
             toast: message;
             y: parent.height - self.height - root.safe-area-insets.bottom - Theme.toast-bottom;
             width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
-        }
-
-        if root.editing-relays : RelaySheet {
-            relays: root.relays;
-            custom-relays: root.custom-relays;
-            custom <=> root.relays-custom;
-            new-name <=> root.new-relay-name;
-            new-url <=> root.new-relay-url;
-            keyboard: root.virtual-keyboard-size.height;
-            add(name, url) => { root.add-relay(name, url); }
-            remove(host) => { root.remove-relay(host); }
-            save => {
-                root.editing-relays = false;
-                root.save-relays();
-            }
-            cancel => {
-                root.editing-relays = false;
-                root.cancel-relays();
-            }
         }
 
         // One call from the log, over the tabs. Under the naming sheet, which Add opens, and

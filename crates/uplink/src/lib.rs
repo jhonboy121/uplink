@@ -41,10 +41,10 @@ use uplink_core::contacts::Contacts;
 use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
-use uplink_core::relays::{self, Relays};
+use uplink_core::relays::{self, Choice, Ranking, Source};
 use uplink_core::media::{MediaSession, MediaStats, Route};
-use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode};
-use uplink_core::EndpointId;
+use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode, RelayView, Steer};
+use uplink_core::{EndpointId, RelayUrl};
 
 use crate::clock::LocalClock;
 use crate::core::Core;
@@ -161,10 +161,10 @@ struct State {
     stats: Arc<FrameStats>,
     /// Commands to the endpoint, which this window borrows rather than owns — the endpoint
     /// belongs to the process and outlives every window it is shown in.
-    /// The core rather than its command sender: rebinding replaces the sender, and asking for it
-    /// at the moment a command is sent is what keeps a relay change from stranding the next call
-    /// on a closed endpoint.
     core: Option<Arc<Core>>,
+    settings: Settings,
+    /// The relays as the endpoint last reported them: the survey, the map, the home relay.
+    relays: Option<RelayView>,
 }
 
 impl State {
@@ -446,24 +446,39 @@ fn set_peer(ui: &App, name: &str) {
     ui.set_peer_initial(view::initial(name));
 }
 
-/// The relay list as the settings screen reads it. Taken from the store rather than kept in the
-/// UI, so a switch always shows what the next bind will actually use.
-fn show_relays(ui: &App, settings: &Settings) {
-    // n0's set, always listed: you choose the relay you are switching to before you switch, not
-    // after, so both lists are on screen whichever one is live.
-    let published: Vec<RelayItem> = Relays::N0 { off: settings.lines(settings::RELAYS_OFF) }
-        .listed()
-        .into_iter()
-        .map(view::relay_item)
-        .collect();
-    let custom: Vec<RelayItem> =
-        Relays::Custom(relays::custom(settings)).listed().into_iter().map(view::relay_item).collect();
-    let uses_custom = relays::uses_custom(settings);
-    let on = if uses_custom { custom.len() } else { published.iter().filter(|relay| relay.on).count() };
-    ui.set_relays_on(i32::try_from(on).unwrap_or(i32::MAX));
-    ui.set_relays_custom(uses_custom);
-    ui.set_custom_relays(view::list(custom));
-    ui.set_relays(view::list(published));
+/// The relay page, from the store and the endpoint's last report. The ticks and the mode are the
+/// store's, so the rows always show what the pilot will read; the latencies and what is in use
+/// are the report's, or the stored ranking's before the first report arrives.
+fn show_relays(state: &Rc<RefCell<State>>, ui: &App) {
+    let s = state.borrow();
+    let catalogue = relays::catalogue(&s.settings);
+    let choice = Choice::load(&s.settings);
+    let ranking = s.relays.as_ref().map_or_else(|| Ranking::load(&s.settings), |live| live.ranking.clone());
+    let rows = |source| {
+        let items: Vec<RelayItem> = catalogue
+            .iter()
+            .filter(|relay| relay.source == source)
+            .map(|relay| view::relay_item(relay, &choice, &ranking, s.relays.as_ref()))
+            .collect();
+        view::list(items)
+    };
+    ui.set_uplink_relays(rows(Source::Uplink));
+    ui.set_n0_relays(rows(Source::N0));
+    ui.set_your_relays(rows(Source::Yours));
+    ui.set_relays_auto(choice.auto);
+    ui.set_relays_on(i32::try_from(choice.pool(&catalogue).len()).unwrap_or(i32::MAX));
+    ui.set_relays_checked(view::checked(&ranking));
+}
+
+/// Tells the endpoint's pilot, which applies relay changes to the live endpoint.
+fn steer_relays(state: &Rc<RefCell<State>>, steer: Steer) {
+    let Some(core) = state.borrow().core.clone() else {
+        tracing::warn!(?steer, "the endpoint is still starting");
+        return;
+    };
+    if let Err(e) = core.calls().try_send(Command::Relays(steer)) {
+        tracing::warn!(?steer, "relay pilot: {e}");
+    }
 }
 
 /// The key as a QR image, and the share of its width the mark in the middle may cover. Only the
@@ -728,10 +743,13 @@ fn went_back(ui: &App) -> bool {
     } else if ui.get_battery_ask() && !ui.get_gate() {
         // Back out of the explainer is "Not now", which is also what it would mean in person.
         ui.invoke_skip_battery();
-    } else if ui.get_editing_relays() {
-        // Back out of the sheet is Cancel, not Save: nothing here is meant to happen by accident.
-        ui.set_editing_relays(false);
-        ui.invoke_cancel_relays();
+    } else if ui.get_adding_relay() {
+        // Back out of the sheet is Cancel: nothing is added by accident.
+        ui.set_adding_relay(false);
+        ui.set_new_relay_name(Default::default());
+        ui.set_new_relay_url(Default::default());
+    } else if ui.get_relays_open() {
+        ui.set_relays_open(false);
     } else if ui.get_pending_key().row_count() > 0 {
         forget_pending_key(ui);
     } else if ui.get_open_contact().row_count() > 0 {
@@ -1112,6 +1130,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         clock: LocalClock::new(platform.context()),
         stats: Arc::default(),
         core: None,
+        settings: settings.clone(),
+        relays: None,
     }));
 
     let lifecycle = Rc::clone(&state);
@@ -1410,64 +1430,73 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             tracing::warn!("re-posting the listening notification: {e}");
         }
     });
-    let (s, weak, c) = (settings.clone(), ui.as_weak(), Arc::clone(&core));
-    ui.on_save_relays(move || {
+    // Every relay change is written, shown and handed to the pilot at once: it changes the map on
+    // the live endpoint, so there is no Save and no rebind.
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_set_relays_auto(move |auto| {
         let Some(ui) = weak.upgrade() else { return };
-        // The model is the sheet's working copy, so this is the first the store hears of it.
-        for relay in ui.get_relays().iter() {
-            if let Err(e) = relays::set_off(&s, &relay.host, !relay.on) {
-                tracing::warn!(host = %relay.host, "storing the relay: {e}");
-            }
+        let mut choice = Choice::load(&s.borrow().settings);
+        choice.auto = auto;
+        if let Err(e) = choice.save(&s.borrow().settings) {
+            tracing::warn!("storing the relay mode: {e}");
         }
-        if let Err(e) = relays::set_uses_custom(&s, ui.get_relays_custom()) {
-            tracing::warn!("storing the relay source: {e}");
-        }
-        // From the store, not from the model: saved and in use are the same thing, and the rows
-        // should say so even where a write failed.
-        show_relays(&ui, &s);
-        // Rebind rather than wait for a restart — nobody can be asked to relaunch an app to make
-        // a setting they just saved take hold — but off this thread, because closing an endpoint
-        // and binding another is long enough to be seen as the app hanging.
-        let (core, relays) = (Arc::clone(&c), Relays::load(&s));
-        c.runtime().spawn(async move {
-            match core.rebind(relays).await {
-                // Nothing to hand back: whoever sends the next command asks the core for the
-                // sender it has by then, so there is no stale copy anywhere to correct.
-                Ok(()) => tracing::info!("relays applied"),
-                Err(e) => tracing::error!("rebinding for the new relays: {e}"),
-            }
-        });
+        show_relays(&s, &ui);
+        steer_relays(&s, Steer::Reload);
     });
-    let (s, weak) = (settings.clone(), ui.as_weak());
-    ui.on_cancel_relays(move || {
-        if let Some(ui) = weak.upgrade() {
-            show_relays(&ui, &s);
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_tick_relay(move |url, on| {
+        let Some(ui) = weak.upgrade() else { return };
+        let Ok(url) = url.parse::<RelayUrl>() else {
+            tracing::warn!(%url, "ticked a relay that is not a URL");
+            return;
+        };
+        let mut choice = Choice::load(&s.borrow().settings);
+        choice.ticked.retain(|ticked| *ticked != url);
+        if on {
+            choice.ticked.push(url);
         }
+        // The last tick stays: with none, the phone could not be called at all.
+        if choice.ticked.is_empty() {
+            return;
+        }
+        if let Err(e) = choice.save(&s.borrow().settings) {
+            tracing::warn!("storing the relay ticks: {e}");
+        }
+        show_relays(&s, &ui);
+        steer_relays(&s, Steer::Reload);
     });
-    // Adding and removing write through rather than waiting for Save: a list you are building is
-    // not a switch you are flipping, and the endpoint is not touched until Save either way.
-    let (s, weak) = (settings.clone(), ui.as_weak());
+    let s = Rc::clone(&state);
+    ui.on_check_relays(move || steer_relays(&s, Steer::Check));
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_relay(move |name, url| {
         let Some(ui) = weak.upgrade() else { return };
-        match relays::add_custom(&s, &name, &url) {
+        let added = relays::add_custom(&s.borrow().settings, &name, &url);
+        match added {
             Ok(()) => {
+                ui.set_adding_relay(false);
                 ui.set_new_relay_name(Default::default());
                 ui.set_new_relay_url(Default::default());
-                show_relays(&ui, &s);
+                show_relays(&s, &ui);
+                steer_relays(&s, Steer::Reload);
             }
             Err(uplink_core::Error::RelayUrl(url)) => toast(&ui, Say::RelayInvalid, url),
             Err(e) => toast(&ui, Say::Failed, e),
         }
     });
-    let (s, weak) = (settings.clone(), ui.as_weak());
-    ui.on_remove_relay(move |host| {
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_remove_relay(move |url| {
         let Some(ui) = weak.upgrade() else { return };
-        if let Err(e) = relays::remove_custom(&s, &host) {
-            tracing::warn!(%host, "removing the relay: {e}");
+        let Ok(parsed) = url.parse::<RelayUrl>() else {
+            tracing::warn!(%url, "removing a relay that is not a URL");
+            return;
+        };
+        if let Err(e) = relays::remove_custom(&s.borrow().settings, &parsed) {
+            tracing::warn!(%url, "removing the relay: {e}");
         }
-        show_relays(&ui, &s);
+        show_relays(&s, &ui);
+        steer_relays(&s, Steer::Reload);
     });
-    show_relays(&ui, &settings);
+    show_relays(&state, &ui);
 
     // The window's own `init` has already run by the time callbacks are set, so the first state
     // is sent from here; the callback only carries the changes after it.
@@ -1990,7 +2019,8 @@ const fn call_state(event: &Event) -> Option<CallState> {
         | Event::VideoOn
         | Event::VideoDeclined
         | Event::Reconnecting
-        | Event::Reconnected => None,
+        | Event::Reconnected
+        | Event::Relays(_) => None,
         Event::Dialing { .. } => Some(CallState::Dialing),
         Event::Ringing { .. } => Some(CallState::Ringing),
         Event::Incoming { .. } => Some(CallState::Incoming),
@@ -2020,6 +2050,11 @@ fn describe(event: &Event) -> String {
             Some(peer) => format!("call with {} ended: {reason:?}", peer.fmt_short()),
             None => format!("call ended: {reason:?}"),
         },
+        Event::Relays(view) => format!(
+            "relays: home {}, active {}",
+            view.home.as_ref().map_or_else(|| "none".to_owned(), ToString::to_string),
+            view.active.len()
+        ),
     }
 }
 
@@ -2076,6 +2111,10 @@ async fn handle_node_events(
                 let reconnecting = matches!(event, Event::Reconnecting);
                 with_state(&state, |s| s.reconnecting = reconnecting);
                 ui.set_call_reconnecting(reconnecting);
+            }
+            Event::Relays(live) => {
+                with_state(&state, |s| s.relays = Some(live.clone()));
+                show_relays(&state, &ui);
             }
             // The core has already written the call and stamped the contact; read both back.
             Event::Ended { peer, reason } => {

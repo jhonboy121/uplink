@@ -19,7 +19,7 @@ mod ui;
 
 use ui::{
     Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
-    Language, Permission, PermissionItem, Route, Screen, Theme, Unit,
+    Language, Permission, PermissionItem, Region, RelayItem, RelayUse, Route, Screen, Theme, Unit,
 };
 
 /// Logical pixels.
@@ -132,6 +132,20 @@ fn main() -> Result<()> {
     app.set_pending_key(one(keys()[1].1.into()));
     shoot(&window, &app, canvas, "name-sheet")?;
     app.set_pending_key(none());
+
+    // The relay page, automatic and then by hand, as the canvas's artboards F and G draw it, and
+    // the sheet that adds one of yours (H).
+    app.set_screen(Screen::Settings);
+    relays(&app, true);
+    app.set_relays_open(true);
+    shoot(&window, &app, canvas, "relays-auto")?;
+    relays(&app, false);
+    shoot(&window, &app, canvas, "relays-manual")?;
+    app.set_adding_relay(true);
+    shoot(&window, &app, canvas, "relay-add")?;
+    app.set_adding_relay(false);
+    app.set_relays_open(false);
+    relays(&app, true);
 
     // People with nobody in it is the first thing a new user sees.
     app.set_screen(Screen::People);
@@ -350,6 +364,54 @@ fn gate(states: &[Grant; 3]) -> slint::ModelRc<PermissionItem> {
 }
 
 /// Noor, opened from People: a favourite who calls themselves something else.
+/// The relays with the canvas's own figures: automatic uses India and holds Asia-Pacific in
+/// standby; manual has only those two ticked.
+fn relays(app: &App, auto: bool) {
+    const CHECKED_MINUTES: i32 = 12;
+    let relay = |url: &str, host: &str, name: &str, region, rtt: i32, ticked: bool, used| RelayItem {
+        url: url.into(),
+        host: host.into(),
+        name: name.into(),
+        region,
+        ticked,
+        rtt: one(rtt),
+        r#use: used,
+    };
+    let n0 = |label: &str, region, rtt, ticked, used| {
+        let host = format!("{label}-1.relay.n0.iroh.link");
+        relay(&format!("https://{host}"), &host, label, region, rtt, ticked, used)
+    };
+    let standby = if auto { RelayUse::Standby } else { RelayUse::None };
+    let uplink = vec![relay(
+        "https://uplink-relay.example.com",
+        "uplink-relay.example.com",
+        "",
+        Region::India,
+        38,
+        true,
+        RelayUse::InUse,
+    )];
+    let n0 = vec![
+        n0("aps1", Region::AsiaPacific, 71, true, standby),
+        n0("euc1", Region::Europe, 142, auto, RelayUse::None),
+        n0("use1", Region::NorthAmericaEast, 231, auto, RelayUse::None),
+        n0("usw1", Region::NorthAmericaWest, 268, auto, RelayUse::None),
+    ];
+    let yours =
+        vec![relay("https://relay.example.com", "relay.example.com", "Home", Region::Yours, 96, auto, RelayUse::None)];
+    let ticked = uplink.iter().chain(&n0).chain(&yours).filter(|relay| relay.ticked).count();
+    app.set_relays_auto(auto);
+    app.set_relays_checked(one(Ago { unit: Unit::Minutes, count: CHECKED_MINUTES }));
+    app.set_relays_on(i32::try_from(ticked).unwrap_or(i32::MAX));
+    app.set_uplink_relays(list(uplink));
+    app.set_n0_relays(list(n0));
+    app.set_your_relays(list(yours));
+}
+
+fn list<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
+    slint::ModelRc::new(slint::VecModel::from(items))
+}
+
 fn open_contact() -> ContactDetail {
     let key = keys()[0].1;
     ContactDetail {

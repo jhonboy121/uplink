@@ -1,0 +1,294 @@
+// The relays: automatic or by hand, and one group each for uplink's, n0's and yours. Drawn on
+// the settings canvas as artboards F (automatic) and G (manual).
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Ago, Region, RelayItem, RelayUse, Unit } from "types.slint";
+import { AppBar, Brand, PageTitle, Row, Tap } from "controls.slint";
+import { SettingsDivider, SettingsGroup, SettingsRow } from "settings.slint";
+
+// The name over a group, in the monospace face.
+component Caption inherits Text {
+    color: Theme.muted;
+    font-family: Theme.mono;
+    font-size: 0.6875rem;
+    letter-spacing: Theme.joined ? 0 : Theme.caption-spacing;
+    height: Theme.caption-box;
+    vertical-alignment: center;
+    horizontal-alignment: Theme.start;
+}
+
+// What a relay is doing, beside its name.
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <color> ink;
+    in property <color> edge;
+    width: label.preferred-width + Theme.relay-chip-pad * 2;
+    height: Theme.relay-chip-box;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: root.edge;
+    label := Text {
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.mono;
+        font-size: 0.65625rem;
+        letter-spacing: Theme.joined ? 0 : Theme.relay-chip-spacing;
+        vertical-alignment: center;
+    }
+}
+
+// One relay. The tile is its tick; the rest of the row ticks it too, except the remove button
+// a relay of yours ends with.
+component RelayRow inherits Rectangle {
+    in property <RelayItem> relay;
+    in property <bool> auto;
+    in property <bool> removable;
+    callback tick(bool);
+    callback remove();
+
+    property <string> title: root.relay.region == Region.india ? @tr("India")
+        : root.relay.region == Region.asia-pacific ? @tr("Asia-Pacific")
+        : root.relay.region == Region.europe ? @tr("Europe")
+        : root.relay.region == Region.north-america-east ? @tr("North America, east")
+        : root.relay.region == Region.north-america-west ? @tr("North America, west")
+        : root.relay.name;
+    // Bright for the relays that matter now: the ones in iroh's map when automatic, the ticked
+    // ones when not.
+    property <bool> live: root.auto ? root.relay.use != RelayUse.none : root.relay.ticked;
+
+    height: Theme.setting-height;
+    Row {
+        Rectangle {
+            horizontal-stretch: 1;
+            accessible-role: checkbox;
+            accessible-checked: root.relay.ticked;
+            accessible-label: root.title;
+            accessible-description: root.relay.host;
+            accessible-action-default => { root.tick(!root.relay.ticked); }
+            touch := Tap {
+                tapped => { root.tick(!root.relay.ticked); }
+            }
+            background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+            animate background { duration: Theme.feedback; easing: ease-out; }
+            Row {
+                padding-left: Theme.setting-pad;
+                padding-right: root.removable ? 0 : Theme.setting-pad;
+                spacing: Theme.setting-gap;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Theme.setting-tile;
+                        height: self.width;
+                        border-radius: Theme.setting-tile-radius;
+                        background: root.relay.ticked ? Theme.raised : transparent;
+                        border-width: root.relay.ticked ? 0 : Theme.tick-edge-width;
+                        border-color: Theme.tick-edge;
+                        if root.relay.ticked : Image {
+                            source: @image-url("icons/tick.svg");
+                            width: Theme.setting-icon;
+                            height: self.width;
+                            colorize: Theme.beacon;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Row {
+                        alignment: LayoutAlignment.start;
+                        spacing: Theme.relay-chip-gap;
+                        Text {
+                            text: root.title;
+                            color: Theme.text;
+                            font-size: 1rem;
+                            font-weight: 700;
+                            height: Theme.setting-title-box;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if root.relay.use == RelayUse.in-use : VerticalLayout {
+                            alignment: center;
+                            Chip {
+                                text: @tr("IN USE");
+                                ink: Theme.good;
+                                edge: Theme.good.with-alpha(0.4);
+                            }
+                        }
+                        if root.relay.use == RelayUse.standby && root.auto : VerticalLayout {
+                            alignment: center;
+                            Chip {
+                                text: @tr("STANDBY");
+                                ink: Theme.muted;
+                                edge: Theme.tick-edge;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.relay.host;
+                        color: Theme.muted;
+                        font-size: 0.8125rem;
+                        height: Theme.setting-detail-box;
+                        vertical-alignment: center;
+                        horizontal-alignment: Theme.start;
+                        overflow: elide;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.relay.rtt.length > 0 ? @tr("{} ms", root.relay.rtt[0]) : "—";
+                        color: root.live ? Theme.text : Theme.muted;
+                        font-size: 0.908rem;
+                        font-family: Theme.mono;
+                        height: self.font-size * Theme.line-box;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        if root.removable : VerticalLayout {
+            alignment: center;
+            padding-right: Theme.remove-end;
+            Rectangle {
+                width: Theme.remove-target;
+                height: self.width;
+                border-radius: self.width / 2;
+                accessible-role: button;
+                accessible-label: @tr("Remove {}", root.title);
+                accessible-action-default => { root.remove(); }
+                remove-touch := Tap {
+                    tapped => { root.remove(); }
+                }
+                background: remove-touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+                Image {
+                    source: @image-url("icons/remove.svg");
+                    width: Theme.remove-icon;
+                    height: self.width;
+                    colorize: Theme.muted;
+                }
+            }
+        }
+    }
+}
+
+// A caption and the rows under it.
+component RelayGroup inherits VerticalLayout {
+    in property <string> title;
+    spacing: Theme.caption-gap;
+    HorizontalLayout {
+        padding-left: Theme.caption-pad;
+        padding-right: Theme.caption-pad;
+        Caption { text: root.title; }
+    }
+    SettingsGroup {
+        @children
+    }
+}
+
+export component RelaysPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    in property <bool> auto;
+    // When the last survey ran; empty if none has.
+    in property <[Ago]> checked;
+    in property <[RelayItem]> uplink;
+    in property <[RelayItem]> n0;
+    in property <[RelayItem]> yours;
+    callback set-auto(bool);
+    callback check();
+    callback tick(string, bool);
+    callback add();
+    callback remove(string);
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: @tr("Relays");
+                horizontal-stretch: 1;
+            }
+            Brand { }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-left: Theme.group-edge;
+                padding-right: Theme.group-edge;
+                padding-bottom: root.bottom-inset + Theme.group-edge;
+                spacing: Theme.group-gap;
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/auto.svg");
+                        title: @tr("Automatic");
+                        detail: root.auto ? @tr("The fastest two you tick") : @tr("Every relay you tick");
+                        value: root.auto ? @tr("On") : @tr("Off");
+                        clicked => { root.set-auto(!root.auto); }
+                    }
+                    SettingsDivider { }
+                    SettingsRow {
+                        icon: @image-url("icons/timer.svg");
+                        title: @tr("Last checked");
+                        detail: root.checked.length == 0 ? @tr("Not yet")
+                            : root.checked[0].unit == Unit.now ? @tr("Just now")
+                            : root.checked[0].unit == Unit.minutes
+                                ? @tr("{n} min ago" | "{n} min ago" % root.checked[0].count)
+                            : root.checked[0].unit == Unit.hours
+                                ? @tr("{n} hour ago" | "{n} hours ago" % root.checked[0].count)
+                            : root.checked[0].unit == Unit.days
+                                ? @tr("{n} day ago" | "{n} days ago" % root.checked[0].count)
+                            : @tr("{n} week ago" | "{n} weeks ago" % root.checked[0].count);
+                        value: @tr("Check now");
+                        clicked => { root.check(); }
+                    }
+                }
+                RelayGroup {
+                    title: @tr("UPLINK");
+                    for relay[index] in root.uplink : VerticalLayout {
+                        if index > 0 : SettingsDivider { }
+                        RelayRow {
+                            relay: relay;
+                            auto: root.auto;
+                            tick(on) => { root.tick(relay.url, on); }
+                        }
+                    }
+                }
+                RelayGroup {
+                    title: @tr("N0");
+                    for relay[index] in root.n0 : VerticalLayout {
+                        if index > 0 : SettingsDivider { }
+                        RelayRow {
+                            relay: relay;
+                            auto: root.auto;
+                            tick(on) => { root.tick(relay.url, on); }
+                        }
+                    }
+                }
+                RelayGroup {
+                    title: @tr("YOURS");
+                    for relay[index] in root.yours : VerticalLayout {
+                        if index > 0 : SettingsDivider { }
+                        RelayRow {
+                            relay: relay;
+                            auto: root.auto;
+                            removable: true;
+                            tick(on) => { root.tick(relay.url, on); }
+                            remove => { root.remove(relay.url); }
+                        }
+                    }
+                    if root.yours.length > 0 : SettingsDivider { }
+                    SettingsRow {
+                        icon: @image-url("icons/plus.svg");
+                        title: @tr("Add a relay");
+                        detail: @tr("One you run, by its address");
+                        value: "";
+                        clicked => { root.add(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -7114,7 +7114,6 @@ name = "uplink"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arc-swap",
  "i-slint-compiler",
  "i-slint-core",
  "jni 0.22.4",

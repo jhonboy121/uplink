@@ -15,12 +15,14 @@ pub const BATTERY_OFFERED: &str = "battery-explained";
 pub const APPEARANCE: &str = "appearance";
 /// `system`, or the language the UI was set to (`en`, `ar`). The layout's direction follows it.
 pub const LANGUAGE: &str = "language";
-/// `custom`, or anything else for n0's own relays. See [`crate::relays`].
-pub const RELAY_SOURCE: &str = "relay-source";
-/// Which of n0's relays are switched off, one host per line.
-pub const RELAYS_OFF: &str = "relays-off";
-/// The relays to use instead of n0's, one `<url> <name>` per line.
+/// Set when the relays are chosen by hand; absent is automatic. See [`crate::relays`].
+pub const RELAYS_MANUAL: &str = "relays-manual";
+/// The relays that may be used, one URL per line. Absent is all of them.
+pub const RELAYS_TICKED: &str = "relays-ticked";
+/// The relays you added, one `<url> <name>` per line.
 pub const RELAYS_CUSTOM: &str = "relays-custom";
+/// The last survey: its unix time, then `<url> <rtt ms>` best first.
+pub const RELAYS_RANKING: &str = "relays-ranking";
 
 const TRUE: &str = "1";
 

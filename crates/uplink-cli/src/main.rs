@@ -16,8 +16,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
-use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node};
-use uplink_core::relays::Relays;
+use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node, Steer};
 use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, identity, runtime};
 
@@ -129,11 +128,10 @@ async fn session(dir: &Path, call: Option<(EndpointId, Mode)>, media_args: Media
     }
     let db = Db::open(dir)?;
     let contacts = Contacts::open(db.clone())?;
-    // The same setting the app reads, out of this data dir. The CLI is the only harness the core
-    // has off a phone, so a relay set that cannot be tried here cannot be tried at all.
-    let relays = Relays::load(&Settings::open(db)?);
+    // The same settings the app reads, out of this data dir. The CLI is the only harness the core
+    // has off a phone, so relay behaviour that cannot be tried here cannot be tried at all.
     let (node, mut events) =
-        Node::start(identity::load_or_create(dir).await?, Network::Public(relays), APP).await?;
+        Node::start(identity::load_or_create(dir).await?, Network::Public(Settings::open(db)?), APP).await?;
     if let Some((peer, mode)) = call {
         node.send(Command::Call(peer, mode)).await?;
     }
@@ -199,10 +197,13 @@ async fn handle_input(node: &Node, line: &str) -> Result<bool> {
         "v" => Command::AskVideo(true),
         "y" => Command::AnswerVideo(true),
         "n" => Command::AnswerVideo(false),
+        "c" => Command::Relays(Steer::Check),
         "q" => return Ok(false),
         "" => return Ok(true),
         other => {
-            println!("unknown input `{other}` (a accept, r reject, h hang up, v ask for video, y/n answer it, q quit)");
+            println!(
+                "unknown input `{other}` (a accept, r reject, h hang up, v ask for video, y/n answer it, c check relays, q quit)"
+            );
             return Ok(true);
         }
     };
@@ -245,6 +246,25 @@ fn describe(event: &Event, contacts: &Contacts) -> String {
                 }
                 reason => format!("call with {who} ended: {reason:?}"),
             }
+        }
+        Event::Relays(view) => {
+            let ranked: Vec<String> = view
+                .ranking
+                .relays
+                .iter()
+                .map(|relay| {
+                    let tag = if view.home.as_ref() == Some(&relay.url) {
+                        " [in use]"
+                    } else if view.active.contains(&relay.url) {
+                        " [active]"
+                    } else {
+                        ""
+                    };
+                    format!("{} {} ms{tag}", relay.url, relay.rtt.as_millis())
+                })
+                .collect();
+            let home = view.home.as_ref().map_or_else(|| "none".to_owned(), ToString::to_string);
+            format!("relays: home {home}; ranked {}", if ranked.is_empty() { "nothing yet".to_owned() } else { ranked.join(", ") })
         }
     }
 }

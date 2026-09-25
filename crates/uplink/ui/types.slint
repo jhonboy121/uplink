@@ -165,16 +165,24 @@ export struct CallDetail {
     network: [Stat],
 }
 
-// Where n0 puts a relay, or that you added it.
-export enum Region { north-america-east, north-america-west, europe, asia-pacific, elsewhere, yours }
+// Where a relay is: uplink's own, where n0 puts one, or that you added it and named it.
+export enum Region { india, north-america-east, north-america-west, europe, asia-pacific, elsewhere, yours }
 
-// A relay the endpoint may use. `host` is what settings store, not what is shown: two relays
-// in one region would read alike otherwise.
+// What the endpoint is doing with a relay right now.
+export enum RelayUse { none, in-use, standby }
+
+// One relay on the relay page. `url` is what settings store and callbacks name; `host` is the
+// line under the name. `name` is shown only for `yours` and `elsewhere`, which have no words
+// of their own.
 export struct RelayItem {
+    url: string,
     host: string,
     name: string,
     region: Region,
-    on: bool,
+    ticked: bool,
+    // Milliseconds at the last survey; empty if it did not answer or was never measured.
+    rtt: [int],
+    use: RelayUse,
 }
 
 // Something that went wrong and needs no decision. `subject` is whatever the sentence names —

@@ -10,7 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow.workspace = true
-arc-swap.workspace = true
 i-slint-core.workspace = true
 jni.workspace = true
 ndk.workspace = true

@@ -11,14 +11,14 @@ use uplink_core::EndpointId;
 use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
 use uplink_core::media::Route as MediaRoute;
-use uplink_core::node::Mode;
+use uplink_core::node::{Mode, RelayView};
 use uplink_core::quality::{Quality, Spread};
-use uplink_core::relays::{self, Region as RelayRegion};
+use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
 
 use crate::clock::LocalClock;
 use crate::ui::{
     Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Path,
-    PathKind, Permission, Region, RelayItem, Route, Say, Stat, Theme, Toast, Traffic, Unit,
+    PathKind, Permission, Region, RelayItem, RelayUse, Route, Say, Stat, Theme, Toast, Traffic, Unit,
 };
 
 /// Groups of four, the way the key is read aloud, over two even lines.
@@ -370,8 +370,11 @@ pub const fn route(route: MediaRoute) -> Route {
     }
 }
 
-pub fn relay_item(relay: relays::Relay) -> RelayItem {
+/// One relay on the relay page. What it is doing comes from the endpoint's report, and before
+/// the first one it is doing nothing we know of.
+pub fn relay_item(relay: &relays::Relay, choice: &Choice, ranking: &Ranking, live: Option<&RelayView>) -> RelayItem {
     let region = match relay.region {
+        RelayRegion::India => Region::India,
         RelayRegion::NorthAmericaEast => Region::NorthAmericaEast,
         RelayRegion::NorthAmericaWest => Region::NorthAmericaWest,
         RelayRegion::Europe => Region::Europe,
@@ -379,7 +382,25 @@ pub fn relay_item(relay: relays::Relay) -> RelayItem {
         RelayRegion::Elsewhere => Region::Elsewhere,
         RelayRegion::Yours => Region::Yours,
     };
-    RelayItem { host: relay.host.into(), name: relay.name.into(), region, on: relay.on }
+    let used = match live {
+        Some(view) if view.home.as_ref() == Some(&relay.url) => RelayUse::InUse,
+        Some(view) if view.active.contains(&relay.url) => RelayUse::Standby,
+        _ => RelayUse::None,
+    };
+    RelayItem {
+        url: relay.url.to_string().into(),
+        host: relay.host().into(),
+        name: relay.name.as_str().into(),
+        region,
+        ticked: choice.ticked.contains(&relay.url),
+        rtt: maybe(ranking.rtt(&relay.url).map(|rtt| count_of(rtt.as_millis()))),
+        r#use: used,
+    }
+}
+
+/// When the last relay survey ran; empty if none has.
+pub fn checked(ranking: &Ranking) -> ModelRc<Ago> {
+    maybe(ranking.at.map(ago))
 }
 
 pub const fn permission(permission: AndroidPermission) -> Permission {

@@ -1,10 +1,10 @@
-// Everything that sits over a page and waits: a notice, a question, a name to type, the relay
-// list, and the toast that asks nothing at all.
+// Everything that sits over a page and waits: a notice, a question, a name to type, a relay to
+// add, and the toast that asks nothing at all.
 
-import { CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { AddError, AddProblem, Mismatch, Region, RelayItem, Say, Toast } from "types.slint";
-import { Line, Prose, Row, RowDetail, RowTitle, SheetTitle, Tap, Wide } from "controls.slint";
+import { AddError, AddProblem, Mismatch, Say, Toast } from "types.slint";
+import { Line, Prose, Row, SheetTitle, Wide } from "controls.slint";
 
 // A card over a dimmed window. Centred in what the keyboard leaves rather than in the window, so
 // a field the sheet exists for is never the part that ends up underneath it.
@@ -165,139 +165,62 @@ export component NameSheet inherits Sheet {
     }
 }
 
-// One relay in the sheet: what it is called, where it is, and the one thing you can do to it.
-component RelayRow inherits Row {
-    in property <RelayItem> relay;
-    in property <bool> removable: false;
-    in-out property <bool> on;
-    callback remove();
-    spacing: Theme.value-gap;
-    // Fixed, because the list's height is counted in rows rather than measured. A scroll
-    // view has no preferred height of its own to give the sheet.
-    height: Theme.detail-height;
-    if !root.removable : CheckBox {
-        checked: root.on;
-        toggled => { root.on = self.checked; }
-    }
-    VerticalLayout {
-        alignment: center;
-        horizontal-stretch: 1;
-        RowTitle { text: root.relay.name; }
-        RowDetail {
-            text: root.relay.region == Region.north-america-east ? @tr("North America, east")
-                : root.relay.region == Region.north-america-west ? @tr("North America, west")
-                : root.relay.region == Region.europe ? @tr("Europe")
-                : root.relay.region == Region.asia-pacific ? @tr("Asia-Pacific")
-                : root.relay.region == Region.yours ? @tr("Added by you")
-                : @tr("n0 relay");
-        }
-    }
-    if root.removable : VerticalLayout {
-        alignment: center;
-        Text {
-            text: @tr("Remove");
-            color: Theme.end-call;
-            font-size: 0.8125rem;
-            font-weight: 700;
-            vertical-alignment: center;
-            accessible-role: button;
-            accessible-label: @tr("Remove {}", root.relay.name);
-            accessible-action-default => { root.remove(); }
-            Tap {
-                tapped => { root.remove(); }
-            }
-        }
-    }
+// A field's name, over it.
+component FieldLabel inherits Line {
+    color: Theme.muted;
+    font-size: 0.8125rem;
 }
 
-// Which relays the endpoint may use. A sheet rather than rows on the settings page, because
-// these are edited as a set: ticking three boxes one at a time would rebind the endpoint
-// three times, and two of those states are ones nobody asked for.
-export component RelaySheet inherits Sheet {
-    in property <[RelayItem]> relays;
-    in property <[RelayItem]> custom-relays;
-    in-out property <bool> custom;
-    in-out property <string> new-name;
-    in-out property <string> new-url;
-    callback save();
-    callback cancel();
+// A relay of your own, by name and address. The address is checked in Rust before it is kept, so
+// a typo is refused while it is still on screen.
+export component AddRelaySheet inherits Sheet {
+    in-out property <string> name;
+    in-out property <string> url;
     callback add(string, string);
-    callback remove(string);
+    callback cancel();
 
-    property <bool> has-url: root.new-url != "";
+    property <bool> has-url: root.url != "";
 
-    SheetTitle { text: @tr("Relays"); }
-    Prose { text: @tr("Each one is contacted every few seconds, call or no call. Using only the ones near you costs nothing and saves battery and mobile data."); }
-    // Which set is live. Both are listed whichever it is, because you pick the relay you are
-    // moving to before you move to it.
+    SheetTitle { text: @tr("Add a relay"); }
+    Prose {
+        text: @tr("One you run, or one someone gave you. It is checked before it is added, and used only while it is ticked.");
+        font-size: 0.875rem;
+    }
+    VerticalLayout {
+        spacing: Theme.field-label-gap;
+        FieldLabel { text: @tr("Name"); }
+        LineEdit {
+            placeholder-text: @tr("e.g. Home");
+            text <=> root.name;
+        }
+    }
+    VerticalLayout {
+        spacing: Theme.field-label-gap;
+        FieldLabel { text: @tr("Address"); }
+        LineEdit {
+            placeholder-text: "https://relay.example.com";
+            text <=> root.url;
+            accepted => {
+                if (root.has-url) {
+                    root.add(root.name, root.url);
+                }
+            }
+        }
+    }
     Row {
-        spacing: Theme.value-gap;
+        spacing: Theme.sheet-button-gap;
         Wide {
-            text: @tr("n0's");
-            primary: !root.custom;
-            clicked => { root.custom = false; }
+            text: @tr("Cancel");
+            horizontal-stretch: 1;
+            clicked => { root.cancel(); }
         }
         Wide {
-            text: @tr("My own");
-            primary: root.custom;
-            enabled: root.custom-relays.length > 0;
-            clicked => { root.custom = true; }
+            text: @tr("Add");
+            primary: true;
+            enabled: root.has-url;
+            horizontal-stretch: 1;
+            clicked => { root.add(root.name, root.url); }
         }
-    }
-    // Counted rather than measured: a ScrollView reports no preferred height of its own, so a
-    // sheet sized to its content would collapse the list to a single row.
-    ScrollView {
-        height: min(
-            (root.custom ? root.custom-relays.length : root.relays.length) * Theme.detail-height,
-            root.height / 3);
-        mouse-drag-pan-enabled: true;
-        VerticalLayout {
-            alignment: start;
-            if !root.custom : VerticalLayout {
-                for relay in root.relays : RelayRow {
-                    relay: relay;
-                    on <=> relay.on;
-                }
-            }
-            if root.custom : VerticalLayout {
-                for relay in root.custom-relays : RelayRow {
-                    relay: relay;
-                    removable: true;
-                    remove => { root.remove(relay.host); }
-                }
-            }
-        }
-    }
-    if root.custom-relays.length == 0 && root.custom : Prose {
-        text: @tr("Add one below to use your own.");
-    }
-    LineEdit {
-        placeholder-text: @tr("Name, e.g. Home");
-        text <=> root.new-name;
-    }
-    LineEdit {
-        placeholder-text: "https://relay.example.com";
-        input-type: text;
-        text <=> root.new-url;
-        accepted => {
-            if (root.has-url) {
-                root.add(root.new-name, root.new-url);
-            }
-        }
-    }
-    Wide {
-        text: @tr("Add this relay");
-        enabled: root.has-url;
-        clicked => { root.add(root.new-name, root.new-url); }
-    }
-    Wide {
-        text: @tr("Save");
-        primary: true;
-        clicked => { root.save(); }
-    }
-    Wide {
-        text: @tr("Cancel");
-        clicked => { root.cancel(); }
     }
 }
 

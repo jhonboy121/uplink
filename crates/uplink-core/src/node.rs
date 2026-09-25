@@ -15,9 +15,9 @@ use std::time::{Duration, SystemTime};
 
 use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, presets};
 use iroh::address_lookup::MemoryLookup;
-use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, TransportAddr, Watcher as _};
+use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 /// Part of [`EndReason::Incompatible`], so it is ours to hand out; the rest of the wire stays in.
@@ -29,7 +29,9 @@ use crate::protocol::{
     CLOSE_REJECTED, CLOSE_REJOINED, Hello, Setup, Signal,
 };
 use crate::media::{self, MediaLinks, MediaSession, MediaStats};
-use crate::relays::Relays;
+pub use crate::pilot::{RelayView, Steer};
+use crate::pilot::Pilot;
+use crate::settings::Settings;
 use crate::{EndpointId, Error, crypto};
 
 const COMMAND_QUEUE: usize = 16;
@@ -77,6 +79,8 @@ pub enum Command {
     AskVideo(bool),
     /// Answers their ask to switch to video.
     AnswerVideo(bool),
+    /// For the relay pilot; ignored on a local network, which has none.
+    Relays(Steer),
 }
 
 #[derive(Debug)]
@@ -105,6 +109,8 @@ pub enum Event {
     /// Back, over a new connection; the media carries on by itself.
     Reconnected,
     Ended { peer: Option<EndpointId>, reason: EndReason },
+    /// The relays: the last survey, what iroh is using, and which one we are reachable through.
+    Relays(RelayView),
 }
 
 #[derive(Clone, Debug)]
@@ -170,16 +176,33 @@ impl Node {
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
         emit(&events, Event::Ready { id: endpoint.id() }).await;
-        match network {
-            Network::Public(_) => {
+        let (in_call, in_call_rx) = watch::channel(false);
+        let pilot = match network {
+            Network::Public(store) => {
                 drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone())));
                 drop(tokio::spawn(heartbeat(endpoint.clone())));
+                let (steer, steer_rx) = mpsc::channel(CONTROL_QUEUE);
+                let pilot = Pilot::new(endpoint.clone(), store, events.clone());
+                drop(tokio::spawn(pilot.run(steer_rx, in_call_rx)));
+                Some(steer)
             }
-            Network::Local(lookup) => lookup.add_endpoint_info(loopback_addr(&endpoint)),
-        }
+            Network::Local(lookup) => {
+                lookup.add_endpoint_info(loopback_addr(&endpoint));
+                None
+            }
+        };
         let (finished, finished_rx) = mpsc::channel(CONTROL_QUEUE);
-        let engine =
-            Engine { endpoint, events, call: None, next_call: 0, finished, finished_rx, hello: Hello::ours(app) };
+        let engine = Engine {
+            endpoint,
+            events,
+            call: None,
+            next_call: 0,
+            finished,
+            finished_rx,
+            hello: Hello::ours(app),
+            pilot,
+            in_call,
+        };
         Ok((Self { commands, engine: tokio::spawn(engine.run(commands_rx)) }, events_rx))
     }
 
@@ -220,11 +243,11 @@ impl NodeHandle {
 }
 
 /// Where peers are found.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Network {
-    /// The real internet: relays plus DNS/pkarr address lookup. Which relays is a setting, so it
-    /// is carried rather than assumed — see [`crate::relays`].
-    Public(Relays),
+    /// The real internet: relays plus DNS/pkarr address lookup. Which relays is a setting, read
+    /// and kept current by [`crate::pilot`] from this store.
+    Public(Settings),
     /// Loopback only; nodes find each other through a shared in-memory lookup (tests, local demos).
     Local(MemoryLookup),
 }
@@ -233,15 +256,16 @@ async fn bind(secret: SecretKey, network: &Network) -> Result<Endpoint, Error> {
     let builder = match network {
         // Every relay in the map is handshaked with on every net_report — every 20 to 26 seconds,
         // for the life of the process, call or no call — so the number of them is what the idle
-        // cost is made of, and that is a setting rather than a constant.
+        // cost is made of, and why the pilot keeps it to two.
         //
         // The probes themselves are left at iroh's defaults. Turning the HTTPS latency probe and
         // the captive-portal check off was measured and saved nothing: the beat put the cost at
         // ~13.8 KB per relay per sweep before and ~14.0 KB after, so it is QUIC address discovery
         // that is expensive, not those. They are the only way to find a home relay on a network
         // that blocks QUIC, which is not a trade worth making for noise.
-        Network::Public(relays) => {
-            Endpoint::builder(presets::N0).relay_mode(RelayMode::Custom(relays.map()))
+        Network::Public(store) => {
+            let map = RelayMap::from_iter(Pilot::initial(store));
+            Endpoint::builder(presets::N0).relay_mode(RelayMode::Custom(map))
         }
         Network::Local(lookup) => Endpoint::builder(presets::Minimal).address_lookup(lookup.clone()),
     };
@@ -359,10 +383,11 @@ async fn heartbeat(endpoint: Endpoint) {
         tokio::time::sleep(BEAT).await;
         let (now, counters) = (std::time::Instant::now(), Counters::read(&endpoint));
         let beat = counters.since(last);
-        let relay = endpoint.home_relay_status().get().into_iter().any(|relay| relay.is_connected());
+        let home = endpoint.home_relay_status().get().into_iter().find(|relay| relay.is_connected());
         tracing::info!(
             elapsed_s = now.duration_since(at).as_secs(),
-            relay,
+            relay = home.is_some(),
+            home = home.as_ref().map_or_else(String::new, |relay| relay.url().to_string()),
             relay_up = beat.relay_up,
             relay_down = beat.relay_down,
             direct_up = beat.direct_up,
@@ -392,6 +417,10 @@ struct Engine {
     finished_rx: mpsc::Receiver<u64>,
     /// What this build says about itself in every offer and answer.
     hello: Hello,
+    /// The relay pilot's commands; none on a local network.
+    pilot: Option<mpsc::Sender<Steer>>,
+    /// Whether a call is up, which the pilot waits on before it moves the home relay.
+    in_call: watch::Sender<bool>,
 }
 
 impl Engine {
@@ -409,6 +438,7 @@ impl Engine {
                 Some(id) = self.finished_rx.recv() => {
                     if self.call.as_ref().is_some_and(|call| call.id == id) {
                         self.call = None;
+                        self.in_call.send_replace(false);
                     }
                 }
             }
@@ -425,6 +455,14 @@ impl Engine {
 
     async fn command(&mut self, command: Command) {
         match (command, &self.call) {
+            (Command::Relays(steer), _) => match &self.pilot {
+                Some(pilot) => {
+                    if pilot.send(steer).await.is_err() {
+                        tracing::warn!(?steer, "relay pilot gone");
+                    }
+                }
+                None => tracing::debug!(?steer, "no relays on a local network"),
+            },
             (Command::Call(peer, mode), None) => {
                 let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
                 let task =
@@ -466,6 +504,7 @@ impl Engine {
         let id = self.next_call;
         self.next_call += 1;
         self.call = Some(ActiveCall { id, control });
+        self.in_call.send_replace(true);
         let (events, finished) = (self.events.clone(), self.finished.clone());
         tokio::spawn(async move {
             let (known_peer, outcome) = task.await;

@@ -869,3 +869,71 @@ default); keep disk usage lean. Avoid build scripts.
   so the repro needs two machines (an EC2 CLI, or the other phone). Also fixed: a backgrounded call kept
   images naming deleted GL textures and drew the app's mark in place of stopped video; the route chip is in
   the accent the encryption chip had.
+- **2026-09-25**: **relays: one catalogue, a selection, and an automatic mode.** Built the same day; not
+  yet device-tested. The core is `relays.rs` (catalogue, ticks, ranking, active set) and `pilot.rs` (the
+  survey task). The page is `ui/relays.slint` plus `AddRelaySheet`. The CLI prints relay reports and takes
+  `c` to check now.
+  Replaces the n0-or-custom sheet and its off-list (2026-09-24), and "n0 relays for now" (2026-09-22).
+  - **The catalogue is all three, together:** **uplink's** own (one for now,
+    `https://uplink-relay.example.com`, self-hosted, the primary), **n0's** four (from
+    `iroh::defaults::prod`, never hardcoded), and **yours** (N, added by URL and name). There is no
+    "use custom instead of n0" switch any more: every relay in the catalogue can be chosen.
+  - **Stored as a selection, not a deny list.** `relays-selected` holds the URLs that are on. The
+    catch, accepted: a relay n0 adds later arrives **off**. A tick means "may be used" in both
+    modes. Automatic narrows the ticked set to the best two; manual uses every ticked relay. By
+    default **all five are ticked and automatic is on**, so the endpoint still talks to only two:
+    idle cost is per relay in iroh's map (~14 KB per relay per sweep, every 20–26 s). Migration:
+    `relay-source` and `relays-off` are dropped and read as the defaults; `relays-custom` stays as
+    it is.
+  - **What iroh already does, read from 1.2's source:**
+    - It probes **every relay in the map** each sweep and picks the home relay with the lowest
+      latency over the last 5 minutes. It only switches when the new one is under 2/3 of the old
+      one's latency. A home relay that stops answering drops out of the report, and the next
+      sweep picks another. **Failover already works, within the map.**
+    - `Endpoint::insert_relay` / `remove_relay` change the map **on a live endpoint**. Each change
+      is a major update, so a fresh net report runs at once. Rebinding is not needed.
+    - Reaching a peer goes through **their** home relay, whether or not it is in our map. So our
+      selection only decides where we can be reached, not whom we can reach.
+    - Per-relay latencies are public through `Endpoint::net_report()`, behind iroh's
+      `unstable-net-report` feature (a Cargo feature, nothing installed).
+  - **Automatic mode** (a setting, **on by default**; manual is "exactly the ticked ones"):
+    - The **pool** is the ticked relays, so an unticked relay is never used. The **active set**
+      in iroh's map is the best **two** of the pool: the home relay and a standby that iroh keeps
+      probing, so failover takes one sweep and is iroh's own logic.
+    - A **survey** ranks the whole pool. It inserts every pool relay, waits for the net report the
+      change triggers, reads `relay_latency`, then removes all but the top two. It uses iroh's own
+      probes (QUIC address discovery, HTTPS fallback), so no second prober. It costs one sweep
+      across the pool (~14 KB × pool size), not one sweep every 20 s.
+    - **When a survey runs:** at start, when the network changes (wifi ↔ cellular, a new public
+      address), every few hours (6 h to start with), and when the active set runs out. **Never
+      during a call**: a map change starts a net report and may move the home relay mid-call.
+      It waits until the call ends.
+    - **The priority list** is the last survey's ranking, stored with RTTs and a timestamp
+      (`relays-ranking`), so a start begins from the known best instead of all or nothing. When an
+      active relay fails (`home_relay_status` disconnected, or `relay_conns_failed` rising in the
+      beat), the next one on the list replaces it, so there is always a standby and never a
+      survey just to recover.
+    - Lives in `uplink-core` as a task beside the node's beat. The UI and the CLI send the mode,
+      the selection and "measure now" as commands. `Core::rebind`, the `ArcSwap` around the
+      command sender and the kept `SecretKey` existed only for relay changes, so they go.
+  - **Telemetry:** every survey logs one line per relay (URL, RTT or failure, probe kind). Every
+    active-set change and home-relay switch is logged with its reason. The beat line gains the home
+    relay. Both phones' logs then show which relay each side was reachable through for a call.
+  - **The page:** Relays gets its own page, no longer a sheet. It has the mode (Automatic /
+    Manual), three groups (Uplink, n0, Yours), and one row per relay: name, region, last RTT, a
+    tick, and in automatic mode *In use* / *Standby*. Adding a relay goes at the foot of Yours.
+    "Check now" shows when the last survey ran. **Locked 2026-09-25:** artboards F
+    (automatic), G (manual) and H (add a relay) on the Settings canvas
+    in artboard E's style, with the uplink
+    mark in the title bar like every other page. E's Relays row now reads **Auto**, or "{n} on"
+    in manual.
+  - **Decided (2026-09-25):**
+    - **uplink's relay is preferred.** Another relay ranks above it only when its RTT is under 2/3
+      of uplink's, the same margin iroh uses. iroh's choice inside the map is pure latency, so
+      a ranking alone would not stick. The **standby is the best relay that is not faster than the
+      primary**, so iroh's own pick lands on the primary. If every other relay is faster, the map
+      holds the primary alone and the controller does the failover itself (it watches
+      `home_relay_status` and puts the next relay in).
+    - `relay-in` serves QUIC address discovery (UDP 7842 is open).
+    - iroh's `unstable-net-report` feature is turned on.
+  - **Open:** is two the right active-set size? The beat line's relay bytes will say.

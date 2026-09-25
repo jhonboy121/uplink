@@ -13,6 +13,7 @@ pub mod media;
 pub mod node;
 pub mod qr;
 pub mod quality;
+mod pilot;
 pub mod relays;
 mod protocol;
 pub mod runtime;
@@ -20,5 +21,5 @@ pub mod settings;
 mod telemetry;
 
 pub use error::Error;
-pub use iroh::{EndpointId, SecretKey};
+pub use iroh::{EndpointId, RelayUrl, SecretKey};
 pub use iroh::address_lookup::MemoryLookup;

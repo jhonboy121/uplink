@@ -203,6 +203,24 @@ export global Theme {
     // Stronger than `hairline`: on a group's surface the page's own reads as nothing.
     out property <color> group-hairline: dark ? #263140E6 : #E1E7EE;
     out property <length> group-gap: 14px;
+    // The relay page: a caption over each group, a tick in the tile, and a chip for what a relay
+    // is doing. Drawn at 360dp on the settings canvas, artboards F–H.
+    out property <color> good: dark ? #32C97A : #10894C;
+    out property <color> tick-edge: dark ? #263140 : #C9D3DE;
+    out property <length> tick-edge-width: 1.5px;
+    out property <length> caption-gap: 6px;
+    out property <length> caption-pad: 4px;
+    out property <length> caption-box: 16px;
+    out property <length> caption-spacing: 1.5px;
+    out property <length> relay-chip-pad: 7px;
+    out property <length> relay-chip-box: 16px;
+    out property <length> relay-chip-spacing: 1px;
+    out property <length> relay-chip-gap: 8px;
+    out property <length> remove-target: 44px;
+    out property <length> remove-icon: 18px;
+    out property <length> remove-end: 6px;
+    out property <length> field-label-gap: 6px;
+    out property <length> sheet-button-gap: 10px;
     out property <length> brand: 26px;
     out property <length> sheet-width: 320px;
     out property <length> toast-bottom: 88px;

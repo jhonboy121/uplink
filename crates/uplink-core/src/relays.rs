@@ -1,21 +1,83 @@
 //! Which relays the endpoint talks to.
 //!
-//! Two shapes, because the two answer different questions. n0 publishes a set and changes it over
-//! time, so what is stored against it is the *subtraction* — the hosts switched off — and anything
-//! n0 adds later is on. A stored list of the ones that are on would have got that backwards, and
-//! silently: a relay added next year would be off for everyone who had ever opened this screen.
-//! A custom set has no publisher behind it, so there the stored list is the whole map, names and
-//! all, because a bare URL is not something anyone recognises a month later.
+//! One catalogue — uplink's own, n0's, and any you add — and a tick against each: a tick means
+//! "may be used". Stored as the ticked set, never as the unticked one, so what is stored is what
+//! is used; the price is that a relay n0 publishes later arrives unticked.
+//!
+//! Automatic (the default) narrows the ticked set to two: the best one, and a standby iroh keeps
+//! probing so its own failover has somewhere to go. Manual uses every ticked relay. The idle cost
+//! is per relay in iroh's map — each is probed every 20–26 s for the life of the process — which
+//! is why automatic is two and not five. See [`crate::pilot`] for what keeps the two current.
 
 use std::str::FromStr as _;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use iroh::{RelayMap, RelayUrl, defaults::prod};
 
 use crate::Error;
-use crate::settings::{RELAY_SOURCE, RELAYS_CUSTOM, RELAYS_OFF, Settings};
+use crate::settings::{RELAYS_CUSTOM, RELAYS_MANUAL, RELAYS_RANKING, RELAYS_TICKED, Settings};
 
-/// The stored value that means "not n0's". Anything else, including nothing, means n0's.
-const SOURCE_CUSTOM: &str = "custom";
+/// uplink's own relay, self-hosted. Preferred: see [`rank`].
+pub const UPLINK: &str = "https://uplink-relay.example.com";
+
+/// How many relays automatic keeps in iroh's map: one in use and one standby.
+const ACTIVE: usize = 2;
+
+/// Another relay outranks uplink's only when it is faster than this share of uplink's latency —
+/// the same margin iroh uses before it moves the home relay, so the two never disagree.
+const PREFER_NUM: u32 = 2;
+const PREFER_DEN: u32 = 3;
+
+/// Whose relay it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Uplink,
+    N0,
+    Yours,
+}
+
+/// Where a relay is. The words are the UI's, in whichever language it is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    India,
+    NorthAmericaEast,
+    NorthAmericaWest,
+    Europe,
+    AsiaPacific,
+    /// One of n0's whose label this does not know: a relay added since this was written.
+    Elsewhere,
+    /// Added by the user, and called by the name they gave it.
+    Yours,
+}
+
+impl Region {
+    /// Where n0 puts a relay, read from the label it names it with.
+    fn of_n0(label: &str) -> Self {
+        match label.get(..3) {
+            Some("use") => Self::NorthAmericaEast,
+            Some("usw") => Self::NorthAmericaWest,
+            Some("euc") => Self::Europe,
+            Some("aps") => Self::AsiaPacific,
+            _ => Self::Elsewhere,
+        }
+    }
+}
+
+/// One relay in the catalogue.
+#[derive(Clone, Debug)]
+pub struct Relay {
+    pub url: RelayUrl,
+    /// The name it was added with, or the first label of its host.
+    pub name: String,
+    pub source: Source,
+    pub region: Region,
+}
+
+impl Relay {
+    pub fn host(&self) -> &str {
+        self.url.host_str().unwrap_or_default()
+    }
+}
 
 /// A relay the user added: where it is, and what they call it.
 #[derive(Clone, Debug)]
@@ -46,165 +108,176 @@ impl Custom {
     }
 }
 
-/// Where the relay map comes from.
+fn uplink() -> Option<RelayUrl> {
+    RelayUrl::from_str(UPLINK).inspect_err(|e| tracing::error!("uplink's relay: {e}")).ok()
+}
+
+/// Every relay there is to choose from: uplink's, then n0's in their map's order, then yours.
+pub fn catalogue(store: &Settings) -> Vec<Relay> {
+    let ours = uplink().map(|url| Relay { url, name: String::new(), source: Source::Uplink, region: Region::India });
+    let n0 = prod::default_relay_map().urls::<Vec<_>>().into_iter().map(|url| {
+        let label = url.host_str().and_then(|host| host.split('.').next()).unwrap_or_default().to_owned();
+        Relay { region: Region::of_n0(&label), name: label, source: Source::N0, url }
+    });
+    let yours = custom(store)
+        .into_iter()
+        .map(|relay| Relay { url: relay.url, name: relay.name, source: Source::Yours, region: Region::Yours });
+    ours.into_iter().chain(n0).chain(yours).collect()
+}
+
+/// The mode and the ticks, as settings hold them.
 #[derive(Clone, Debug)]
-pub enum Relays {
-    /// Everything n0 publishes, minus these hosts.
-    N0 { off: Vec<String> },
-    /// Only these. Nothing of n0's is used, so this list is the whole map.
-    Custom(Vec<Custom>),
+pub struct Choice {
+    pub auto: bool,
+    /// Never stored empty by the UI; an empty list read back is treated as unset.
+    pub ticked: Vec<RelayUrl>,
 }
 
-/// One row of the relay list, as the settings screen shows it.
-pub struct Relay {
-    /// What the off-list names, and what tells one relay from another.
-    pub host: String,
-    /// What to call it on screen: n0's own label for the location, or the name it was added with.
-    pub name: String,
-    pub region: Region,
-    pub on: bool,
-}
-
-/// Where a relay is. The words are the UI's, in whichever language it is showing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Region {
-    NorthAmericaEast,
-    NorthAmericaWest,
-    Europe,
-    AsiaPacific,
-    /// One of n0's whose label this does not know: a relay added since this was written.
-    Elsewhere,
-    /// Added by the user.
-    Yours,
-}
-
-impl Region {
-    /// Where n0 puts a relay, read from the label it names it with. An unrecognised label is a
-    /// relay added since this was written — exactly the case the off-list exists to get right, so
-    /// it is listed, it is on, and it is named as plainly as we can manage.
-    fn of(name: &str) -> Self {
-        match name.get(..3) {
-            Some("use") => Self::NorthAmericaEast,
-            Some("usw") => Self::NorthAmericaWest,
-            Some("euc") => Self::Europe,
-            Some("aps") => Self::AsiaPacific,
-            _ => Self::Elsewhere,
-        }
-    }
-}
-
-impl Relays {
-    /// What settings say. An unreadable or absent choice is all of n0's, because a relay list is
-    /// a preference and failing to read one should not leave a phone unreachable.
+impl Choice {
+    /// Absent ticks mean all of them, so a fresh install lets automatic choose from everything.
     pub fn load(store: &Settings) -> Self {
-        if store.get(RELAY_SOURCE).as_deref() == Some(SOURCE_CUSTOM) {
-            let lines = store.lines(RELAYS_CUSTOM);
-            return Self::Custom(lines.iter().filter_map(|line| Custom::parse(line)).collect());
-        }
-        Self::N0 { off: store.lines(RELAYS_OFF) }
+        let ticked: Vec<RelayUrl> =
+            store.lines(RELAYS_TICKED).iter().filter_map(|line| RelayUrl::from_str(line).ok()).collect();
+        let ticked = if ticked.is_empty() { catalogue(store).into_iter().map(|relay| relay.url).collect() } else { ticked };
+        Self { auto: !store.flag(RELAYS_MANUAL), ticked }
     }
 
-    /// The map to hand iroh. Never empty: a phone with no relay cannot be called at all, and
-    /// neither an off-list nor an emptied custom list should be able to do that quietly.
-    pub fn map(&self) -> RelayMap {
-        let map = match self {
-            Self::N0 { off } => RelayMap::from_iter(
-                prod::default_relay_map()
-                    .relays::<Vec<_>>()
-                    .into_iter()
-                    .filter(|relay| !off.iter().any(|host| Some(host.as_str()) == relay.url.host_str())),
-            ),
-            Self::Custom(relays) => RelayMap::from_iter(relays.iter().map(|relay| relay.url.clone())),
+    pub fn save(&self, store: &Settings) -> Result<(), Error> {
+        store.set_flag(RELAYS_MANUAL, !self.auto)?;
+        let lines: Vec<String> = self.ticked.iter().map(ToString::to_string).collect();
+        store.set_lines(RELAYS_TICKED, &lines)
+    }
+
+    /// The ticked relays that still exist, in catalogue order: a tick against a removed relay of
+    /// yours is not something to hand iroh.
+    pub fn pool(&self, catalogue: &[Relay]) -> Vec<RelayUrl> {
+        catalogue.iter().filter(|relay| self.ticked.contains(&relay.url)).map(|relay| relay.url.clone()).collect()
+    }
+}
+
+/// One relay's round trip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Measured {
+    pub url: RelayUrl,
+    pub rtt: Duration,
+}
+
+/// The last survey: every relay that answered, best first, and when.
+#[derive(Clone, Debug, Default)]
+pub struct Ranking {
+    pub at: Option<SystemTime>,
+    pub relays: Vec<Measured>,
+}
+
+impl Ranking {
+    /// Stored as the survey's unix time on the first line, then `<url> <rtt ms>` in rank order.
+    pub fn load(store: &Settings) -> Self {
+        let lines = store.lines(RELAYS_RANKING);
+        let Some((first, rest)) = lines.split_first() else {
+            return Self::default();
         };
-        if map.is_empty() {
-            tracing::warn!("no relay is switched on; using n0's");
-            return prod::default_relay_map();
-        }
-        map
+        let at = first.parse().ok().map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+        let relays = rest
+            .iter()
+            .filter_map(|line| {
+                let (url, ms) = line.split_once(' ')?;
+                Some(Measured { url: RelayUrl::from_str(url).ok()?, rtt: Duration::from_millis(ms.parse().ok()?) })
+            })
+            .collect();
+        Self { at, relays }
     }
 
-    /// Every relay this source knows about, and whether it is on. A custom relay is on by being
-    /// in the list, which is why there is nothing to switch off — only to remove.
-    pub fn listed(&self) -> Vec<Relay> {
-        match self {
-            Self::N0 { off } => published()
-                .into_iter()
-                .map(|relay| Relay { on: !off.contains(&relay.host), ..relay })
-                .collect(),
-            Self::Custom(relays) => relays
-                .iter()
-                .map(|relay| Relay {
-                    host: relay.url.host_str().unwrap_or_default().to_owned(),
-                    name: relay.name.clone(),
-                    region: Region::Yours,
-                    on: true,
-                })
-                .collect(),
-        }
+    pub fn save(&self, store: &Settings) -> Result<(), Error> {
+        let at = self.at.and_then(|at| at.duration_since(UNIX_EPOCH).ok()).unwrap_or_default().as_secs();
+        let lines: Vec<String> = std::iter::once(at.to_string())
+            .chain(self.relays.iter().map(|relay| format!("{} {}", relay.url, relay.rtt.as_millis())))
+            .collect();
+        store.set_lines(RELAYS_RANKING, &lines)
+    }
+
+    pub fn rtt(&self, url: &RelayUrl) -> Option<Duration> {
+        self.relays.iter().find(|relay| &relay.url == url).map(|relay| relay.rtt)
     }
 }
 
-/// n0's own relays, in the map's order, all on. [`Relays::listed`] is what applies the off-list.
-fn published() -> Vec<Relay> {
-    let urls = prod::default_relay_map().urls::<Vec<_>>();
-    urls.iter()
-        .filter_map(|url| url.host_str())
-        .map(|host| {
-            let name = host.split('.').next().unwrap_or(host);
-            Relay { host: host.to_owned(), name: name.to_owned(), region: Region::of(name), on: true }
-        })
-        .collect()
+/// Best first, by latency, except that uplink's own relay stays ahead of any that is not clearly
+/// faster. Ties keep uplink's first.
+pub fn rank(mut measured: Vec<Measured>) -> Vec<Measured> {
+    let ours = uplink();
+    let key = |relay: &Measured| {
+        let preferred = Some(&relay.url) == ours.as_ref();
+        let rtt = if preferred { relay.rtt * PREFER_NUM / PREFER_DEN } else { relay.rtt };
+        (rtt, !preferred)
+    };
+    measured.sort_by_key(key);
+    measured
 }
 
-/// Switches one of n0's relays on or off. The off-list is the only thing written: the set itself
-/// is n0's to change.
-pub fn set_off(store: &Settings, host: &str, off: bool) -> Result<(), Error> {
-    let mut hosts = store.lines(RELAYS_OFF);
-    hosts.retain(|stored| stored != host);
-    if off {
-        hosts.push(host.to_owned());
+/// What iroh's map should hold.
+///
+/// Manual: every ticked relay. Automatic: the best ticked one, and as standby the best of the rest
+/// that is **not faster than it** — iroh picks the home relay by latency alone, so a faster standby
+/// would win the pick and undo uplink's preference. With nothing slower, the best one goes alone
+/// and [`crate::pilot`] fails over for it. With nothing measured, the whole pool, which is itself
+/// the survey that will narrow it.
+pub fn active(choice: &Choice, ranking: &Ranking, catalogue: &[Relay]) -> Vec<RelayUrl> {
+    let pool = choice.pool(catalogue);
+    if !choice.auto {
+        return pool;
     }
-    store.set_lines(RELAYS_OFF, &hosts)
+    let mut ranked = ranking.relays.iter().filter(|relay| pool.contains(&relay.url));
+    let Some(best) = ranked.next() else {
+        return pool;
+    };
+    let standby = ranked.find(|relay| relay.rtt >= best.rtt);
+    std::iter::once(best).chain(standby).take(ACTIVE).map(|relay| relay.url.clone()).collect()
 }
 
-/// Whether the custom set is the one in use. Read on its own because the screen shows both lists
-/// whichever is live — you pick a relay before you switch to it, not after.
-pub fn uses_custom(store: &Settings) -> bool {
-    store.get(RELAY_SOURCE).as_deref() == Some(SOURCE_CUSTOM)
+/// The map to hand iroh. Never empty: a phone with no relay cannot be called at all, so an empty
+/// choice falls back to the whole catalogue rather than leaving it unreachable quietly.
+pub fn map(urls: &[RelayUrl], store: &Settings) -> RelayMap {
+    if urls.is_empty() {
+        tracing::warn!("no relay is ticked; using them all");
+        return RelayMap::from_iter(catalogue(store).into_iter().map(|relay| relay.url));
+    }
+    RelayMap::from_iter(urls.iter().cloned())
 }
 
-pub fn set_uses_custom(store: &Settings, custom: bool) -> Result<(), Error> {
-    store.set(RELAY_SOURCE, if custom { SOURCE_CUSTOM } else { "n0" })
-}
-
-/// The custom set, whether or not it is the one in use.
+/// The relays yours, whether or not they are ticked.
 pub fn custom(store: &Settings) -> Vec<Custom> {
     store.lines(RELAYS_CUSTOM).iter().filter_map(|line| Custom::parse(line)).collect()
 }
 
-/// Adds a relay to the custom set. The URL is parsed here rather than stored and discovered to be
+/// Adds a relay of yours, ticked. The URL is parsed here rather than stored and discovered to be
 /// unusable later, so a typo is refused while the person who made it is still looking at it.
 pub fn add_custom(store: &Settings, name: &str, url: &str) -> Result<(), Error> {
     let url = RelayUrl::from_str(url.trim()).map_err(|_| Error::RelayUrl(url.to_owned()))?;
     let name = name.trim();
     let added = Custom { name: if name.is_empty() { url.to_string() } else { name.to_owned() }, url };
+    // Read before the list changes: absent ticks mean all, and they must go on meaning all of the
+    // old catalogue plus this one, not be pinned to it alone.
+    let mut choice = Choice::load(store);
     let mut lines: Vec<String> = custom(store)
         .into_iter()
         .filter(|stored| stored.url != added.url)
         .map(|stored| stored.line())
         .collect();
     lines.push(added.line());
-    store.set_lines(RELAYS_CUSTOM, &lines)
+    store.set_lines(RELAYS_CUSTOM, &lines)?;
+    if !choice.ticked.contains(&added.url) {
+        choice.ticked.push(added.url);
+    }
+    choice.save(store)
 }
 
-/// Removes one by host, which is what the row carries.
-pub fn remove_custom(store: &Settings, host: &str) -> Result<(), Error> {
-    let lines: Vec<String> = custom(store)
-        .into_iter()
-        .filter(|stored| stored.url.host_str() != Some(host))
-        .map(|stored| stored.line())
-        .collect();
-    store.set_lines(RELAYS_CUSTOM, &lines)
+/// Removes one of yours, and its tick with it.
+pub fn remove_custom(store: &Settings, url: &RelayUrl) -> Result<(), Error> {
+    let mut choice = Choice::load(store);
+    let lines: Vec<String> =
+        custom(store).into_iter().filter(|stored| &stored.url != url).map(|stored| stored.line()).collect();
+    store.set_lines(RELAYS_CUSTOM, &lines)?;
+    choice.ticked.retain(|ticked| ticked != url);
+    choice.save(store)
 }
 
 #[cfg(test)]
@@ -216,44 +289,98 @@ mod tests {
         Settings::open(Db::memory()?)
     }
 
-    /// The whole point of storing the off-list rather than the on-list: a relay n0 adds later is
-    /// on, without anyone having to touch their settings again.
+    fn url(s: &str) -> Result<RelayUrl, Error> {
+        RelayUrl::from_str(s).map_err(|_| Error::RelayUrl(s.to_owned()))
+    }
+
+    fn measured(s: &str, ms: u64) -> Result<Measured, Error> {
+        Ok(Measured { url: url(s)?, rtt: Duration::from_millis(ms) })
+    }
+
     #[test]
-    fn an_unknown_relay_is_on() -> Result<(), Error> {
+    fn a_fresh_install_ticks_everything_and_is_automatic() -> Result<(), Error> {
         let store = settings()?;
-        let first = published().first().map(|relay| relay.host.clone()).unwrap_or_default();
-        set_off(&store, &first, true)?;
-        let listed = Relays::load(&store).listed();
-        assert!(listed.iter().any(|relay| relay.host == first && !relay.on));
-        assert!(listed.iter().filter(|relay| relay.host != first).all(|relay| relay.on));
+        let choice = Choice::load(&store);
+        assert!(choice.auto);
+        assert_eq!(choice.ticked.len(), catalogue(&store).len());
         Ok(())
     }
 
-    /// Switching every relay off would leave the phone uncallable, so the map refuses to be empty.
+    /// uplink's relay keeps first place against one that is only a little faster, and loses it to
+    /// one under two thirds of its latency.
     #[test]
-    fn the_map_is_never_empty() -> Result<(), Error> {
-        let store = settings()?;
-        for relay in published() {
-            set_off(&store, &relay.host, true)?;
-        }
-        assert!(!Relays::load(&store).map().is_empty());
+    fn uplink_is_preferred_unless_clearly_slower() -> Result<(), Error> {
+        let close = rank(vec![measured("https://a.example.com", 50)?, measured(UPLINK, 60)?]);
+        assert_eq!(close[0].url, url(UPLINK)?);
+        let far = rank(vec![measured("https://a.example.com", 30)?, measured(UPLINK, 60)?]);
+        assert_eq!(far[0].url, url("https://a.example.com")?);
         Ok(())
     }
 
-    /// Adding is by URL, so the same relay twice is one relay with the newer name.
+    /// The standby must not be faster than the one in use, or iroh would pick it instead.
     #[test]
-    fn adding_the_same_relay_twice_renames_it() -> Result<(), Error> {
+    fn the_standby_is_never_faster_than_the_primary() -> Result<(), Error> {
+        let store = settings()?;
+        let choice = Choice { auto: true, ticked: catalogue(&store).into_iter().map(|relay| relay.url).collect() };
+        let [aps, euc] = [prod::default_ap_relay().url, prod::default_eu_relay().url];
+        let ranking = Ranking {
+            at: None,
+            relays: rank(vec![
+                measured(UPLINK, 60)?,
+                Measured { url: aps.clone(), rtt: Duration::from_millis(50) },
+                Measured { url: euc.clone(), rtt: Duration::from_millis(140) },
+            ]),
+        };
+        assert_eq!(active(&choice, &ranking, &catalogue(&store)), vec![url(UPLINK)?, euc]);
+        Ok(())
+    }
+
+    #[test]
+    fn manual_uses_every_ticked_relay() -> Result<(), Error> {
+        let store = settings()?;
+        let ticked = vec![url(UPLINK)?, prod::default_ap_relay().url];
+        let choice = Choice { auto: false, ticked: ticked.clone() };
+        assert_eq!(active(&choice, &Ranking::default(), &catalogue(&store)), ticked);
+        Ok(())
+    }
+
+    #[test]
+    fn a_ranking_round_trips() -> Result<(), Error> {
+        let store = settings()?;
+        let ranking = Ranking { at: Some(UNIX_EPOCH + Duration::from_secs(1_000)), relays: vec![measured(UPLINK, 38)?] };
+        ranking.save(&store)?;
+        let back = Ranking::load(&store);
+        assert_eq!(back.at, ranking.at);
+        assert_eq!(back.relays, ranking.relays);
+        Ok(())
+    }
+
+    /// Adding is by URL, so the same relay twice is one relay with the newer name, and it is ticked.
+    #[test]
+    fn an_added_relay_is_ticked_once() -> Result<(), Error> {
         let store = settings()?;
         add_custom(&store, "Home", "https://relay.example.com")?;
         add_custom(&store, "The one at home", "https://relay.example.com")?;
         let listed = custom(&store);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "The one at home");
+        let choice = Choice::load(&store);
+        assert_eq!(choice.ticked.iter().filter(|ticked| **ticked == listed[0].url).count(), 1);
+        assert_eq!(choice.ticked.len(), catalogue(&store).len());
         Ok(())
     }
 
-    /// A typo is refused while it is still on screen, rather than stored and found unusable at
-    /// the next bind.
+    #[test]
+    fn a_removed_relay_loses_its_tick() -> Result<(), Error> {
+        let store = settings()?;
+        add_custom(&store, "Home", "https://relay.example.com")?;
+        remove_custom(&store, &url("https://relay.example.com")?)?;
+        assert!(custom(&store).is_empty());
+        assert!(!Choice::load(&store).ticked.contains(&url("https://relay.example.com")?));
+        Ok(())
+    }
+
+    /// A typo is refused while it is still on screen, rather than stored and found unusable later.
     #[test]
     fn a_relay_that_is_not_a_url_is_refused() -> Result<(), Error> {
         let store = settings()?;
@@ -263,40 +390,9 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_relay_stays_removed() -> Result<(), Error> {
+    fn the_map_is_never_empty() -> Result<(), Error> {
         let store = settings()?;
-        add_custom(&store, "Home", "https://relay.example.com")?;
-        add_custom(&store, "Work", "https://other.example.com")?;
-        remove_custom(&store, "relay.example.com")?;
-        let listed = custom(&store);
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].name, "Work");
-        Ok(())
-    }
-
-    /// Emptying the custom set while it is the one in use must not leave the phone uncallable.
-    #[test]
-    fn an_empty_custom_set_falls_back() -> Result<(), Error> {
-        let store = settings()?;
-        set_uses_custom(&store, true)?;
-        assert!(!Relays::load(&store).map().is_empty());
-        Ok(())
-    }
-
-    /// A custom relay keeps the name it was given, and a nameless one falls back to its URL.
-    #[test]
-    fn a_custom_relay_round_trips() -> Result<(), Error> {
-        let store = settings()?;
-        let named = Custom::parse("https://relay.example.com Home").ok_or(Error::NodeStopped)?;
-        store.set(RELAY_SOURCE, SOURCE_CUSTOM)?;
-        store.set_lines(RELAYS_CUSTOM, &[named.line()])?;
-        match Relays::load(&store) {
-            Relays::Custom(relays) => {
-                assert_eq!(relays.len(), 1);
-                assert_eq!(relays[0].name, "Home");
-            }
-            Relays::N0 { .. } => panic!("stored a custom set and read back n0's"),
-        }
+        assert!(!map(&[], &store).is_empty());
         Ok(())
     }
 }
