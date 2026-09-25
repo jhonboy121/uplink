@@ -1307,3 +1307,55 @@ msgstr "لن تعمل كاميرتك إلا إذا وافقت. ويمكنك إط
 msgctxt "VideoAskSheet"
 msgid "{} wants to switch to video"
 msgstr "يريد ⁨{}⁩ التحويل إلى الفيديو"
+
+msgctxt "AudioSheet"
+msgid "Audio"
+msgstr "الصوت"
+
+msgctxt "AudioSheet"
+msgid "Bluetooth"
+msgstr "بلوتوث"
+
+msgctxt "AudioSheet"
+msgid "Phone"
+msgstr "الهاتف"
+
+msgctxt "AudioSheet"
+msgid "Speaker"
+msgstr "مكبر الصوت"
+
+msgctxt "AudioSheet"
+msgid "Wired headphones"
+msgstr "سماعات سلكية"
+
+msgctxt "CallScreen"
+msgid "Audio: {}"
+msgstr "الصوت: ⁨{}⁩"
+
+msgctxt "CallScreen"
+msgid "Bluetooth"
+msgstr "بلوتوث"
+
+msgctxt "CallScreen"
+msgid "On hold"
+msgstr "قيد الانتظار"
+
+msgctxt "CallScreen"
+msgid "Phone"
+msgstr "الهاتف"
+
+msgctxt "CallScreen"
+msgid "Wired headphones"
+msgstr "سماعات سلكية"
+
+msgctxt "CallScreen"
+msgid "You're on a phone call. {} can't hear or see you until it ends."
+msgstr "أنت في مكالمة هاتفية. لن يسمعك ⁨{}⁩ أو يراك حتى تنتهي."
+
+msgctxt "CallScreen"
+msgid "{} is on a phone call"
+msgstr "⁨{}⁩ في مكالمة هاتفية"
+
+msgctxt "AudioSheet"
+msgid "Mute"
+msgstr "كتم الصوت"

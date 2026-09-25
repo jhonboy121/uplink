@@ -35,6 +35,10 @@ pub struct CallAudio {
     streams: Option<Streams>,
     swap: mpsc::Sender<Rings>,
     muted: Arc<AtomicBool>,
+    /// The phone put the call on hold: the streams stay closed, whatever the mute says.
+    held: Arc<AtomicBool>,
+    /// Muted as an output: their voice is taken off the network but not played.
+    silenced: Arc<AtomicBool>,
     pub health: Arc<AudioHealth>,
 }
 
@@ -43,11 +47,13 @@ impl CallAudio {
     pub fn start(sender: AudioSender, receiver: AudioReceiver, runtime: Handle) -> Self {
         let health = Arc::<AudioHealth>::default();
         let (swap, rings) = mpsc::channel(SWAP_QUEUE);
-        let muted = Arc::<AtomicBool>::default();
+        let (muted, held, silenced) =
+            (Arc::<AtomicBool>::default(), Arc::<AtomicBool>::default(), Arc::<AtomicBool>::default());
         let mut tasks = Tasks::new(runtime);
         let cancel = tasks.cancel_token();
-        tasks.spawn(pump(rings, sender, receiver, Arc::clone(&muted), cancel));
-        let mut audio = Self { tasks, streams: None, swap, muted, health };
+        let quiet = Quiet { muted: Arc::clone(&muted), held: Arc::clone(&held), silenced: Arc::clone(&silenced) };
+        tasks.spawn(pump(rings, sender, receiver, quiet, cancel));
+        let mut audio = Self { tasks, streams: None, swap, muted, held, silenced, health };
         if let Err(e) = audio.reopen() {
             tracing::error!("voice streams: {e:#}");
         }
@@ -56,7 +62,27 @@ impl CallAudio {
 
     /// Whether the streams need reopening; call from a timer, never from a stream callback.
     pub fn needs_reopen(&self) -> bool {
-        self.health.disconnected() || self.streams.as_ref().is_none_or(Streams::disconnected)
+        !self.held() && (self.health.disconnected() || self.streams.as_ref().is_none_or(Streams::disconnected))
+    }
+
+    /// On hold the other call has the audio, so ours lets go of it entirely rather than holding
+    /// streams open that it must not use; off hold they open again.
+    pub fn set_held(&mut self, held: bool) -> Result<()> {
+        self.held.store(held, Ordering::Relaxed);
+        if held {
+            self.streams = None;
+            return Ok(());
+        }
+        self.reopen()
+    }
+
+    pub fn held(&self) -> bool {
+        self.held.load(Ordering::Relaxed)
+    }
+
+    /// Mute as an output: nothing of theirs is played until another output is chosen.
+    pub fn set_silenced(&self, silenced: bool) {
+        self.silenced.store(silenced, Ordering::Relaxed);
     }
 
     /// Closes the streams (if any) and opens them again with fresh rings for the pump.
@@ -97,14 +123,22 @@ impl CallAudio {
     }
 }
 
+/// What keeps the pump from sending or playing, each flipped from the UI thread.
+struct Quiet {
+    muted: Arc<AtomicBool>,
+    held: Arc<AtomicBool>,
+    silenced: Arc<AtomicBool>,
+}
+
 /// Encodes whatever the microphone has produced and plays out whatever the peer sent.
 async fn pump(
     mut swap: mpsc::Receiver<Rings>,
     mut sender: AudioSender,
     mut receiver: AudioReceiver,
-    muted: Arc<AtomicBool>,
+    quiet: Quiet,
     cancel: CancellationToken,
 ) {
+    let Quiet { muted, held, silenced } = quiet;
     let start = Instant::now();
     let mut tick = tokio::time::interval(FRAME_DURATION);
     let mut playout: Pcm = [0; FRAME_SAMPLES];
@@ -129,7 +163,7 @@ async fn pump(
             }
             let capture_micros = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
             // Muted: the ring is still drained, so unmuting doesn't play back stale audio.
-            if muted.load(Ordering::Relaxed) {
+            if muted.load(Ordering::Relaxed) || held.load(Ordering::Relaxed) {
                 continue;
             }
             if let Err(e) = sender.send(&frame, capture_micros) {
@@ -139,7 +173,12 @@ async fn pump(
         }
         match receiver.next(&mut playout) {
             // A full ring means playback stalled; dropping a whole frame keeps them aligned.
-            Ok(_) if speaker.slots() >= FRAME_SAMPLES => {
+            // Held or silenced, what they send is still taken off the network, just not played.
+            Ok(_)
+                if !held.load(Ordering::Relaxed)
+                    && !silenced.load(Ordering::Relaxed)
+                    && speaker.slots() >= FRAME_SAMPLES =>
+            {
                 for &sample in &playout {
                     if speaker.push(sample).is_err() {
                         break;

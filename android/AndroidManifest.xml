@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- A Telecom call: what keeps the microphone working with the screen locked (API 34+), and
+         the type left when camera and microphone are refused from the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <!-- Waiting for a call is not any of Android's named service types, and it is the only type
          a BOOT_COMPLETED receiver may still start. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -31,6 +34,9 @@
     <!-- The one-tap dialog for leaving battery optimisation. Without it the user is sent to a
          list of every app to find us in. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Calls go through Telecom as a self-managed app: audio mode, routes, headset buttons and
+         hold are the system's. A normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
     <!-- From Android 11 another app's component resolves to nothing unless its package is named
          here, installed or not. These are the makers whose background lists we can offer; see
@@ -98,6 +104,17 @@
                 android:value="Holds the peer-to-peer endpoint open so incoming calls can arrive" />
         </service>
 
+        <!-- Telecom binds this for every call, placed or received. Exported, but only the system
+             holds BIND_TELECOM_CONNECTION_SERVICE. -->
+        <service
+            android:name="${connection_service}"
+            android:exported="true"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
         <!-- Exported because the system sends BOOT_COMPLETED; MY_PACKAGE_REPLACED only ever
              reaches the package that was replaced. -->
         <receiver
@@ -109,16 +126,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- foregroundServiceType 0x400000c0 = camera | microphone | specialUse. The first two
-             are what a call needs; specialUse is the fallback when Android refuses them because
-             the app was not in front, which keeps the call up rather than crashing it. -->
+        <!-- foregroundServiceType 0xc4 = phoneCall | camera | microphone. phoneCall is the Telecom
+             call itself, and the fallback when Android refuses the other two because the app was
+             not in front, which keeps the call up rather than crashing it. -->
         <service
             android:name="${service}"
             android:exported="false"
-            android:foregroundServiceType="0x400000c0">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps a call connected when camera and microphone access is refused" />
-        </service>
+            android:foregroundServiceType="0xc4" />
     </application>
 </manifest>

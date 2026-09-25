@@ -19,7 +19,8 @@ mod ui;
 
 use ui::{
     Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
-    Language, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Screen, Stall, Theme, Unit, Weak,
+    Language, Output, OutputItem, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Screen, Stall,
+    Theme, Unit, Weak,
 };
 
 /// Logical pixels.
@@ -160,7 +161,10 @@ fn main() -> Result<()> {
     shoot(&window, &app, canvas, "key-scanning")?;
     app.set_scanning(false);
 
-    // Call states.
+    // Call states. The phone offers its earpiece and speaker, and a video call is on the speaker.
+    let plain = [Output::Phone, Output::Speaker].map(|output| OutputItem { output, name: "".into() });
+    app.set_call_outputs(slint::ModelRc::new(slint::VecModel::from(plain.to_vec())));
+    app.set_call_output(1);
     for (state, name) in [
         (CallState::Incoming, "call-incoming"),
         (CallState::Dialing, "call-dialing"),
@@ -201,8 +205,31 @@ fn main() -> Result<()> {
     app.set_call_weak(Weak::Ours);
     shoot(&window, &app, canvas, "your-connection-is-weak")?;
     app.set_call_weak(Weak::None);
+    // Audio & hold, named as the design's frames 17 to 20 are.
+    let with_headset = [
+        OutputItem { output: Output::Phone, name: "".into() },
+        OutputItem { output: Output::Speaker, name: "".into() },
+        OutputItem { output: Output::Bluetooth, name: "Galaxy Buds2 Pro".into() },
+    ];
+    app.set_call_outputs(slint::ModelRc::new(slint::VecModel::from(with_headset.to_vec())));
+    app.set_call_output(2);
+    app.set_choosing_output(true);
+    shoot(&window, &app, canvas, "where-the-sound-goes")?;
+    app.set_choosing_output(false);
+    app.set_call_held(true);
+    shoot(&window, &app, canvas, "youre-on-hold")?;
+    app.set_call_held(false);
+    app.set_call_output(1);
+    app.set_peer_held(true);
+    shoot(&window, &app, canvas, "theyre-on-hold")?;
+    app.set_peer_held(false);
     app.set_call_route(Route::Direct);
     app.set_call_voice(true);
+    app.set_call_output(2);
+    app.set_call_state(CallState::Connected);
+    shoot(&window, &app, canvas, "the-audio-key")?;
+    app.set_call_outputs(slint::ModelRc::new(slint::VecModel::from(plain.to_vec())));
+    app.set_call_output(1);
     for (state, name) in [
         (CallState::Dialing, "voice-calling"),
         (CallState::Incoming, "voice-incoming"),

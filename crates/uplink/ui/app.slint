@@ -15,12 +15,12 @@ import "fonts/IBMPlexMono-Medium.ttf";
 
 import { Appearance, Language, Theme } from "theme.slint";
 import {
-    AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, PermissionItem,
-    Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch, Weak,
+    AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, OutputItem,
+    PermissionItem, Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch, Weak,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
-import { AddRelaySheet, ConfirmSheet, NameSheet, NoticeSheet, ToastCard, VideoAskSheet } from "sheets.slint";
+import { AddRelaySheet, AudioSheet, ConfirmSheet, NameSheet, NoticeSheet, ToastCard, VideoAskSheet } from "sheets.slint";
 import { ContactPage, PeoplePage } from "people.slint";
 import { CallPage, CallsPage } from "calls.slint";
 import { ConnectPage, ScanPage } from "connect.slint";
@@ -31,8 +31,9 @@ import { CallScreen, MiniCall } from "call.slint";
 export { Appearance, Language, Theme } from "theme.slint";
 export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
-    DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Path, PathKind, Permission, PermissionItem,
-    Reach, Region, RelayItem, RelayUse, Route, Say, Screen, Stall, Stat, Toast, Traffic, Unit, Weak,
+    DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Output, OutputItem, Path, PathKind, Permission,
+    PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Say, Screen, Stall, Stat, Toast, Traffic, Unit,
+    Weak,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -132,7 +133,16 @@ export component App inherits Window {
     in-out property <bool> scanning: false;
     in-out property <bool> swapped: false;
     in-out property <bool> mic-on: true;
-    in-out property <bool> speaker-on: true;
+    // Where the call's sound can go, as Android says, and which one it goes to.
+    in property <[OutputItem]> call-outputs;
+    in property <int> call-output: -1;
+    // The Audio sheet is open.
+    in-out property <bool> choosing-output: false;
+    // Mute chosen as the output: their voice is not played.
+    in property <bool> call-silenced: false;
+    // A phone call holds this one: here, or on their phone.
+    in property <bool> call-held: false;
+    in property <bool> peer-held: false;
     // A key that has arrived and has no name yet, if one has.
     in-out property <[string]> pending-key;
     in-out property <string> new-name;
@@ -165,7 +175,10 @@ export component App inherits Window {
     callback hangup();
     callback flip-camera();
     callback toggle-mic();
-    callback toggle-speaker();
+    // The Audio key, which opens the Audio sheet.
+    callback audio();
+    callback choose-output(int);
+    callback silence();
     callback add-contact(string, string);
     callback rename-contact(string, string);
     callback remove-contact(string);
@@ -377,7 +390,11 @@ export component App inherits Window {
             card-y <=> root.call-card-y;
             card-placed <=> root.call-card-placed;
             mic-on: root.mic-on;
-            speaker-on: root.speaker-on;
+            outputs: root.call-outputs;
+            output-index: root.call-output;
+            silenced: root.call-silenced;
+            held: root.call-held;
+            peer-held: root.peer-held;
             voice: root.call-voice;
             camera-on: root.camera-on;
             peer-mic-off: root.peer-mic-off;
@@ -393,13 +410,28 @@ export component App inherits Window {
             reject => { root.reject(); }
             hangup => { root.hangup(); }
             toggle-mic => { root.toggle-mic(); }
-            toggle-speaker => { root.toggle-speaker(); }
+            audio => { root.audio(); }
             toggle-camera => { root.toggle-camera(); }
             flip-camera => { root.flip-camera(); }
             minimise => { root.call-folded = true; }
             ask-video(ask) => { root.ask-video(ask); }
             call-again => { root.call-again(); }
             close => { root.close-call(); }
+        }
+
+        // Where the sound goes, over the call it belongs to.
+        if root.choosing-output && root.call-state == CallState.connected && !root.call-folded : AudioSheet {
+            outputs: root.call-outputs;
+            current: root.call-output;
+            silenced: root.call-silenced;
+            choose(index) => {
+                root.choosing-output = false;
+                root.choose-output(index);
+            }
+            silence => {
+                root.choosing-output = false;
+                root.silence();
+            }
         }
 
         // Their ask to switch to video, over the call, whether it is up or folded away.

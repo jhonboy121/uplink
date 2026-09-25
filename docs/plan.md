@@ -1060,3 +1060,28 @@ default); keep disk usage lean. Avoid build scripts.
     change is needed unless we later let one side ask the other to send less.
   - Design first: the Call quality row becomes a page (the two network rows, each opening its presets),
     locked in the shell mockup before it is built.
+- **2026-09-25**: **Telecom, built and device-tested on the S24** (CLI ↔ app). Detail and the OEM
+  quirks handled are in docs/ref/telecom.md.
+  - The core asks Telecom before either phone rings; its no is `Command::Refused` (a ringing call is
+    answered Busy, a placed one hangs up; `EndReason::Refused`, logged as Failed). Headset buttons and
+    the system's own UI arrive as the commands the screen sends.
+  - **Found on the device:** the incoming notification was refused (`Person` with an empty name: an
+    incoming request's extras hold ours nested), fixed by keeping the name we passed; two automatic
+    speaker requests cancelled each other, fixed by one at a time.
+  - **The Audio sheet, changed on the device** (mockup frames 17, 17b, 18 updated): the key always
+    opens it; the choices are the outputs and **Mute, which is an output** — their voice stops playing
+    here, the mic and what they see are untouched. One tick at a time; no Bluetooth subtitle.
+  - **Switching output showed "{name}'s connection is weak":** the reroute reopens our voice streams
+    ~0.7 s later, and the playout gap reads as late and concealed packets (9/9 and 14/14 in the 5 s
+    windows holding the switches). `Health::ours_restarted` leaves their side unjudged for 3 samples
+    after an output change, a hold, or any reopen.
+  - Not yet: hold tested with a real cellular call; the Huawei (Android 12, no Google services).
+- **2026-09-25**: **to do — after Telecom** (the user's asks).
+  - **Keep the screen on during a call.** Video: `FLAG_KEEP_SCREEN_ON` while connected (what video
+    apps do). Voice on the earpiece: the screen goes off at the ear and back on away from it
+    (`PROXIMITY_SCREEN_OFF_WAKE_LOCK`), not kept on. Check what WhatsApp/Signal do for voice before
+    choosing, and clear both when the call ends or folds away.
+  - **Picture-in-picture gets mic and speaker.** Mic: the mute toggle, as today. Speaker: a tap
+    cycles through the outputs (and Mute) with no sheet. There is no separate microphone to pick:
+    with Telecom the mic follows the output (a Bluetooth headset brings its own, wired its own, else
+    the phone's), so "which mic" is answered by the output.

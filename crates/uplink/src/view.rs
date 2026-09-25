@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
-use uplink_android::platform::Permission as AndroidPermission;
+use uplink_android::platform::{Permission as AndroidPermission, Route as AndroidRoute, RouteKind};
 use uplink_core::EndpointId;
 use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
@@ -19,9 +19,9 @@ use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
 
 use crate::clock::LocalClock;
 use crate::ui::{
-    Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Path,
-    PathKind, Permission, Reach, Region, RelayItem, RelayUse, Route, Say, Stall, Stat, Theme, Toast, Traffic,
-    Unit, Weak,
+    Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Output,
+    OutputItem, Path, PathKind, Permission, Reach, Region, RelayItem, RelayUse, Route, Say, Stall, Stat, Theme,
+    Toast, Traffic, Unit, Weak,
 };
 
 /// Groups of four, the way the key is read aloud, over two even lines.
@@ -399,6 +399,23 @@ pub const fn route(route: MediaRoute) -> Route {
         MediaRoute::Direct => Route::Direct,
         MediaRoute::Relay => Route::Relayed,
     }
+}
+
+/// Where the call's sound can go, for the Audio key and its sheet, in Telecom's order.
+pub fn outputs(routes: &[AndroidRoute]) -> ModelRc<OutputItem> {
+    let items: Vec<OutputItem> = routes
+        .iter()
+        .map(|route| OutputItem {
+            output: match route.kind {
+                RouteKind::Phone => Output::Phone,
+                RouteKind::Speaker => Output::Speaker,
+                RouteKind::Bluetooth => Output::Bluetooth,
+                RouteKind::Wired => Output::Wired,
+            },
+            name: route.name.as_str().into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(items))
 }
 
 /// One relay on the relay page. What it is doing comes from the endpoint's report, and before

@@ -2,7 +2,7 @@
 // app can be used.
 
 import { Theme } from "theme.slint";
-import { CallState, Route, Stall, Weak } from "types.slint";
+import { CallState, Output, OutputItem, Route, Stall, Weak } from "types.slint";
 import { BigAvatar, DragTap, Key, Line, Row, Tap } from "controls.slint";
 
 // A label on the call's scrim: how the call is set up.
@@ -213,7 +213,14 @@ export component CallScreen inherits Rectangle {
     in-out property <length> card-y;
     in-out property <bool> card-placed;
     in property <bool> mic-on;
-    in property <bool> speaker-on;
+    // Where the sound can go, and which of them it goes to now (-1 before Android has said).
+    in property <[OutputItem]> outputs;
+    in property <int> output-index: -1;
+    // Mute chosen as the output.
+    in property <bool> silenced;
+    // A phone call was answered over this one: here, or on their phone.
+    in property <bool> held;
+    in property <bool> peer-held;
     // Placed or offered as voice, and not switched to video since.
     in property <bool> voice;
     in property <bool> camera-on: true;
@@ -236,7 +243,8 @@ export component CallScreen inherits Rectangle {
     callback reject();
     callback hangup();
     callback toggle-mic();
-    callback toggle-speaker();
+    // The Audio key, which opens the sheet: where the sound goes, and mute.
+    callback audio();
     callback toggle-camera();
     callback flip-camera();
     callback minimise();
@@ -249,8 +257,21 @@ export component CallScreen inherits Rectangle {
     property <bool> incoming: state == CallState.incoming;
     property <bool> lost: state == CallState.lost;
     property <bool> video: !root.voice && !root.lost;
-    // Their picture is not worth showing: their camera is off.
-    property <bool> peer-away: root.connected && root.video && root.peer-camera-off;
+    // Their picture is not worth showing: their camera is off, or their phone holds the call.
+    property <bool> peer-away: root.connected && root.video && (root.peer-camera-off || root.peer-held);
+    // Ours stopped: turned off, or held by a phone call.
+    property <bool> camera-stopped: !root.camera-on || root.held;
+    // Hold is not the network: nothing about reconnecting or a weak link while either side holds.
+    property <bool> stalled: root.reconnecting && !root.held && !root.peer-held;
+    property <Weak> weak-shown: root.held || root.peer-held ? Weak.none : root.weak;
+    property <Output> output: root.output-index >= 0 && root.output-index < root.outputs.length
+        ? root.outputs[root.output-index].output : Output.speaker;
+    property <string> output-name: root.output-index >= 0 && root.output-index < root.outputs.length
+        && root.outputs[root.output-index].name != "" ? root.outputs[root.output-index].name
+        : root.output == Output.phone ? @tr("Phone")
+        : root.output == Output.bluetooth ? @tr("Bluetooth")
+        : root.output == Output.wired ? @tr("Wired headphones")
+        : @tr("Speaker");
 
     // Under everything on the call, so a tap nothing here takes stops here. The picture that
     // fills the screen takes none, and a tap on it went through to the page beneath — a
@@ -265,9 +286,10 @@ export component CallScreen inherits Rectangle {
     }
 
     // Our picture fills the screen (swapped, or not yet connected) with the camera off.
-    if root.video && !root.camera-on && (root.swapped || !root.connected) : CameraOff { }
+    if root.video && root.camera-stopped && (root.swapped || !root.connected) : CameraOff { }
 
-    // Their camera is off: them, not a frozen frame, which would read as the network.
+    // Their camera is off, or they are on a phone call: them, not a frozen frame, which would
+    // read as the network.
     if root.peer-away && !root.swapped : Rectangle {
         background: Theme.video;
         VerticalLayout {
@@ -289,9 +311,17 @@ export component CallScreen inherits Rectangle {
             HorizontalLayout {
                 alignment: center;
                 Flag {
-                    icon: @image-url("icons/video-off.svg");
-                    text: @tr("Camera off");
+                    icon: root.peer-held ? @image-url("icons/pause.svg") : @image-url("icons/video-off.svg");
+                    text: root.peer-held ? @tr("On hold") : @tr("Camera off");
                 }
+            }
+            if root.peer-held : Text {
+                text: @tr("{} is on a phone call", root.peer-name);
+                color: Theme.on-video-muted;
+                font-size: 0.8125rem;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
     }
@@ -324,7 +354,7 @@ export component CallScreen inherits Rectangle {
             source: root.swapped ? root.remote-frame : root.frame;
             image-fit: cover;
         }
-        if !root.camera-on && !root.swapped : CameraOff { }
+        if root.camera-stopped && !root.swapped : CameraOff { }
         // Theirs, when they are the one in the card.
         if root.peer-away && root.swapped : CameraOff { }
         if !root.swapped : Rectangle {
@@ -336,7 +366,7 @@ export component CallScreen inherits Rectangle {
             background: @linear-gradient(0deg, #0000008C 0%, #00000000 100%);
             Text {
                 x: Theme.rtl ? parent.width - self.width - Theme.self-label-pad : Theme.self-label-pad;
-                text: root.camera-on ? @tr("You") : @tr("Camera off");
+                text: root.held ? @tr("On hold") : root.camera-on ? @tr("You") : @tr("Camera off");
                 color: Theme.on-video;
                 font-size: 0.6875rem;
                 vertical-alignment: center;
@@ -386,7 +416,7 @@ export component CallScreen inherits Rectangle {
 
     // A voice call, and a call that has ended with the network: the person in the middle. While
     // a voice call reconnects, the message takes their place and the name moves to the bar.
-    if !root.video && !(root.connected && root.reconnecting) : VoiceFace {
+    if !root.video && !(root.connected && (root.stalled || root.held)) : VoiceFace {
         initial: root.peer-initial;
         name: root.peer-name;
         padding-top: root.top-inset + Theme.voice-edge;
@@ -413,7 +443,7 @@ export component CallScreen inherits Rectangle {
         if root.lost : Rectangle { height: Theme.lost-timer-top; }
         if root.connected || root.lost : CallTimer { text: root.timer; }
         // Theirs under their name, as in a video call; ours is in the corner above the keys.
-        if root.connected && root.weak == Weak.theirs : HorizontalLayout {
+        if root.connected && root.weak-shown == Weak.theirs : HorizontalLayout {
             alignment: center;
             padding-top: Theme.flags-top;
             Flag {
@@ -421,6 +451,23 @@ export component CallScreen inherits Rectangle {
                 icon-size: Theme.weak-icon;
                 text: @tr("{}'s connection is weak", root.peer-name);
             }
+        }
+        // On their phone call: the pill and the line under their name, as over their video.
+        if root.connected && root.peer-held : HorizontalLayout {
+            alignment: center;
+            padding-top: Theme.flags-top;
+            Flag {
+                icon: @image-url("icons/pause.svg");
+                text: @tr("On hold");
+            }
+        }
+        if root.connected && root.peer-held : Text {
+            text: @tr("{} is on a phone call", root.peer-name);
+            color: Theme.on-video-muted;
+            font-size: 0.8125rem;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
         if root.connected && root.kept-voice : Rectangle { height: Theme.kept-voice-top; }
         if root.connected && root.kept-voice : Text {
@@ -435,7 +482,7 @@ export component CallScreen inherits Rectangle {
 
     // Nothing arriving: the call is still there, and says it is coming back. The bar and the
     // keys stay over it and keep working.
-    if root.connected && root.reconnecting : Rectangle {
+    if root.connected && root.stalled : Rectangle {
         background: root.video ? Theme.reconnect-scrim : transparent;
         VerticalLayout {
             alignment: center;
@@ -463,6 +510,59 @@ export component CallScreen inherits Rectangle {
                     text: root.stall == Stall.offline ? @tr("The call carries on when your network is back.")
                         : root.stall == Stall.waiting ? @tr("Their connection dropped. The call carries on when they're back.")
                         : @tr("The call carries on when the network is back.");
+                    color: Theme.on-video-muted;
+                    font-size: 0.875rem;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // A phone call has this one on hold: the same scrim as reconnecting, with a pause mark rather
+    // than dots, because nothing is being retried. It comes back by itself when that call ends.
+    if root.connected && root.held : Rectangle {
+        background: root.video ? Theme.reconnect-scrim : transparent;
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.held-gap;
+            padding-top: root.top-inset;
+            padding-left: Theme.reconnect-edge;
+            padding-right: Theme.reconnect-edge;
+            padding-bottom: root.bottom-inset + Theme.peer-off-lift;
+            HorizontalLayout {
+                alignment: center;
+                padding-bottom: Theme.held-mark-under;
+                Rectangle {
+                    width: Theme.key-size;
+                    height: Theme.key-size;
+                    border-radius: self.width / 2;
+                    background: Theme.key-fill;
+                    border-width: 1px;
+                    border-color: Theme.key-edge;
+                    Image {
+                        source: @image-url("icons/pause.svg");
+                        width: Theme.key-icon;
+                        height: Theme.key-icon;
+                        colorize: Theme.on-video;
+                    }
+                }
+            }
+            Text {
+                text: @tr("On hold");
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.25rem;
+                font-weight: 600;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    width: min(Theme.held-text, root.width - Theme.reconnect-edge * 2);
+                    text: @tr("You're on a phone call. {} can't hear or see you until it ends.", root.peer-name);
                     color: Theme.on-video-muted;
                     font-size: 0.875rem;
                     wrap: word-wrap;
@@ -511,7 +611,7 @@ export component CallScreen inherits Rectangle {
                             tapped => { root.minimise(); }
                         }
                     }
-                    if root.video || root.reconnecting : VerticalLayout {
+                    if root.video || root.stalled || root.held : VerticalLayout {
                         spacing: 3px;
                         Line {
                             text: root.peer-name;
@@ -534,14 +634,14 @@ export component CallScreen inherits Rectangle {
                             font-size: 0.8125rem;
                             overflow: elide;
                         }
-                        if root.peer-mic-off || (root.weak == Weak.theirs && !root.reconnecting) : Row {
+                        if root.peer-mic-off || (root.weak-shown == Weak.theirs && !root.stalled) : Row {
                             padding-top: Theme.flags-top - 3px;
                             spacing: Theme.flags-gap;
                             if root.peer-mic-off : Flag {
                                 icon: @image-url("icons/mic-off.svg");
                                 text: @tr("Muted");
                             }
-                            if root.weak == Weak.theirs && !root.reconnecting : Flag {
+                            if root.weak-shown == Weak.theirs && !root.stalled : Flag {
                                 icon: @image-url("icons/signal-weak.svg");
                                 icon-size: Theme.weak-icon;
                                 text: @tr("{}'s connection is weak", root.peer-name);
@@ -587,36 +687,44 @@ export component CallScreen inherits Rectangle {
                     positive: true;
                     clicked => { root.call-again(); }
                 }
+                // On hold every key but End call dims: the other call has the mic and the sound.
                 if !root.incoming && !root.lost : Key {
                     icon: root.mic-on ? @image-url("icons/mic.svg") : @image-url("icons/mic-off.svg");
                     label: root.mic-on ? @tr("Mute") : @tr("Unmute");
                     on: !root.mic-on;
+                    enabled: !root.held;
                     clicked => { root.toggle-mic(); }
                 }
                 if root.connected && root.video : Key {
                     icon: root.camera-on ? @image-url("icons/video-key.svg") : @image-url("icons/video-off.svg");
                     label: root.camera-on ? @tr("Turn camera off") : @tr("Turn camera on");
                     on: !root.camera-on;
+                    enabled: !root.held;
                     clicked => { root.toggle-camera(); }
                 }
                 if root.connected && root.video : Key {
                     icon: @image-url("icons/camera-switch.svg");
                     label: @tr("Switch camera");
-                    enabled: root.camera-on;
+                    enabled: root.camera-on && !root.held;
                     clicked => { root.flip-camera(); }
                 }
+                // Draws where the sound goes; never filled, because it is a choice, not a switch.
                 if root.connected : Key {
-                    icon: @image-url("icons/speaker.svg");
-                    label: @tr("Speaker");
-                    on: root.speaker-on;
-                    clicked => { root.toggle-speaker(); }
+                    icon: root.silenced ? @image-url("icons/speaker-off.svg")
+                        : root.output == Output.phone ? @image-url("icons/call.svg")
+                        : root.output == Output.bluetooth ? @image-url("icons/bluetooth.svg")
+                        : root.output == Output.wired ? @image-url("icons/headphones.svg")
+                        : @image-url("icons/speaker.svg");
+                    label: @tr("Audio: {}", root.silenced ? @tr("Mute") : root.output-name);
+                    enabled: !root.held;
+                    clicked => { root.audio(); }
                 }
                 // Asks, and while the question is open, takes it back.
                 if root.connected && !root.video : Key {
                     icon: @image-url("icons/video-key.svg");
                     label: root.asking ? @tr("Asking to switch to video") : @tr("Switch to video");
                     on: root.asking;
-                    enabled: !root.reconnecting;
+                    enabled: !root.reconnecting && !root.held;
                     clicked => { root.ask-video(!root.asking); }
                 }
                 if !root.incoming && !root.lost : Key {
@@ -633,13 +741,13 @@ export component CallScreen inherits Rectangle {
     // view's. The route, because a relayed call explains a bad one; the encryption is not said,
     // being always the same. Our own weak pill over it, on our side of the screen, so it is never
     // read as theirs. The open question to switch to video takes this spot while it shows.
-    if root.connected && !root.reconnecting && !root.asking && (root.route != Route.unknown || root.weak == Weak.ours) : VerticalLayout {
+    if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours) : VerticalLayout {
         x: Theme.rtl ? parent.width - self.width - Theme.self-view-edge : Theme.self-view-edge;
         y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
         width: self.preferred-width;
         height: self.preferred-height;
         spacing: Theme.flags-gap;
-        if root.weak == Weak.ours : HorizontalLayout {
+        if root.weak-shown == Weak.ours : HorizontalLayout {
             alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
             Flag {
                 icon: @image-url("icons/signal-weak.svg");

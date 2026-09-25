@@ -27,7 +27,7 @@ use jni::{EnvUnowned, JavaVM, NativeMethod, Outcome, jni_str};
 use parking_lot::Mutex;
 use tracing::{Dispatch, Level};
 use uplink_android::log::{self, Logging};
-use uplink_android::platform::{AppContext, address_from_handle, handle_from_address};
+use uplink_android::platform::{AppContext, Disconnect, TelecomAction, address_from_handle, handle_from_address};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 // By path: `jni::Outcome` is imported above, and the two mean unrelated things.
@@ -90,12 +90,17 @@ struct Inbox {
 /// Rings for an incoming call, plays ringback for an outgoing one, and stops either when the call
 /// is answered or over, whether or not a window is up. The window cannot own this: the call that
 /// most needs ringing is the one nobody is looking at.
+///
+/// It also keeps Telecom in step with the call, for the same reason: a call Telecom does not know
+/// about gets none of the system's audio handling, and one it refuses does not happen.
 #[derive(Clone)]
 struct Ringer {
     context: AppContext,
     db: Db,
     /// This build's version, for the notice when one phone is too old for the other.
     app: String,
+    /// For turning away a call Telecom will not have.
+    calls: NodeHandle,
 }
 
 /// The language Android's resources are read in, from the stored setting (`system`, `en`, `ar`):
@@ -113,17 +118,50 @@ impl Ringer {
         if let Event::Ended { peer: Some(peer), reason: EndReason::Incompatible { behind, theirs } } = event {
             self.update_needed(peer, *behind, theirs);
         }
+        if let Err(e) = self.telecom(event) {
+            tracing::warn!("telecom: {e}");
+        }
         let outcome = match event {
-            Event::Incoming { peer, .. } => self.context.ring(&self.name_of(peer)),
             // From the moment we dial, not only once their phone rings: someone offline never
             // rings, and silence until the dial times out reads as the app having hung. Starting
-            // it again on Ringing does nothing.
+            // it again on Ringing does nothing. An incoming call rings when Telecom says so.
             Event::Dialing { .. } | Event::Ringing { .. } => self.context.ringback(),
             Event::Connected { .. } | Event::Ended { .. } => self.context.stop_ringing(),
             _ => return,
         };
         if let Err(e) = outcome {
             tracing::warn!("ringing: {e}");
+        }
+    }
+
+    /// Asked first, before either phone rings: Telecom's no ends the call right there, while the
+    /// dial is still looking for them or before the notification exists.
+    fn telecom(&self, event: &Event) -> Result<(), uplink_android::Error> {
+        match event {
+            Event::Dialing { peer, mode } | Event::Incoming { peer, mode } => {
+                let incoming = matches!(event, Event::Incoming { .. });
+                if !self.context.telecom_permitted(incoming)? {
+                    tracing::warn!(incoming, "telecom will not take a call now");
+                    self.refuse();
+                    return Ok(());
+                }
+                let (key, name, video) = (peer.to_string(), self.name_of(peer), *mode == Mode::Video);
+                if incoming {
+                    self.context.telecom_incoming(&key, &name, video)
+                } else {
+                    self.context.telecom_place(&key, &name, video)
+                }
+            }
+            Event::Connected { .. } => self.context.telecom_active(),
+            Event::VideoOn => self.context.telecom_video(true),
+            Event::Ended { reason, .. } => self.context.telecom_ended(disconnect(reason)),
+            _ => Ok(()),
+        }
+    }
+
+    fn refuse(&self) {
+        if let Err(e) = self.calls.try_send(Command::Refused) {
+            tracing::error!("refusing the call: {e}");
         }
     }
 
@@ -151,6 +189,21 @@ impl Ringer {
             }
         };
         saved.unwrap_or_else(|| peer.fmt_short().to_string())
+    }
+}
+
+/// Why a call ended, as Telecom is told it.
+const fn disconnect(reason: &EndReason) -> Disconnect {
+    match reason {
+        EndReason::LocalHangup => Disconnect::Local,
+        EndReason::RemoteHangup | EndReason::Rejected | EndReason::NoAnswer => Disconnect::Remote,
+        EndReason::Declined => Disconnect::Rejected,
+        EndReason::Busy => Disconnect::Busy,
+        EndReason::DialTimeout
+        | EndReason::Incompatible { .. }
+        | EndReason::ConnectionLost
+        | EndReason::Refused
+        | EndReason::Failed(_) => Disconnect::Error,
     }
 }
 
@@ -361,7 +414,7 @@ impl Core {
         // The relays are read from the store by the endpoint's pilot, which the relay page steers.
         let (node, events) = runtime.block_on(Node::start(secret, Network::Public(settings), &app))?;
         let inbox = Arc::<Mutex<Inbox>>::default();
-        let ringer = Ringer { context, db: db.clone(), app };
+        let ringer = Ringer { context, db: db.clone(), app, calls: node.handle() };
         runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone()));
         tracing::info!(%id, "core up");
         Ok(Self {
@@ -479,7 +532,7 @@ extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void)
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 5] {
+fn natives() -> [NativeMethod<'static>; 6] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkApplication's natives.
     unsafe {
         [
@@ -507,6 +560,11 @@ fn natives() -> [NativeMethod<'static>; 5] {
                 jni_str!("nativeNetwork"),
                 jni_str!("(JZ)V"),
                 native_network as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeTelecom"),
+                jni_str!("(JI)V"),
+                native_telecom as *mut c_void,
             ),
         ]
     }
@@ -596,6 +654,32 @@ extern "system" fn native_ring_action<'local>(
     match core.calls().try_send(Command::Answer(false)) {
         Ok(()) => tracing::info!("declined from the notification"),
         Err(e) => tracing::error!("declining from the notification: {e}"),
+    }
+}
+
+/// What Telecom did with the call: a headset button, the system's own UI, or a refusal. Straight
+/// to the endpoint, as the screen's own buttons go, so either means the same thing.
+extern "system" fn native_telecom<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    action: jint,
+) {
+    let Some(core) = Core::from_java(handle) else { return };
+    let _log = tracing::dispatcher::set_default(&core.dispatch());
+    let Some(action) = TelecomAction::from_code(action) else {
+        tracing::warn!(action, "unknown telecom action");
+        return;
+    };
+    let command = match action {
+        TelecomAction::Answer => Command::Answer(true),
+        TelecomAction::Reject => Command::Answer(false),
+        TelecomAction::Hangup => Command::Hangup,
+        TelecomAction::Refused => Command::Refused,
+    };
+    tracing::info!(?action, "from telecom");
+    if let Err(e) = core.calls().try_send(command) {
+        tracing::error!(?action, "telecom action: {e}");
     }
 }
 

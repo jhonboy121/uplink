@@ -56,7 +56,8 @@ public class UplinkCallService extends Service {
         boolean micOn = intent == null || intent.getBooleanExtra(EXTRA_MIC_ON, true);
         boolean camera = intent == null || intent.getBooleanExtra(EXTRA_CAMERA, true);
         Notification notification = notification(this, peer != null ? peer : "", micOn);
-        int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 | (camera ? ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA : 0);
         try {
             startForeground(NOTIFICATION_ID, notification, types);
@@ -70,10 +71,10 @@ public class UplinkCallService extends Service {
             } else {
                 // Refused because the app was not in front. The service still has to go
                 // foreground — a started foreground service that never does is its own crash — so
-                // it takes the one type that is allowed from here. The call carries on; the camera
-                // and microphone go quiet until the app comes back.
-                UplinkActivity.log(Log.WARN, "call service without camera and microphone: " + e);
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                // it takes the one type that is allowed from here: the Telecom call, which on 34+
+                // is also what keeps the microphone working behind a locked screen.
+                UplinkActivity.log(Log.WARN, "call service as a phone call only: " + e);
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL);
                 foreground = true;
             }
         }

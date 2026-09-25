@@ -3,8 +3,8 @@
 
 import { LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { AddError, AddProblem, Mismatch, Say, Toast } from "types.slint";
-import { Line, Prose, Row, SheetTitle, Wide } from "controls.slint";
+import { AddError, AddProblem, Mismatch, Output, OutputItem, Say, Toast } from "types.slint";
+import { Line, Prose, Row, SheetTitle, Tap, Wide } from "controls.slint";
 
 // A card over a dimmed window. Centred in what the keyboard leaves rather than in the window, so
 // a field the sheet exists for is never the part that ends up underneath it.
@@ -108,6 +108,93 @@ export component VideoAskSheet inherits Sheet {
     Wide {
         text: @tr("Keep voice");
         clicked => { root.answer(false); }
+    }
+}
+
+// One row of the Audio sheet: an icon, what it is, and a tick while it is the one in force.
+component AudioRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> picked;
+    // The hairline above it; none on the first row.
+    in property <color> rule: transparent;
+    callback tapped();
+    height: row.preferred-height;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: root.rule;
+    }
+    row := HorizontalLayout {
+        padding-top: Theme.output-pad;
+        padding-bottom: Theme.output-pad;
+        spacing: Theme.output-gap;
+        Image {
+            source: root.icon;
+            width: Theme.output-icon;
+            height: Theme.output-icon;
+            y: (parent.height - self.height) / 2;
+            colorize: root.picked ? Theme.beacon : Theme.muted;
+        }
+        Line {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: root.picked ? Theme.beacon : Theme.text;
+            font-size: 1rem;
+            font-weight: root.picked ? 600 : 400;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        if root.picked : Image {
+            source: @image-url("icons/picked.svg");
+            width: Theme.output-tick;
+            height: Theme.output-tick;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.beacon;
+        }
+    }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.tapped(); }
+    Tap {
+        tapped => { root.tapped(); }
+    }
+}
+
+// Where the call's sound goes, one tap from the Audio key whatever is connected: an output, or
+// Mute, which is nowhere. One choice, one tick; a tap chooses and closes. Back closes without
+// changing anything.
+export component AudioSheet inherits Sheet {
+    in property <[OutputItem]> outputs;
+    in property <int> current: -1;
+    // Their voice is not played. The output under it stays chosen for when it comes back.
+    in property <bool> silenced;
+    callback choose(int);
+    callback silence();
+
+    SheetTitle { text: @tr("Audio"); }
+    VerticalLayout {
+        for item[index] in root.outputs : AudioRow {
+            icon: item.output == Output.phone ? @image-url("icons/call.svg")
+                : item.output == Output.bluetooth ? @image-url("icons/bluetooth.svg")
+                : item.output == Output.wired ? @image-url("icons/headphones.svg")
+                : @image-url("icons/speaker.svg");
+            label: item.name != "" ? item.name
+                : item.output == Output.phone ? @tr("Phone")
+                : item.output == Output.bluetooth ? @tr("Bluetooth")
+                : item.output == Output.wired ? @tr("Wired headphones")
+                : @tr("Speaker");
+            picked: index == root.current && !root.silenced;
+            rule: index > 0 ? Theme.hairline : transparent;
+            tapped => { root.choose(index); }
+        }
+        AudioRow {
+            icon: @image-url("icons/speaker-off.svg");
+            label: @tr("Mute");
+            picked: root.silenced;
+            rule: root.outputs.length > 0 ? Theme.hairline : transparent;
+            tapped => { root.silence(); }
+        }
     }
 }
 

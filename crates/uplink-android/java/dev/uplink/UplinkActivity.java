@@ -49,6 +49,8 @@ public class UplinkActivity extends NativeActivity {
     static final int ACTION_ANSWER = 2;
     /** Not a call action, but the same one-way path to the window: the time shown may be wrong. */
     static final int ACTION_CLOCK = 3;
+    /** Telecom changed the call's hold, mute or outputs; the window reads them back. */
+    static final int ACTION_AUDIO = 4;
     /** Why the activity was opened for a call, from the ringing notification. */
     static final String EXTRA_CALL = "call";
     static final int CALL_SHOW = 1;

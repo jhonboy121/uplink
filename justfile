@@ -18,6 +18,7 @@ android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
 call_service := "dev.uplink.UplinkCallService"
 listen_service := "dev.uplink.UplinkListenService"
+connection_service := "dev.uplink.UplinkConnectionService"
 boot_receiver := "dev.uplink.UplinkBootReceiver"
 files_provider := "dev.uplink.UplinkFiles"
 application := "dev.uplink.UplinkApplication"
@@ -126,6 +127,7 @@ apk: build dex
         --define package={{app_id}} --define label={{app_label}} --define lib={{lib}} \
         --define activity={{activity}} --define service={{call_service}} \
         --define listen_service={{listen_service}} --define boot_receiver={{boot_receiver}} \
+        --define connection_service={{connection_service}} \
         --define provider={{files_provider}} --define application={{application}} \
         --define minSdk={{min_sdk}} --define targetSdk={{target_sdk}} \
         --define versionCode={{version_code}} --define versionName=0.{{version_code}} \

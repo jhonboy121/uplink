@@ -143,6 +143,8 @@ public class UplinkApplication extends Application {
     private ToneGenerator ringbackTone;
     /** Missed calls since the app was last opened, for the one notification that counts them. */
     private int missed;
+    /** Calls as Telecom sees them; made in onCreate, before anything can place or ring one. */
+    private UplinkTelecom telecom;
 
     /** Hands this Application to Rust's `ndk_context`, before anything there can read it. */
     private native void nativeInit();
@@ -154,6 +156,8 @@ public class UplinkApplication extends Application {
     private static native void nativeRingAction(long core, int action);
 
     private static native void nativeNetwork(long core, boolean up);
+
+    private static native void nativeTelecom(long core, int action);
 
     @Override
     public void onCreate() {
@@ -168,6 +172,7 @@ public class UplinkApplication extends Application {
             Log.e(TAG, "loading the native library: " + e);
         }
         words = localized(preferences().getString(LANGUAGE, ""));
+        telecom = new UplinkTelecom(this);
         registerActivityLifecycleCallbacks(visibility);
         IntentFilter filter = new IntentFilter(ACTION_RING);
         filter.addAction(ACTION_MISSED_DISMISSED);
@@ -429,7 +434,91 @@ public class UplinkApplication extends Application {
                 .putExtra(UplinkCallService.EXTRA_CAMERA, camera);
     }
 
+    // ---- Telecom -------------------------------------------------------------------------------
+
+    UplinkTelecom telecom() {
+        return telecom;
+    }
+
+    /** Answer, reject, hang up, or refused: what Telecom did with the call, for the core. */
+    static void telecomAction(int action) {
+        long handle = core;
+        if (handle != 0) {
+            nativeTelecom(handle, action);
+        }
+    }
+
+    // What Rust calls, on any thread.
+
+    boolean telecomPermitted(boolean incoming) {
+        return telecom.permitted(incoming);
+    }
+
+    void telecomPlace(String key, String who, boolean video) {
+        telecom.place(key, who, video);
+    }
+
+    void telecomIncoming(String key, String who, boolean video) {
+        telecom.incoming(key, who, video);
+    }
+
+    void telecomActive() {
+        telecom.active();
+    }
+
+    void telecomVideo(boolean on) {
+        telecom.setVideo(on);
+    }
+
+    void telecomEnded(int cause) {
+        telecom.ended(cause);
+    }
+
+    void telecomChooseRoute(int index) {
+        telecom.route(index);
+    }
+
+    boolean telecomHeld() {
+        return telecom.held();
+    }
+
+    boolean telecomMuted() {
+        return telecom.muted();
+    }
+
+    int[] telecomRouteKinds() {
+        return telecom.routeKinds();
+    }
+
+    String[] telecomRouteNames() {
+        return telecom.routeNames();
+    }
+
+    int telecomCurrentRoute() {
+        return telecom.route();
+    }
+
+    /**
+     * Hold, mute or the outputs changed. The window reads them back when told; with no window
+     * there is no media to hold, and one that opens later reads them when it starts.
+     */
+    void callAudioChanged() {
+        sendBroadcast(new Intent(UplinkActivity.ACTION_CALL)
+                .setPackage(getPackageName())
+                .putExtra(UplinkActivity.EXTRA_ACTION, UplinkActivity.ACTION_AUDIO));
+    }
+
     // ---- Ringing -------------------------------------------------------------------------------
+
+    /** The volume key while it rings: the sound and vibration stop, the call still rings. */
+    void silenceRinging() {
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                stopAlerting();
+            }
+        });
+    }
 
     /**
      * Someone is calling. The sound plays whether or not the app is in front — the call screen

@@ -470,7 +470,6 @@
   .route:first-child { border-top: 0; }
   .route svg { width: 15px; height: 15px; flex: none; color: #5B6B7D; }
   .route .what { display: grid; gap: 1px; flex: 1; min-width: 0; }
-  .route .what small { font-size: 8.5px; color: #5B6B7D; }
   .route.current { color: #0A6FC2; font-weight: 600; }
   .route.current svg { color: #0A6FC2; }
   .route .tick { width: 13px; height: 13px; }
@@ -1504,13 +1503,54 @@
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
                       <div class="what">Phone</div>
                     </div>
+                    <div class="route current" aria-current="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                      <div class="what">Speaker</div>
+                      <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+                    </div>
+                    <div class="route">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9.5l5 5"/><path d="M22 9.5l-5 5"/></svg>
+                      <div class="what">Mute</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Where the sound goes</b>The Audio key always opens this, even with only Phone and Speaker, so where the sound goes is always a choice you can see. The current output is ticked, and a tap switches and closes the sheet. Mute is the last choice, like any other: their voice stops playing on this phone. It is about what you hear, not your microphone (that is the Mute key's), so nothing changes for them. One choice is ticked at a time; picking an output again brings their voice back. Back closes the sheet without changing anything.</figcaption>
+      </figure>
+
+      <!-- 17b · with a headset -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:15</span><span>5G ▚ 81%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="sheetwrap">
+                <div class="sheet" role="dialog" aria-label="Audio">
+                  <h5>Audio</h5>
+                  <div class="routes">
+                    <div class="route">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                      <div class="what">Phone</div>
+                    </div>
                     <div class="route">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
                       <div class="what">Speaker</div>
                     </div>
-                    <div class="route current" aria-current="true">
+                    <div class="route">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg>
-                      <div class="what">Galaxy Buds2 Pro<small>Bluetooth</small></div>
+                      <div class="what">Galaxy Buds2 Pro</div>
+                    </div>
+                    <div class="route current" aria-current="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9.5l5 5"/><path d="M22 9.5l-5 5"/></svg>
+                      <div class="what">Mute</div>
                       <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
                     </div>
                   </div>
@@ -1519,7 +1559,7 @@
             </div>
           </div>
         </div>
-        <figcaption><b>Where the sound goes</b>Opened from the Audio key when three or more outputs are available. The current one is ticked, and a tap switches and closes the sheet. Bluetooth shows the headset's own name. Wired headphones take the Phone row's place while plugged in, because Android offers one or the other. Back closes the sheet without changing anything.</figcaption>
+        <figcaption><b>With a headset</b>A connected headset is one more row, by its own name with no subtitle (its icon says what it is), and Android usually sends the sound there first. Wired headphones take the Phone row's place while plugged in, because Android offers one or the other. Shown muted: Mute is ticked and the headset is not, and the Audio key draws the crossed-out speaker.</figcaption>
       </figure>
 
       <!-- 18 · the audio key -->
@@ -1559,7 +1599,7 @@
             </div>
           </div>
         </div>
-        <figcaption><b>The Audio key</b>It sits where Speaker was and draws the current output, never filled, because it is a choice and not an on/off switch. With only Phone and Speaker available, a tap switches between them directly. With more, a tap opens the sheet. Its label names the output, for TalkBack.</figcaption>
+        <figcaption><b>The Audio key</b>It sits where Speaker was and draws the current output, never filled, because it is a choice and not an on/off switch. A tap always opens the sheet (frame 17). Its label names the output, for TalkBack.</figcaption>
       </figure>
 
       <!-- 19 · you're on hold -->
@@ -1700,7 +1740,7 @@
       <div class="card">
         <h3>New strings</h3>
         <ul>
-          <li>Audio · Phone · Speaker · Bluetooth · Wired headphones</li>
+          <li>Audio · Phone · Speaker · Bluetooth · Wired headphones · Mute</li>
           <li>On hold · You're on a phone call. {name} can't hear or see you until it ends.</li>
           <li>{name} is on a phone call</li>
         </ul>

@@ -25,13 +25,13 @@ use ndk::native_window::NativeWindow;
 use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
-use slint::{ComponentHandle, Model as _, RenderingState, Timer, TimerMode};
+use slint::{ComponentHandle, Model as _, ModelRc, RenderingState, Timer, TimerMode};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
-use uplink_android::platform::{Permission, Platform, PlatformEvent, Text};
+use uplink_android::platform::{Permission, Platform, PlatformEvent, TelecomState, Text};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
@@ -94,6 +94,8 @@ const VIDEO: VideoConfig = VideoConfig {
     keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
 };
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
+/// The markup's "Android has not said which output yet".
+const NO_OUTPUT: i32 = -1;
 /// How long after our own network changes a stalled call is put down to us rather than them: a
 /// switch between wifi and mobile data takes about a second, and the relay a moment more.
 const UNSETTLED: Duration = Duration::from_secs(5);
@@ -155,6 +157,8 @@ struct State {
     camera_on: bool,
     /// The core is getting a dropped connection back.
     reconnecting: bool,
+    /// The call as Telecom last said: held, muted by the system, and where the sound goes.
+    telecom: TelecomState,
     /// The call's counters, voice or video: a voice call has no codecs to hold them.
     media: Option<Arc<MediaStats>>,
     /// The chip's answer, which also says whose side a stalled call is on.
@@ -355,10 +359,30 @@ impl State {
         self.camera_on
     }
 
-    /// What the other side is told about our mic and camera.
+    /// What the other side is told about our mic, our camera and our hold.
     fn media_state(&self) -> MediaState {
         let mic_off = self.audio.as_ref().is_some_and(CallAudio::muted);
-        MediaState { mic_off, camera_off: !self.camera_on }
+        MediaState { mic_off, camera_off: !self.camera_on, held: self.telecom.held }
+    }
+
+    /// A phone call took this one over, or gave it back. The voice streams let go of the audio
+    /// the other call has, and the camera stops; back, both return where the user left them,
+    /// the camera with a keyframe.
+    fn apply_hold(&mut self, held: bool) {
+        self.health.ours_restarted();
+        if let Some(audio) = &mut self.audio
+            && let Err(e) = audio.set_held(held)
+        {
+            tracing::warn!(held, "voice streams on hold: {e:#}");
+        }
+        if held {
+            self.session = None;
+        } else if self.camera_on && self.call.is_some() {
+            self.start_camera();
+            if let Some(call) = &self.call {
+                call.request_keyframe();
+            }
+        }
     }
 
     /// mm:ss since the call connected.
@@ -380,7 +404,11 @@ impl State {
             return;
         }
         match audio.reopen() {
-            Ok(()) => self.status("voice streams reopened"),
+            Ok(()) => {
+                // The gap this leaves in playout is ours, not their network's.
+                self.health.ours_restarted();
+                self.status("voice streams reopened");
+            }
             Err(e) => tracing::warn!("reopening voice streams: {e:#}"),
         }
     }
@@ -741,7 +769,10 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 /// the background when there is nothing left to close. Java hands every press here rather than
 /// finishing the activity, because finishing it takes the endpoint with it.
 fn went_back(ui: &App) -> bool {
-    if ui.get_video_asked() {
+    if ui.get_choosing_output() {
+        // Back out of the Audio sheet changes nothing.
+        ui.set_choosing_output(false);
+    } else if ui.get_video_asked() {
         // Back out of their ask is Keep voice: nothing turns on that was not agreed to.
         ui.set_video_asked(false);
         ui.invoke_answer_video(false);
@@ -894,8 +925,7 @@ fn request_gate(ui: &App, platform: &Rc<Platform>, settings: &Settings) {
     }
 }
 
-/// Asks for the microphone permission (prompting if needed), then puts the device in call audio
-/// mode and starts the voice streams.
+/// Asks for the microphone permission (prompting if needed), then starts the voice streams.
 fn start_voice(
     state: &Rc<RefCell<State>>,
     platform: &Rc<Platform>,
@@ -905,12 +935,8 @@ fn start_voice(
     let (state, platform) = (Rc::clone(state), Rc::clone(platform));
     let task = slint::spawn_local(async move {
         match platform.request_permission(Permission::RecordAudio).await {
-            Ok(true) => {
-                if let Err(e) = platform.set_in_call(true) {
-                    tracing::warn!("call audio mode: {e}");
-                }
-                with_state(&state, |s| s.start_audio(sender, receiver));
-            }
+            // Telecom has put the phone in call mode by now; the streams open into it.
+            Ok(true) => with_state(&state, |s| s.start_audio(sender, receiver)),
             Ok(false) => with_state(&state, |s| s.status("microphone permission denied")),
             Err(e) => {
                 tracing::error!("microphone permission: {e}");
@@ -1135,6 +1161,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         peer: None,
         camera_on: true,
         reconnecting: false,
+        telecom: TelecomState::default(),
         media: None,
         reach: CoreReach::Connecting,
         network_moved: None,
@@ -1538,7 +1565,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     // What the platform did unasked: the window shrinking into picture-in-picture, and the taps
     // on the buttons that window carries. The receiver needs no reactor, so the UI loop owns it.
-    let (weak, mut events, s) = (ui.as_weak(), platform_events, Rc::clone(&state));
+    let (weak, mut events, s, p) = (ui.as_weak(), platform_events, Rc::clone(&state), Rc::clone(&platform));
     spawn_ui(async move {
         while let Some(event) = events.recv().await {
             let Some(ui) = weak.upgrade() else { break };
@@ -1552,6 +1579,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                     with_state(&s, |state| state.clock.forget());
                     show_calls(&s, &ui);
                 }
+                PlatformEvent::CallAudio => follow_telecom(&s, &ui, &p),
             }
         }
     });
@@ -1659,15 +1687,24 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             tracing::warn!("mic state for the call window: {e}");
         }
     });
-    let (p, weak) = (Rc::clone(&platform), ui.as_weak());
-    ui.on_toggle_speaker(move || {
-        let Some(ui) = weak.upgrade() else { return };
-        let on = !ui.get_speaker_on();
-        match p.set_speaker(on) {
-            Ok(()) => ui.set_speaker_on(on),
-            Err(e) => tracing::warn!("speaker: {e}"),
+    // Always the sheet, even with only the earpiece and the speaker: which one is in use should
+    // be something you can see, and mute sits there too.
+    let weak = ui.as_weak();
+    ui.on_audio(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_choosing_output(true);
         }
     });
+    // Any output, even the one that was in use under Mute, brings their voice back.
+    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
+    ui.on_choose_output(move |index| {
+        silence(&s, &weak, false);
+        if let Ok(index) = usize::try_from(index) {
+            choose_output(&p, index);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_silence(move || silence(&s, &weak, true));
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
@@ -1978,6 +2015,61 @@ fn place_call(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>, platform: &Pl
     }
 }
 
+/// Mute as an output: their voice stops playing, here only. Our mic and what they see of us
+/// stay as they are.
+fn silence(state: &Rc<RefCell<State>>, ui: &slint::Weak<App>, silenced: bool) {
+    with_state(state, |s| {
+        if let Some(audio) = &s.audio {
+            audio.set_silenced(silenced);
+        }
+    });
+    if let Some(ui) = ui.upgrade()
+        && ui.get_call_silenced() != silenced
+    {
+        tracing::info!(silenced, "their voice");
+        ui.set_call_silenced(silenced);
+    }
+}
+
+/// Asks Telecom for one of the outputs it listed; it answers by reporting the route again.
+fn choose_output(platform: &Platform, index: usize) {
+    if let Err(e) = platform.context().telecom_choose_route(index) {
+        tracing::warn!(index, "choosing an output: {e}");
+    }
+}
+
+/// Telecom changed the call's hold, mute or outputs: read what it says now and follow it.
+fn follow_telecom(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
+    let now = match platform.context().telecom_state() {
+        Ok(now) => now,
+        Err(e) => {
+            tracing::warn!("reading the call from telecom: {e}");
+            return;
+        }
+    };
+    let before = with_state_value(state, |s| std::mem::replace(&mut s.telecom, now.clone())).unwrap_or_default();
+    ui.set_call_outputs(view::outputs(&now.routes));
+    ui.set_call_output(now.current.and_then(|index| i32::try_from(index).ok()).unwrap_or(NO_OUTPUT));
+    ui.set_call_held(now.held);
+    if now.routes != before.routes || now.current != before.current {
+        tracing::info!(routes = ?now.routes, current = ?now.current, "call outputs");
+        // Android reroutes, and our voice streams restart with it.
+        with_state(state, |s| s.health.ours_restarted());
+    }
+    if now.held != before.held {
+        tracing::info!(held = now.held, "call hold");
+        with_state(state, |s| s.apply_hold(now.held));
+        if now.held {
+            ui.set_choosing_output(false);
+        }
+        tell_media(state, &ui.as_weak());
+    }
+    // A headset's mute button, or the system's own: the call's mute follows it, and says so.
+    if now.muted != before.muted && now.muted == ui.get_mic_on() {
+        ui.invoke_toggle_mic();
+    }
+}
+
 /// Tells the other side what our mic and camera are doing now.
 fn tell_media(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>) {
     if let Some(media) = with_state_value(state, |s| s.media_state()) {
@@ -2112,17 +2204,25 @@ async fn handle_node_events(
                 ui.set_video_asked(false);
                 ui.set_kept_voice(false);
                 ui.set_call_reconnecting(false);
+                ui.set_peer_held(false);
+                ui.set_call_held(false);
+                ui.set_choosing_output(false);
+                ui.set_call_silenced(false);
+                ui.set_call_outputs(ModelRc::default());
+                ui.set_call_output(NO_OUTPUT);
                 let (mode, peer) = (*mode, *peer);
                 with_state(&state, |s| {
                     s.mode = mode;
                     s.peer = Some(peer);
                     s.camera_on = true;
                     s.reconnecting = false;
+                    s.telecom = TelecomState::default();
                 });
             }
             Event::PeerMedia(theirs) => {
                 ui.set_peer_mic_off(theirs.mic_off);
                 ui.set_peer_camera_off(theirs.camera_off);
+                ui.set_peer_held(theirs.held);
             }
             Event::VideoAsked(asking) => ui.set_video_asked(*asking),
             Event::VideoDeclined => {
@@ -2227,9 +2327,6 @@ async fn handle_node_events(
                 }
                 if let Err(e) = platform.set_call_service(false, "", false) {
                     tracing::warn!("stopping call service: {e}");
-                }
-                if let Err(e) = platform.set_in_call(false) {
-                    tracing::warn!("leaving call audio mode: {e}");
                 }
             }
             _ => {}

@@ -48,6 +48,90 @@ pub enum Text {
     CopyKeyLabel,
 }
 
+/// What Telecom did with the call, from `UplinkApplication.nativeTelecom`. Must match
+/// `UplinkTelecom.ANSWER` and the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TelecomAction {
+    Answer,
+    Reject,
+    Hangup,
+    /// Telecom would not have the call at all.
+    Refused,
+}
+
+impl TelecomAction {
+    pub const fn from_code(code: jint) -> Option<Self> {
+        match code {
+            0 => Some(Self::Answer),
+            1 => Some(Self::Reject),
+            2 => Some(Self::Hangup),
+            3 => Some(Self::Refused),
+            _ => None,
+        }
+    }
+}
+
+/// Why a call ended, in Telecom's words: a `DisconnectCause` field, read from the SDK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disconnect {
+    Local,
+    Remote,
+    Rejected,
+    Busy,
+    Error,
+}
+
+impl Disconnect {
+    const fn field(self) -> &'static JNIStr {
+        match self {
+            Self::Local => jni_str!("LOCAL"),
+            Self::Remote => jni_str!("REMOTE"),
+            Self::Rejected => jni_str!("REJECTED"),
+            Self::Busy => jni_str!("BUSY"),
+            Self::Error => jni_str!("ERROR"),
+        }
+    }
+}
+
+/// An output a call's sound can go to. Our own numbering, because Android has two; must match
+/// `UplinkTelecom.ROUTE_*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteKind {
+    Phone,
+    Speaker,
+    Bluetooth,
+    Wired,
+}
+
+impl RouteKind {
+    const fn from_code(code: jint) -> Option<Self> {
+        match code {
+            0 => Some(Self::Phone),
+            1 => Some(Self::Speaker),
+            2 => Some(Self::Bluetooth),
+            3 => Some(Self::Wired),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Route {
+    pub kind: RouteKind,
+    /// A Bluetooth headset's own name, where Android gives one; empty otherwise.
+    pub name: String,
+}
+
+/// The call as Telecom last said: held, muted by the system, and where the sound can go.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TelecomState {
+    pub held: bool,
+    pub muted: bool,
+    pub routes: Vec<Route>,
+    /// Which of `routes` is in use, when Telecom has said.
+    pub current: Option<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
     Camera,
@@ -229,6 +313,104 @@ impl AppContext {
         })
     }
 
+    /// Whether Telecom would take a call now. Its no is final: the call does not happen.
+    pub fn telecom_permitted(&self, incoming: bool) -> Result<bool, Error> {
+        self.with(|env, application| {
+            Ok(env
+                .call_method(application, jni_str!("telecomPermitted"), jni_sig!("(Z)Z"), &[JValue::Bool(incoming)])?
+                .z()?)
+        })
+    }
+
+    /// Hands the call we are dialling to Telecom. A refusal comes back as
+    /// [`TelecomAction::Refused`].
+    pub fn telecom_place(&self, key: &str, who: &str, video: bool) -> Result<(), Error> {
+        self.telecom_call(jni_str!("telecomPlace"), key, who, video)
+    }
+
+    /// Tells Telecom a call is ringing here; it says when to ring, or refuses.
+    pub fn telecom_incoming(&self, key: &str, who: &str, video: bool) -> Result<(), Error> {
+        self.telecom_call(jni_str!("telecomIncoming"), key, who, video)
+    }
+
+    fn telecom_call(&self, method: &JNIStr, key: &str, who: &str, video: bool) -> Result<(), Error> {
+        self.with(|env, application| {
+            let (key, who) = (env.new_string(key)?, env.new_string(who)?);
+            env.call_method(
+                application,
+                method,
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Z)V"),
+                &[JValue::Object(&key), JValue::Object(&who), JValue::Bool(video)],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The call connected.
+    pub fn telecom_active(&self) -> Result<(), Error> {
+        self.call(jni_str!("telecomActive"))
+    }
+
+    /// The call is video now (or voice), which is also what puts it on the speaker.
+    pub fn telecom_video(&self, on: bool) -> Result<(), Error> {
+        self.with(|env, application| {
+            env.call_method(application, jni_str!("telecomVideo"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
+            Ok(())
+        })
+    }
+
+    pub fn telecom_ended(&self, cause: Disconnect) -> Result<(), Error> {
+        self.with(|env, application| {
+            let code =
+                env.get_static_field(jni_str!("android/telecom/DisconnectCause"), cause.field(), jni_sig!("I"))?.i()?;
+            env.call_method(application, jni_str!("telecomEnded"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
+            Ok(())
+        })
+    }
+
+    /// One of [`TelecomState::routes`], by index.
+    pub fn telecom_choose_route(&self, index: usize) -> Result<(), Error> {
+        let index = jint::try_from(index)?;
+        self.with(|env, application| {
+            env.call_method(application, jni_str!("telecomChooseRoute"), jni_sig!("(I)V"), &[JValue::Int(index)])?;
+            Ok(())
+        })
+    }
+
+    pub fn telecom_state(&self) -> Result<TelecomState, Error> {
+        self.with(|env, application| {
+            let held = env.call_method(application, jni_str!("telecomHeld"), jni_sig!("()Z"), &[])?.z()?;
+            let muted = env.call_method(application, jni_str!("telecomMuted"), jni_sig!("()Z"), &[])?.z()?;
+            let kinds = env.call_method(application, jni_str!("telecomRouteKinds"), jni_sig!("()[I"), &[])?.l()?;
+            let kinds = env.cast_local::<JIntArray>(kinds)?;
+            let mut codes = vec![0; kinds.len(env)?];
+            kinds.get_region(env, 0, &mut codes)?;
+            let names = env
+                .call_method(application, jni_str!("telecomRouteNames"), jni_sig!("()[Ljava/lang/String;"), &[])?
+                .l()?;
+            let names = env.cast_local::<JObjectArray>(names)?;
+            let named = names.len(env)?;
+            let mut routes = Vec::with_capacity(codes.len());
+            // Every entry is kept, known or not: `current` indexes this list as Java has it.
+            for (index, code) in codes.into_iter().enumerate() {
+                let kind = RouteKind::from_code(code).unwrap_or_else(|| {
+                    tracing::warn!(code, "unknown output kind");
+                    RouteKind::Phone
+                });
+                let name = if index < named {
+                    let element = names.get_element(env, index)?;
+                    java_string(env, element)?
+                } else {
+                    String::new()
+                };
+                routes.push(Route { kind, name });
+            }
+            let current = env.call_method(application, jni_str!("telecomCurrentRoute"), jni_sig!("()I"), &[])?.i()?;
+            let current = usize::try_from(current).ok().filter(|&index| index < routes.len());
+            Ok(TelecomState { held, muted, routes, current })
+        })
+    }
+
     /// A no-argument `void` method of the Application.
     fn call(&self, method: &JNIStr) -> Result<(), Error> {
         self.with(|env, application| {
@@ -273,6 +455,9 @@ pub enum PlatformEvent {
     /// The zone changed, the clock was set, or it went past midnight: times on screen may be
     /// wrong, and "today" may be yesterday.
     ClockChanged,
+    /// Telecom changed the call's hold, mute or outputs: read them with
+    /// [`AppContext::telecom_state`].
+    CallAudio,
 }
 
 impl PlatformEvent {
@@ -282,6 +467,7 @@ impl PlatformEvent {
             1 => Some(Self::ToggleMic),
             2 => Some(Self::Answer),
             3 => Some(Self::ClockChanged),
+            4 => Some(Self::CallAudio),
             _ => None,
         }
     }
@@ -585,24 +771,6 @@ impl Platform {
         rx.await.map_err(|_| Error::RequestAbandoned)
     }
 
-    /// Puts the device in (or out of) a voice call: routes to the call stream and enables the
-    /// platform's echo cancellation, with the speaker on for video calls.
-    pub fn set_in_call(&self, in_call: bool) -> Result<(), Error> {
-        self.with_context(|env, context| {
-            let mode = audio_mode(env, if in_call { jni_str!("MODE_IN_COMMUNICATION") } else { jni_str!("MODE_NORMAL") })?;
-            let manager = audio_manager(env, context)?;
-            env.call_method(&manager, jni_str!("setMode"), jni_sig!("(I)V"), &[JValue::Int(mode)])?;
-            env.call_method(
-                &manager,
-                jni_str!("setSpeakerphoneOn"),
-                jni_sig!("(Z)V"),
-                &[JValue::Bool(in_call)],
-            )?;
-            tracing::debug!(in_call, "audio mode set");
-            Ok(())
-        })
-    }
-
     /// Opens the system image picker; resolves to the chosen image, or `None` if the user backed
     /// out or it could not be read.
     pub async fn pick_image(&self) -> Result<Option<Greyscale>, Error> {
@@ -652,16 +820,6 @@ impl Platform {
     /// content provider serves, inside the data directory. Nothing else belongs in it.
     pub fn share_dir(data_dir: &Path) -> PathBuf {
         data_dir.join(SHARE_DIR)
-    }
-
-    /// Speaker or earpiece for the call audio.
-    pub fn set_speaker(&self, on: bool) -> Result<(), Error> {
-        self.with_context(|env, context| {
-            let manager = audio_manager(env, context)?;
-            env.call_method(&manager, jni_str!("setSpeakerphoneOn"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
-            tracing::debug!(on, "speakerphone");
-            Ok(())
-        })
     }
 
     /// Runs the foreground service that lets a call keep the camera and microphone while the app
@@ -961,24 +1119,6 @@ fn permission_string<'local>(env: &mut Env<'local>, permission: Permission) -> R
             jni_sig!("Ljava/lang/String;"),
         )?
         .l()?)
-}
-
-fn audio_manager<'local>(env: &mut Env<'local>, activity: &JObject) -> Result<JObject<'local>, Error> {
-    let service = env
-        .get_static_field(jni_str!("android/content/Context"), jni_str!("AUDIO_SERVICE"), jni_sig!("Ljava/lang/String;"))?
-        .l()?;
-    Ok(env
-        .call_method(
-            activity,
-            jni_str!("getSystemService"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
-            &[JValue::Object(&service)],
-        )?
-        .l()?)
-}
-
-fn audio_mode(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {
-    Ok(env.get_static_field(jni_str!("android/media/AudioManager"), name, jni_sig!("I"))?.i()?)
 }
 
 fn exit_reason(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {

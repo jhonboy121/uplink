@@ -28,6 +28,15 @@ export enum Stall { reconnecting, offline, waiting }
 // A call that works but struggles, and on whose side: the weak pill.
 export enum Weak { none, ours, theirs }
 
+// Where a call's sound goes, as Android offers it.
+export enum Output { phone, speaker, bluetooth, wired }
+
+// One row of the Audio sheet. A Bluetooth headset's own name when Android gives one, else empty.
+export struct OutputItem {
+    output: Output,
+    name: string,
+}
+
 export enum Permission { camera, microphone, notifications }
 
 export struct PermissionItem {
