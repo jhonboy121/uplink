@@ -159,6 +159,17 @@ component Flag inherits Rectangle {
 }
 
 // Three dots that pulse in turn while the call tries to come back.
+// Our camera is off: said, rather than holding the last frame.
+component CameraOff inherits Rectangle {
+    background: Theme.video-raised;
+    Image {
+        source: @image-url("icons/video-off.svg");
+        width: Theme.camera-off-icon;
+        height: Theme.camera-off-icon;
+        colorize: Theme.on-video-muted;
+    }
+}
+
 component Dots inherits Row {
     spacing: Theme.dot-gap;
     alignment: center;
@@ -271,6 +282,9 @@ export component CallScreen inherits Rectangle {
         image-fit: cover;
     }
 
+    // Our picture fills the screen (swapped, or not yet connected) with the camera off.
+    if root.video && !root.camera-on && (root.swapped || !root.connected) : CameraOff { }
+
     // Their camera is off: them, not a frozen frame, which would read as the network.
     if root.peer-away && !root.swapped : Rectangle {
         background: Theme.video;
@@ -321,16 +335,7 @@ export component CallScreen inherits Rectangle {
             source: root.swapped ? root.remote-frame : root.frame;
             image-fit: cover;
         }
-        // Our camera is off: said, rather than holding the last frame.
-        if !root.camera-on && !root.swapped : Rectangle {
-            background: Theme.video-raised;
-            Image {
-                source: @image-url("icons/video-off.svg");
-                width: Theme.camera-off-icon;
-                height: Theme.camera-off-icon;
-                colorize: Theme.on-video-muted;
-            }
-        }
+        if !root.camera-on && !root.swapped : CameraOff { }
         if !root.swapped : Rectangle {
             // Inside the card's border, as the design draws it.
             x: 1px;
