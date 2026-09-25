@@ -38,16 +38,20 @@ export ANDROID_API := min_sdk
 export JAVA_HOME := env("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-" + if arch() == "aarch64" { "arm64" } else { "amd64" })
 export UPLINK_LOG := log
 
-cargo_profile := if profile == "release" { "release" } else { "dev" }
+# A release app is built as the CLI is: the `opt` profile, full LTO and stripped.
+cargo_profile := if profile == "release" { "opt" } else { "dev" }
+cargo_dir := if profile == "release" { "opt" } else { "debug" }
 debuggable := if profile == "release" { "0" } else { "1" }
 lib := "uplink"
-so := "target" / android_target / profile / ("lib" + lib + ".so")
-apk := out_dir / "uplink.apk"
+so := "target" / android_target / cargo_dir / ("lib" + lib + ".so")
+apk := out_dir / if profile == "release" { "uplink-release.apk" } else { "uplink.apk" }
+# R8's renames in a release build, for reading a Java stack trace from the log.
+mapping := out_dir / "uplink-release-mapping.txt"
+proguard := "android/proguard.pro"
 build_tools := ANDROID_HOME / "build-tools" / build_tools_version
 apksigner := build_tools / "lib/apksigner.jar"
 d8 := build_tools / "lib/d8.jar"
 android_jar := ANDROID_HOME / "platforms" / android_platform / "android.jar"
-d8_mode := if profile == "release" { "--release" } else { "--debug" }
 java_src := "crates/uplink-android/java"
 dex_dir := "target" / "dex" / profile
 android_crates := "-p uplink -p uplink-android -p uplink-core"
@@ -112,12 +116,22 @@ dex:
     cargo run -q -p android-res -- r-class --package {{app_id}} --out "$generated"
     javac -source {{java_release}} -target {{java_release}} -bootclasspath "{{android_jar}}" -Xlint:-options \
         -d "$classes" $(find "{{java_src}}" "$generated" -name '*.java')
-    java -cp "{{d8}}" com.android.tools.r8.D8 {{d8_mode}} --min-api {{min_sdk}} --lib "{{android_jar}}" \
-        --output "{{dex_dir}}" $(find "$classes" -name '*.class')
+    if [ "{{profile}}" = release ]; then
+        # R8: shrunk and renamed within the keeps in {{proguard}}, which JNI and the manifest need.
+        mkdir -p "{{out_dir}}"
+        java -cp "{{d8}}" com.android.tools.r8.R8 --release --min-api {{min_sdk}} --lib "{{android_jar}}" \
+            --pg-conf "{{proguard}}" --pg-map-output "{{mapping}}" \
+            --output "{{dex_dir}}" $(find "$classes" -name '*.class')
+    else
+        java -cp "{{d8}}" com.android.tools.r8.D8 --debug --min-api {{min_sdk}} --lib "{{android_jar}}" \
+            --output "{{dex_dir}}" $(find "$classes" -name '*.class')
+    fi
 
 [doc('''
 Build, strip, compile the Java shim, write the manifest, zip and sign the APK into out_dir.
-Install with `just install` (adb).
+Install with `just install` (adb). `just profile=release apk` is the release build: the `opt`
+profile, R8 over the shim (android/proguard.pro, mapping beside the APK), not debuggable, and
+signed with the same keystore, so it installs over a debug build without losing its data.
 ''')]
 apk: build dex
     #!/bin/sh

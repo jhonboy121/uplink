@@ -1270,3 +1270,13 @@ default); keep disk usage lean. Avoid build scripts.
   quiet. The host CLI screens too if the flag is set in its data dir (it has no switch).
   - **Not as designed yet:** the design puts this and *share my profile* on their own Privacy
     page; they are rows in a Settings group, with the screenshot switches. Raise with the user.
+- **2026-09-26**: **release builds: `just profile=release apk`.** The app is built as the CLI is,
+  with the `opt` profile (full LTO, stripped), and R8 replaces D8 for the Java shim, shrinking and
+  renaming within `android/proguard.pro`'s keeps: `UplinkApplication` and `UplinkActivity` whole
+  (Rust looks one up by name and calls both by name over JNI), the manifest's components by name.
+  Telecom's glue, the Keystore and the connection are renamed. The mapping goes to
+  `~/android/out/uplink-release-mapping.txt`. Not debuggable, signed with the same keystore, so
+  it installs over a debug build and keeps its data (the sealed identity opened after the
+  upgrade). `uplink-release.apk` is 16 MB (debug 35): the library 160 → 34 MB, the dex 68 → 54 KB;
+  about 5½ minutes to build here. Device-tested: starts clean, no JNI or class lookups failing.
+  - A release install has no `run-as`: read its log from logcat, or the in-app diagnostics.
