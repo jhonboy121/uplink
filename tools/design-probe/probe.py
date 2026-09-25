@@ -7,6 +7,7 @@ CSS actually resolves to — margin collapsing, line boxes, flex gaps and all.
 """
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -15,8 +16,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PAGE = ROOT / "docs" / "design" / "uplink-call-ui.html"
-OUT = ROOT / "target" / "design" / "geometry.json"
+# Which mockup: the call UI by default, `UPLINK_DESIGN=uplink-shell` for the shell.
+DESIGN = os.environ.get("UPLINK_DESIGN", "uplink-call-ui")
+PAGE = ROOT / "docs" / "design" / f"{DESIGN}.html"
+OUT = ROOT / "target" / "design" / ("geometry.json" if DESIGN == "uplink-call-ui" else f"geometry-{DESIGN}.json")
 PORT = 8173
 TIMEOUT = 120
 CHROMIUM = "/usr/bin/chromium"

@@ -8,11 +8,11 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, SendDatagramError};
+use iroh::endpoint::Connection;
 use opus_sys as ffi;
 use tokio::sync::mpsc;
 
-use crate::media::MediaStats;
+use crate::media::{Link, MediaStats};
 use crate::protocol::{AudioHeader, DatagramHeader, DatagramKind};
 use crate::{Error, protocol};
 
@@ -130,7 +130,7 @@ impl Drop for Decoder {
 /// Encodes and sends our voice; call once per captured 20 ms frame.
 #[derive(Debug)]
 pub struct AudioSender {
-    connection: Connection,
+    link: Link,
     encoder: Encoder,
     sequence: u64,
     packet: Vec<u8>,
@@ -138,7 +138,8 @@ pub struct AudioSender {
 }
 
 impl AudioSender {
-    /// A full datagram buffer drops the frame: late audio is worse than lost audio.
+    /// A full datagram buffer drops the frame: late audio is worse than lost audio. So does a lost
+    /// connection: whether the call is over is the call's to decide, and it may yet rejoin.
     pub fn send(&mut self, pcm: &Pcm, capture_micros: u64) -> Result<(), Error> {
         let len = self.encoder.encode(pcm, &mut self.packet)?;
         let header =
@@ -147,12 +148,12 @@ impl AudioSender {
         let mut datagram = protocol::encode(&header);
         datagram.extend_from_slice(self.packet.get(..len).unwrap_or_default());
         let bytes = u64::try_from(datagram.len()).unwrap_or(u64::MAX);
-        match self.connection.send_datagram(datagram.into()) {
+        let connection = self.link.borrow().clone();
+        match connection.send_datagram(datagram.into()) {
             Ok(()) => {
                 MediaStats::count(&self.stats.audio_sent, 1);
                 MediaStats::count(&self.stats.bytes_sent, bytes);
             }
-            Err(SendDatagramError::ConnectionLost(e)) => return Err(e.into()),
             Err(e) => {
                 tracing::debug!("audio packet dropped: {e}");
                 MediaStats::count(&self.stats.audio_send_dropped, 1);
@@ -202,9 +203,9 @@ impl AudioReceiver {
     }
 }
 
-pub(crate) fn start(connection: &Connection, stats: &Arc<MediaStats>) -> Result<(AudioSender, AudioReceiver), Error> {
+pub(crate) fn start(link: &Link, stats: &Arc<MediaStats>) -> Result<(AudioSender, AudioReceiver), Error> {
     let sender = AudioSender {
-        connection: connection.clone(),
+        link: link.clone(),
         encoder: Encoder::new()?,
         sequence: 0,
         packet: vec![0; MAX_PACKET_BYTES],
@@ -212,12 +213,31 @@ pub(crate) fn start(connection: &Connection, stats: &Arc<MediaStats>) -> Result<
     };
     let (tx, incoming) = mpsc::channel(INCOMING_PACKET_QUEUE);
     let receiver = AudioReceiver { incoming, buffer: JitterBuffer::default(), decoder: Decoder::new()?, stats: Arc::clone(stats) };
-    tokio::spawn(receive(connection.clone(), tx, Arc::clone(stats)));
+    tokio::spawn(receive(link.clone(), tx, Arc::clone(stats)));
     Ok((sender, receiver))
 }
 
-/// Hands each datagram to the receiver until the connection ends.
-async fn receive(connection: Connection, deliver: mpsc::Sender<(u64, Vec<u8>)>, stats: Arc<MediaStats>) {
+/// Hands each datagram to the receiver, over each connection the call has, until it ends.
+async fn receive(mut link: Link, deliver: mpsc::Sender<(u64, Vec<u8>)>, stats: Arc<MediaStats>) {
+    loop {
+        let connection = link.borrow_and_update().clone();
+        let lost = tokio::select! {
+            () = receive_on(&connection, &deliver, &stats) => true,
+            changed = link.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                false
+            }
+        };
+        // Wait for the call to rejoin on a new connection, or to end.
+        if lost && link.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn receive_on(connection: &Connection, deliver: &mpsc::Sender<(u64, Vec<u8>)>, stats: &MediaStats) {
     while let Ok(datagram) = connection.read_datagram().await {
         let (header, packet) = match protocol::split_message::<DatagramHeader>(&datagram) {
             Ok((DatagramHeader { kind: Some(DatagramKind::Audio(header)) }, packet)) => (header, packet),

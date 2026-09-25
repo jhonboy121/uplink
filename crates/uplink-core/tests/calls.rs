@@ -7,7 +7,7 @@ use iroh::SecretKey;
 use tokio::sync::mpsc::Receiver;
 use uplink_core::crypto::is_post_quantum;
 use uplink_core::media::MediaSession;
-use uplink_core::node::{Command, EndReason, Event, Network, Node};
+use uplink_core::node::{Command, EndReason, Event, MediaState, Mode, Network, Node};
 use uplink_core::{EndpointId, MemoryLookup};
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -52,9 +52,9 @@ async fn next(events: &mut Receiver<Event>) -> Result<Event> {
 
 /// `caller` calls `callee`, who sees it ring.
 async fn ring(caller: &mut Peer, callee: &mut Peer) -> Result<()> {
-    caller.node.send(Command::Call(callee.id)).await?;
+    caller.node.send(Command::Call(callee.id, Mode::Video)).await?;
     let from = caller.id;
-    callee.expect("incoming call", |e| matches!(e, Event::Incoming { peer } if *peer == from)).await?;
+    callee.expect("incoming call", |e| matches!(e, Event::Incoming { peer, .. } if *peer == from)).await?;
     caller.expect("ringing", |e| matches!(e, Event::Ringing { .. })).await?;
     Ok(())
 }
@@ -62,7 +62,7 @@ async fn ring(caller: &mut Peer, callee: &mut Peer) -> Result<()> {
 /// Waits for `peer` to connect to `other` post-quantum and returns its media session.
 async fn connected_media(peer: &mut Peer, other: EndpointId) -> Result<MediaSession> {
     let connected = peer.expect("connected", |e| matches!(e, Event::Connected { .. })).await?;
-    let Event::Connected { peer: remote, key_exchange, media } = connected else { bail!("expected Connected") };
+    let Event::Connected { peer: remote, key_exchange, media, .. } = connected else { bail!("expected Connected") };
     assert_eq!(remote, other);
     assert!(is_post_quantum(key_exchange), "negotiated {key_exchange:?}");
     Ok(*media)
@@ -123,7 +123,7 @@ async fn third_caller_gets_busy() -> Result<()> {
     let mut carol = Peer::start(&lookup).await?;
     connect(&mut alice, &mut bob).await?;
 
-    carol.node.send(Command::Call(bob.id)).await?;
+    carol.node.send(Command::Call(bob.id, Mode::Video)).await?;
     assert!(matches!(carol.ended().await?, EndReason::Busy));
     Ok(())
 }
@@ -138,7 +138,7 @@ async fn a_second_outgoing_call_is_refused_without_ending_the_first() -> Result<
     // Refused quietly: it once went out as `Ended`, which every listener took for the end of the
     // call that was up. Commands are taken in order, so if the refusal still said anything, it
     // would be the first end Alice hears — not her own hang-up.
-    alice.node.send(Command::Call(carol.id)).await?;
+    alice.node.send(Command::Call(carol.id, Mode::Video)).await?;
     alice.node.send(Command::Hangup).await?;
     assert!(matches!(alice.ended().await?, EndReason::LocalHangup));
     assert!(matches!(bob.ended().await?, EndReason::RemoteHangup));
@@ -161,13 +161,94 @@ async fn handle_commands_reach_the_node_until_it_stops() -> Result<()> {
     let lookup = MemoryLookup::new();
     let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
     let handle = alice.node.handle();
-    handle.try_send(Command::Call(bob.id))?;
+    handle.try_send(Command::Call(bob.id, Mode::Video))?;
     bob.expect("incoming call", |e| matches!(e, Event::Incoming { .. })).await?;
     handle.try_send(Command::Hangup)?;
     assert!(matches!(alice.ended().await?, EndReason::LocalHangup));
 
     alice.node.shutdown().await;
     assert!(matches!(handle.try_send(Command::Hangup), Err(uplink_core::Error::NodeStopped)));
+    Ok(())
+}
+
+/// Places a voice call and answers it; both sides see it connect as voice.
+async fn voice_call(caller: &mut Peer, callee: &mut Peer) -> Result<()> {
+    caller.node.send(Command::Call(callee.id, Mode::Voice)).await?;
+    callee.expect("incoming voice call", |e| matches!(e, Event::Incoming { mode: Mode::Voice, .. })).await?;
+    callee.node.send(Command::Answer(true)).await?;
+    for peer in [caller, callee] {
+        let connected = peer.expect("connected", |e| matches!(e, Event::Connected { .. })).await?;
+        assert!(matches!(connected, Event::Connected { mode: Mode::Voice, .. }));
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_call_rings_and_connects_as_voice() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    voice_call(&mut alice, &mut bob).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_other_side_hears_when_the_mic_or_camera_changes() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    connect(&mut alice, &mut bob).await?;
+    let state = MediaState { mic_off: true, camera_off: true };
+    alice.node.send(Command::Media(state)).await?;
+    let heard = bob.expect("their media", |e| matches!(e, Event::PeerMedia(_))).await?;
+    assert!(matches!(heard, Event::PeerMedia(theirs) if theirs == state));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_call_switches_to_video_when_both_agree() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    voice_call(&mut alice, &mut bob).await?;
+    alice.node.send(Command::AskVideo(true)).await?;
+    bob.expect("the ask", |e| matches!(e, Event::VideoAsked(true))).await?;
+    bob.node.send(Command::AnswerVideo(true)).await?;
+    bob.expect("video on", |e| matches!(e, Event::VideoOn)).await?;
+    alice.expect("video on", |e| matches!(e, Event::VideoOn)).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeping_it_voice_is_said_to_the_asker() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    voice_call(&mut alice, &mut bob).await?;
+    alice.node.send(Command::AskVideo(true)).await?;
+    bob.expect("the ask", |e| matches!(e, Event::VideoAsked(true))).await?;
+    bob.node.send(Command::AnswerVideo(false)).await?;
+    alice.expect("kept voice", |e| matches!(e, Event::VideoDeclined)).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_withdrawn_ask_is_taken_off_their_screen() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    voice_call(&mut alice, &mut bob).await?;
+    alice.node.send(Command::AskVideo(true)).await?;
+    bob.expect("the ask", |e| matches!(e, Event::VideoAsked(true))).await?;
+    alice.node.send(Command::AskVideo(false)).await?;
+    bob.expect("the ask withdrawn", |e| matches!(e, Event::VideoAsked(false))).await?;
+    Ok(())
+}
+
+/// Each side's ask is the other's yes, whichever arrives first.
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_at_the_same_time_is_agreeing() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    voice_call(&mut alice, &mut bob).await?;
+    alice.node.send(Command::AskVideo(true)).await?;
+    bob.node.send(Command::AskVideo(true)).await?;
+    alice.expect("video on", |e| matches!(e, Event::VideoOn)).await?;
+    bob.expect("video on", |e| matches!(e, Event::VideoOn)).await?;
     Ok(())
 }
 

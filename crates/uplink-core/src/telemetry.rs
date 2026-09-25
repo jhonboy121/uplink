@@ -144,6 +144,16 @@ struct Counters {
     audio_late: u64,
     audio_fec: u64,
     audio_concealed: u64,
+    frames_unopened: u64,
+    /// QUIC's own word on why a stream cannot be sent: we ran out of the peer's stream credit
+    /// (`STREAMS_BLOCKED`), of the connection's window (`DATA_BLOCKED`) or a stream's, and how
+    /// often the peer raised each. A video that stops while voice carries on is one of these.
+    streams_blocked: u64,
+    data_blocked: u64,
+    stream_data_blocked: u64,
+    max_streams_in: u64,
+    max_data_in: u64,
+    resets_out: u64,
 }
 
 impl Counters {
@@ -168,6 +178,13 @@ impl Counters {
             audio_late: count(&media.audio_late),
             audio_fec: count(&media.audio_fec_recovered),
             audio_concealed: count(&media.audio_concealed),
+            frames_unopened: count(&media.frames_unopened),
+            streams_blocked: link.frame_tx.streams_blocked_uni,
+            data_blocked: link.frame_tx.data_blocked,
+            stream_data_blocked: link.frame_tx.stream_data_blocked,
+            max_streams_in: link.frame_rx.max_streams_uni,
+            max_data_in: link.frame_rx.max_data,
+            resets_out: link.frame_tx.reset_stream,
         }
     }
 
@@ -190,6 +207,13 @@ impl Counters {
             audio_late: self.audio_late.saturating_sub(earlier.audio_late),
             audio_fec: self.audio_fec.saturating_sub(earlier.audio_fec),
             audio_concealed: self.audio_concealed.saturating_sub(earlier.audio_concealed),
+            frames_unopened: self.frames_unopened.saturating_sub(earlier.frames_unopened),
+            streams_blocked: self.streams_blocked.saturating_sub(earlier.streams_blocked),
+            data_blocked: self.data_blocked.saturating_sub(earlier.data_blocked),
+            stream_data_blocked: self.stream_data_blocked.saturating_sub(earlier.stream_data_blocked),
+            max_streams_in: self.max_streams_in.saturating_sub(earlier.max_streams_in),
+            max_data_in: self.max_data_in.saturating_sub(earlier.max_data_in),
+            resets_out: self.resets_out.saturating_sub(earlier.resets_out),
         }
     }
 }
@@ -313,6 +337,7 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
             fps_out = format!("{:.1}", rate(delta.frames_sent, over)),
             fps_in = format!("{:.1}", rate(delta.frames_received, over)),
             late = delta.frames_late,
+            unopened = delta.frames_unopened,
             congested = delta.frames_congested,
             dropped = delta.frames_dropped,
             keyframe_asks_sent = delta.keyframe_asks_sent,
@@ -322,6 +347,12 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
             audio_late = delta.audio_late,
             audio_fec = delta.audio_fec,
             audio_concealed = delta.audio_concealed,
+            streams_blocked = delta.streams_blocked,
+            data_blocked = delta.data_blocked,
+            stream_data_blocked = delta.stream_data_blocked,
+            max_streams_in = delta.max_streams_in,
+            max_data_in = delta.max_data_in,
+            resets_out = delta.resets_out,
             "call stats"
         );
         (last, last_at) = (counters, now);

@@ -126,6 +126,8 @@ public class UplinkApplication extends Application {
     private volatile boolean inCall;
     private volatile String peer = "";
     private volatile boolean micOn = true;
+    /** Whether the call uses the camera: a voice call holds the microphone type alone. */
+    private volatile boolean camera;
 
     // Ringing state. Touched only on the main thread, which is also where the lifecycle
     // callbacks arrive, so the two can never disagree about what is showing.
@@ -379,15 +381,18 @@ public class UplinkApplication extends Application {
     /**
      * Runs the foreground service that lets a call keep the camera and microphone in the
      * background. Started once, on the tap that places or answers the call, which is when the
-     * app is certainly in front; a later call for the same call only renames its notification.
+     * app is certainly in front; a later call for the same call only renames its notification,
+     * unless it now uses the camera, which the service has to be started again to take.
      */
-    void setCall(boolean running, String who) {
+    void setCall(boolean running, String who, boolean withCamera) {
         boolean already = inCall;
+        boolean gainsCamera = withCamera && !camera;
         inCall = running;
         peer = who;
+        camera = running && withCamera;
         if (!running) {
             stopService(callIntent());
-        } else if (already) {
+        } else if (already && !gainsCamera) {
             UplinkCallService.post(this, peer, micOn);
         } else {
             startForegroundService(callIntent());
@@ -405,7 +410,8 @@ public class UplinkApplication extends Application {
     private Intent callIntent() {
         return new Intent(this, UplinkCallService.class)
                 .putExtra(UplinkCallService.EXTRA_PEER, peer)
-                .putExtra(UplinkCallService.EXTRA_MIC_ON, micOn);
+                .putExtra(UplinkCallService.EXTRA_MIC_ON, micOn)
+                .putExtra(UplinkCallService.EXTRA_CAMERA, camera);
     }
 
     // ---- Ringing -------------------------------------------------------------------------------

@@ -6,11 +6,13 @@ The mockup's screen is 248px wide and stands for a 360dp phone, so every length 
 """
 
 import json
+import os
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DATA = json.loads((ROOT / "target" / "design" / "geometry.json").read_text())
+DESIGN = os.environ.get("UPLINK_DESIGN", "uplink-call-ui")
+DATA = json.loads((ROOT / "target" / "design" / ("geometry.json" if DESIGN == "uplink-call-ui" else f"geometry-{DESIGN}.json")).read_text())
 TARGET_DP = 360
 
 

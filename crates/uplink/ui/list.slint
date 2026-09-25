@@ -1,9 +1,12 @@
-// A row in People or Calls: a face, two lines about them, and Call at the end — or a tick while
-// several are being picked. A tap opens the row and a hold starts picking, both the page's to
-// decide; the pill calls.
+// A row in People or Calls: a face, two lines about them, and a way to call at the end — or a
+// tick while several are being picked. A tap opens the row and a hold starts picking, both the
+// page's to decide.
+//
+// People offers both kinds of call, one tap each. Calls rings back the kind the call was, and
+// its pill's icon says which.
 
 import { Theme } from "theme.slint";
-import { Avatar, HoldArea, Pill, Row, Tick } from "controls.slint";
+import { Avatar, HoldArea, IconPill, QuickCall, Row, Tick } from "controls.slint";
 
 export component PersonRow inherits Rectangle {
     in property <string> name;
@@ -13,9 +16,16 @@ export component PersonRow inherits Rectangle {
     in property <bool> selected;
     // Just added: a faint tint with a band of accent sweeping across, so the eye lands on it.
     in property <bool> fresh: false;
+    // Both kinds of call, rather than one pill ringing back one kind.
+    in property <bool> both: false;
+    // The one kind the pill rings back, when not both.
+    in property <bool> voice: false;
     callback tapped();
     callback held();
-    callback call();
+    // Whether as voice.
+    callback call(bool);
+    // The quick calls' touch targets reach past their rings; the rings sit on the edge line.
+    property <length> end-edge: root.both && !root.selecting ? Theme.edge - (Theme.quick-hit - Theme.quick-ring) / 2 : Theme.edge;
     height: Theme.row-height;
     touch := HoldArea {
         tapped => { root.tapped(); }
@@ -47,8 +57,8 @@ export component PersonRow inherits Rectangle {
         }
     }
     Row {
-        padding-left: Theme.edge;
-        padding-right: Theme.edge;
+        padding-left: Theme.rtl ? root.end-edge : Theme.edge;
+        padding-right: Theme.rtl ? Theme.edge : root.end-edge;
         spacing: Theme.row-gap;
         VerticalLayout {
             alignment: center;
@@ -66,9 +76,22 @@ export component PersonRow inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            if !root.selecting : Pill {
-                text: @tr("Call");
-                clicked => { root.call(); }
+            if !root.selecting && root.both : Row {
+                QuickCall {
+                    icon: @image-url("icons/call.svg");
+                    label: @tr("Voice call");
+                    clicked => { root.call(true); }
+                }
+                QuickCall {
+                    icon: @image-url("icons/video-key.svg");
+                    label: @tr("Video call");
+                    clicked => { root.call(false); }
+                }
+            }
+            if !root.selecting && !root.both : IconPill {
+                icon: root.voice ? @image-url("icons/call.svg") : @image-url("icons/video-key.svg");
+                label: root.voice ? @tr("Voice call") : @tr("Video call");
+                clicked => { root.call(root.voice); }
             }
             if root.selecting : Tick { on: root.selected; }
         }

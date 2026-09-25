@@ -11,6 +11,7 @@ use uplink_core::EndpointId;
 use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
 use uplink_core::media::Route as MediaRoute;
+use uplink_core::node::Mode;
 use uplink_core::quality::{Quality, Spread};
 use uplink_core::relays::{self, Region as RelayRegion};
 
@@ -177,6 +178,7 @@ fn day_ago(days: i64) -> DayAgo {
 pub const fn ending(outcome: Outcome) -> Ending {
     match outcome {
         Outcome::Answered => Ending::Answered,
+        Outcome::Lost => Ending::Lost,
         Outcome::Missed => Ending::Missed,
         // Which of us declined is the arrow's to say, as for every other outcome.
         Outcome::Declined | Outcome::Rejected => Ending::Declined,
@@ -207,6 +209,7 @@ pub fn call_items(records: &[Logged], contacts: &Contacts, clock: &LocalClock, s
                 tint: 0,
                 ending: ending(record.outcome),
                 incoming: record.incoming,
+                voice: record.mode == Mode::Voice,
                 duration: maybe(answered_for(record.outcome, record.duration)),
                 time: clock.clock_of(record.at).into(),
                 selected: selected.contains(&logged.id),
@@ -218,7 +221,7 @@ pub fn call_items(records: &[Logged], contacts: &Contacts, clock: &LocalClock, s
 
 /// How long an answered call lasted, when that was kept.
 fn answered_for(outcome: Outcome, duration: Option<Duration>) -> Option<SharedString> {
-    duration.filter(|_| outcome == Outcome::Answered).map(|duration| minutes_seconds(duration).into())
+    duration.filter(|_| outcome.answered()).map(|duration| minutes_seconds(duration).into())
 }
 
 fn minutes_seconds(duration: Duration) -> String {
@@ -241,9 +244,12 @@ pub fn call_detail(logged: &Logged, saved: Option<String>, clock: &LocalClock) -
         fingerprint: fingerprint_lines(&record.peer),
         ending: ending(record.outcome),
         incoming: record.incoming,
+        voice_call: record.mode == Mode::Voice,
         day: day_ago(clock.days_ago(record.at)),
         time: clock.clock_of(record.at).into(),
         duration: maybe(record.duration.map(|duration| minutes_seconds(duration).into())),
+        video_from: maybe(record.video_from.map(|at| minutes_seconds(at).into())),
+        rejoins: quality.map_or(0, |q| i32::try_from(q.rejoins).unwrap_or(i32::MAX)),
         traffic: maybe(record.traffic.map(|traffic| Traffic {
             sent: data_size(traffic.sent).into(),
             received: data_size(traffic.received).into(),

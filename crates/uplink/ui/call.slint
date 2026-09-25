@@ -127,14 +127,91 @@ export component MiniCall inherits Rectangle {
     }
 }
 
-// The whole window while a call is up: video owns the frame, chrome sits on a scrim.
+// A state of theirs, said over their video in words and an icon, never in colour alone.
+component Flag inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    height: Theme.flag-height;
+    width: row.preferred-width;
+    border-radius: self.height / 2;
+    background: Theme.flag-fill;
+    border-width: 1px;
+    border-color: Theme.flag-edge;
+    row := Row {
+        padding-left: Theme.rtl ? Theme.flag-pad-end : Theme.flag-pad-start;
+        padding-right: Theme.rtl ? Theme.flag-pad-start : Theme.flag-pad-end;
+        spacing: Theme.flag-gap;
+        cross-axis-alignment: center;
+        Image {
+            source: root.icon;
+            width: Theme.flag-icon;
+            height: Theme.flag-icon;
+            colorize: Theme.on-video;
+        }
+        Text {
+            text: root.text;
+            color: Theme.on-video;
+            font-size: 0.771rem;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Three dots that pulse in turn while the call tries to come back.
+component Dots inherits Row {
+    spacing: Theme.dot-gap;
+    alignment: center;
+    for index in 3 : Rectangle {
+        // Faint, bright at 40% of the cycle, faint again: the design's `dot` keyframes.
+        property <float> phase: mod((animation-tick() + Theme.dot-cycle - index * Theme.dot-stagger) / 1ms, Theme.dot-cycle / 1ms) / (Theme.dot-cycle / 1ms);
+        width: Theme.dot;
+        height: Theme.dot;
+        border-radius: self.width / 2;
+        background: Theme.on-video;
+        opacity: phase < 0.4 ? 0.25 + phase / 0.4 * 0.75 : 1.0 - (phase - 0.4) / 0.6 * 0.75;
+    }
+}
+
+// Who is on a voice call, in the middle of the screen: the avatar, the name, and a line or two
+// under it.
+component VoiceFace inherits VerticalLayout {
+    in property <string> initial;
+    in property <string> name;
+    alignment: center;
+    spacing: Theme.call-top;
+    BigAvatar { initial: root.initial; }
+    VerticalLayout {
+        Text {
+            text: root.name;
+            color: Theme.on-video;
+            font-family: Theme.display;
+            font-size: 1.4375rem;
+            font-weight: 600;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        @children
+    }
+}
+
+component CallTimer inherits Text {
+    color: Theme.on-video-muted;
+    font-size: 1rem;
+    font-family: Theme.mono;
+    height: self.font-size * Theme.line-box;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+}
+
+// The whole window while a call is up: video owns the frame, chrome sits on a scrim. A voice
+// call puts the person in the middle instead, on the plain call surface.
 export component CallScreen inherits Rectangle {
     in property <image> frame;
     in property <image> remote-frame;
     in property <string> peer-name;
     in property <string> peer-initial;
     in property <string> timer;
-    in property <string> key-exchange;
     in property <Route> route;
     // Set when the video never came up, or stopped: audio with no picture otherwise looks
     // exactly like a call where nobody moved.
@@ -143,6 +220,18 @@ export component CallScreen inherits Rectangle {
     in-out property <bool> swapped;
     in property <bool> mic-on;
     in property <bool> speaker-on;
+    // Placed or offered as voice, and not switched to video since.
+    in property <bool> voice;
+    in property <bool> camera-on: true;
+    // What they said about their own mic and camera.
+    in property <bool> peer-mic-off;
+    in property <bool> peer-camera-off;
+    // Nothing is arriving, or the connection is being got back.
+    in property <bool> reconnecting;
+    // We asked to switch to video and have no answer yet.
+    in property <bool> asking;
+    // They answered our ask by keeping it voice; said until we ask again.
+    in property <bool> kept-voice;
     in property <length> top-inset;
     in property <length> bottom-inset;
     callback accept();
@@ -150,30 +239,67 @@ export component CallScreen inherits Rectangle {
     callback hangup();
     callback toggle-mic();
     callback toggle-speaker();
+    callback toggle-camera();
     callback flip-camera();
     callback minimise();
+    callback ask-video(bool);
+    callback call-again();
+    callback close();
     background: Theme.video;
 
     property <bool> connected: state == CallState.connected;
     property <bool> incoming: state == CallState.incoming;
+    property <bool> lost: state == CallState.lost;
+    property <bool> video: !root.voice && !root.lost;
+    // Their picture is not worth showing: their camera is off.
+    property <bool> peer-away: root.connected && root.video && root.peer-camera-off;
 
     // Under everything on the call, so a tap nothing here takes stops here. The picture that
     // fills the screen takes none, and a tap on it went through to the page beneath — a
     // contact opened, or a call placed, from a tap on your own face.
     TouchArea { }
 
-    Image {
+    if root.video : Image {
         width: parent.width;
         height: parent.height;
         source: root.connected && !root.swapped ? root.remote-frame : root.frame;
         image-fit: cover;
     }
 
+    // Their camera is off: them, not a frozen frame, which would read as the network.
+    if root.peer-away && !root.swapped : Rectangle {
+        background: Theme.video;
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.peer-off-gap;
+            padding-top: root.top-inset;
+            padding-bottom: root.bottom-inset + Theme.peer-off-lift;
+            BigAvatar { initial: root.peer-initial; }
+            Text {
+                text: root.peer-name;
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.1875rem;
+                font-weight: 600;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Flag {
+                    icon: @image-url("icons/video-off.svg");
+                    text: @tr("Camera off");
+                }
+            }
+        }
+    }
+
     // The corner card: the whole frame until the call connects, then a card holding whichever
     // of the two pictures is not filling the screen. It depends on `connected` alone — while
     // it also depended on `swapped`, a tap grew the card back to full size and buried the
     // other picture under it, which read as the self view vanishing rather than trading.
-    self-view := Rectangle {
+    if root.video : Rectangle {
         property <bool> inset: root.connected;
         x: inset ? (Theme.rtl ? Theme.self-view-edge : parent.width - self.width - Theme.self-view-edge) : 0px;
         y: inset ? root.top-inset + Theme.self-view-top : 0px;
@@ -190,14 +316,39 @@ export component CallScreen inherits Rectangle {
             source: root.swapped ? root.remote-frame : root.frame;
             image-fit: cover;
         }
+        // Our camera is off: said, rather than holding the last frame.
+        if !root.camera-on && !root.swapped : Rectangle {
+            background: Theme.video-raised;
+            Image {
+                source: @image-url("icons/video-off.svg");
+                width: Theme.camera-off-icon;
+                height: Theme.camera-off-icon;
+                colorize: Theme.on-video-muted;
+            }
+        }
+        if !root.swapped : Rectangle {
+            // Inside the card's border, as the design draws it.
+            x: 1px;
+            width: parent.width - 2px;
+            y: parent.height - self.height - 1px;
+            height: Theme.self-label-height;
+            background: @linear-gradient(0deg, #0000008C 0%, #00000000 100%);
+            Text {
+                x: Theme.rtl ? parent.width - self.width - Theme.self-label-pad : Theme.self-label-pad;
+                text: root.camera-on ? @tr("You") : @tr("Camera off");
+                color: Theme.on-video;
+                font-size: 0.6875rem;
+                vertical-alignment: center;
+            }
+        }
         Tap {
             tapped => { root.swapped = !root.swapped; }
         }
         animate x, y, width, height, border-radius { duration: 620ms; easing: ease-out-quint; }
     }
 
-    // Ringing and incoming: name over a dimmed camera.
-    if !root.connected : Rectangle {
+    // Ringing and incoming video: the name over a dimmed camera.
+    if root.video && !root.connected : Rectangle {
         background: #070A0FB3;
         VerticalLayout {
             alignment: center;
@@ -225,63 +376,170 @@ export component CallScreen inherits Rectangle {
         }
     }
 
-    // Top scrim: who, how long, how secure. Only once connected — while it is ringing the
-    // name is already in the middle of the screen.
+    // A voice call, and a call that has ended with the network: the person in the middle. While
+    // a voice call reconnects, the message takes their place and the name moves to the bar.
+    if !root.video && !(root.connected && root.reconnecting) : VoiceFace {
+        initial: root.peer-initial;
+        name: root.peer-name;
+        padding-top: root.top-inset + Theme.voice-edge;
+        padding-left: Theme.voice-edge;
+        padding-right: Theme.voice-edge;
+        padding-bottom: root.bottom-inset + Theme.voice-lift;
+        if !root.connected && !root.lost : Text {
+            text: root.incoming ? @tr("Incoming voice call") : @tr("Calling…");
+            color: Theme.on-video-muted;
+            font-size: 0.9375rem;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        if root.lost : Text {
+            text: @tr("Connection lost");
+            color: Theme.end-call;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        if root.lost : Rectangle { height: Theme.lost-timer-top; }
+        if root.connected || root.lost : CallTimer { text: root.timer; }
+        if root.connected && root.kept-voice : Rectangle { height: Theme.kept-voice-top; }
+        if root.connected && root.kept-voice : Text {
+            text: @tr("{} kept it voice", root.peer-name);
+            color: Theme.on-video-muted;
+            font-size: 0.8125rem;
+            height: self.font-size * Theme.line-box;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Nothing arriving: the call is still there, and says it is coming back. The bar and the
+    // keys stay over it and keep working.
+    if root.connected && root.reconnecting : Rectangle {
+        background: root.video ? Theme.reconnect-scrim : transparent;
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.reconnect-gap;
+            padding-top: root.top-inset;
+            padding-left: Theme.reconnect-edge;
+            padding-right: Theme.reconnect-edge;
+            padding-bottom: root.bottom-inset + Theme.peer-off-lift;
+            Dots { padding-bottom: Theme.dots-under; }
+            Text {
+                text: @tr("Reconnecting…");
+                color: Theme.on-video;
+                font-family: Theme.display;
+                font-size: 1.25rem;
+                font-weight: 600;
+                height: self.font-size * Theme.line-box;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    width: min(Theme.reconnect-text, root.width - Theme.reconnect-edge * 2);
+                    text: @tr("The call carries on when the network is back.");
+                    color: Theme.on-video-muted;
+                    font-size: 0.875rem;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Top bar, once connected: fold it away at the start, then who and how long, with what they
+    // are doing; how the call is set up at the end. A voice call has the name in the middle,
+    // until it reconnects and the middle is taken.
     if root.connected : Rectangle {
         y: 0;
-        height: root.top-inset + 88px;
+        height: bar.preferred-height;
         background: @linear-gradient(180deg, #04080DBF 0%, #04080D00 100%);
-        VerticalLayout {
+        bar := VerticalLayout {
             padding-top: root.top-inset + Theme.call-top;
+            padding-bottom: Theme.call-top;
             padding-left: Theme.call-edge;
             padding-right: Theme.call-edge;
             alignment: start;
             Row {
                 alignment: space-between;
-                spacing: Theme.gap-large;
-                VerticalLayout {
-                    spacing: 3px;
-                    Line {
-                        text: root.peer-name;
-                        color: Theme.on-video;
-                        font-family: Theme.display;
-                        font-size: 1.1875rem;
-                        font-weight: 600;
+                spacing: Theme.call-bar-gap;
+                Row {
+                    spacing: Theme.fold-gap;
+                    cross-axis-alignment: start;
+                    Rectangle {
+                        width: Theme.fold-size;
+                        height: Theme.fold-size;
+                        border-radius: self.width / 2;
+                        background: Theme.key-fill;
+                        border-width: 1px;
+                        border-color: Theme.key-edge;
+                        accessible-role: button;
+                        accessible-label: @tr("Fold away");
+                        accessible-action-default => { root.minimise(); }
+                        Image {
+                            source: @image-url("icons/minimise.svg");
+                            width: Theme.fold-icon;
+                            height: Theme.fold-icon;
+                            colorize: Theme.on-video;
+                        }
+                        Tap {
+                            tapped => { root.minimise(); }
+                        }
                     }
-                    // A time is a code: it reads left to right in any language.
-                    Line {
-                        text: root.timer;
-                        color: Theme.on-video-muted;
-                        font-size: 1rem;
-                        font-family: Theme.mono;
-                    }
-                    if root.video-failed : Line {
-                        text: @tr("Video isn't working on this phone — audio only");
-                        color: Theme.end-call;
-                        font-size: 0.8125rem;
-                        overflow: elide;
+                    if root.video || root.reconnecting : VerticalLayout {
+                        spacing: 3px;
+                        Line {
+                            text: root.peer-name;
+                            color: Theme.on-video;
+                            font-family: Theme.display;
+                            font-size: 1.1875rem;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        // A time is a code: it reads left to right in any language.
+                        Line {
+                            text: root.timer;
+                            color: Theme.on-video-muted;
+                            font-size: 1rem;
+                            font-family: Theme.mono;
+                        }
+                        if root.video && root.video-failed : Line {
+                            text: @tr("Video isn't working on this phone — audio only");
+                            color: Theme.end-call;
+                            font-size: 0.8125rem;
+                            overflow: elide;
+                        }
+                        if root.peer-mic-off : Row {
+                            padding-top: Theme.flags-top - 3px;
+                            Flag {
+                                icon: @image-url("icons/mic-off.svg");
+                                text: @tr("Muted");
+                            }
+                        }
                     }
                 }
-                // How the call is set up, in the order it matters: the route first, because
-                // a relayed call explains a bad one, then what it is encrypted with.
-                if root.route != Route.unknown : Chip {
-                    text: root.route == Route.direct ? @tr("Direct") : @tr("Relayed");
-                    fill: #E9F0F71A;
-                    edge: #E9F0F73D;
-                    ink: Theme.on-video-muted;
-                }
-                Chip {
-                    text: root.key-exchange;
-                    fill: #58B6FF29;
-                    edge: #58B6FF4C;
-                    ink: Theme.on-video-accent;
+                // The route, because a relayed call explains a bad one. The encryption is not
+                // said: it is always the same. Nothing while there is no path to speak of. In the
+                // accent the encryption chip had, which reads over any picture; a pale one did not.
+                if !root.reconnecting && root.route != Route.unknown : VerticalLayout {
+                    alignment: start;
+                    Chip {
+                        text: root.route == Route.direct ? @tr("Direct") : @tr("Relayed");
+                        fill: #58B6FF29;
+                        edge: #58B6FF4C;
+                        ink: Theme.on-video-accent;
+                    }
                 }
             }
         }
     }
 
     // Controls on their own scrim.
-    Rectangle {
+    controls := Rectangle {
         y: parent.height - self.height;
         height: root.bottom-inset + 120px;
         background: @linear-gradient(0deg, #04080DD9 0%, #04080D00 100%);
@@ -303,11 +561,34 @@ export component CallScreen inherits Rectangle {
                     positive: true;
                     clicked => { root.accept(); }
                 }
-                if !root.incoming : Key {
+                if root.lost : Key {
+                    icon: @image-url("icons/close.svg");
+                    label: @tr("Close");
+                    clicked => { root.close(); }
+                }
+                if root.lost : Key {
+                    icon: @image-url("icons/call.svg");
+                    label: @tr("Call again");
+                    positive: true;
+                    clicked => { root.call-again(); }
+                }
+                if !root.incoming && !root.lost : Key {
                     icon: root.mic-on ? @image-url("icons/mic.svg") : @image-url("icons/mic-off.svg");
                     label: root.mic-on ? @tr("Mute") : @tr("Unmute");
                     on: !root.mic-on;
                     clicked => { root.toggle-mic(); }
+                }
+                if root.connected && root.video : Key {
+                    icon: root.camera-on ? @image-url("icons/video-key.svg") : @image-url("icons/video-off.svg");
+                    label: root.camera-on ? @tr("Turn camera off") : @tr("Turn camera on");
+                    on: !root.camera-on;
+                    clicked => { root.toggle-camera(); }
+                }
+                if root.connected && root.video : Key {
+                    icon: @image-url("icons/camera-switch.svg");
+                    label: @tr("Switch camera");
+                    enabled: root.camera-on;
+                    clicked => { root.flip-camera(); }
                 }
                 if root.connected : Key {
                     icon: @image-url("icons/speaker.svg");
@@ -315,23 +596,59 @@ export component CallScreen inherits Rectangle {
                     on: root.speaker-on;
                     clicked => { root.toggle-speaker(); }
                 }
-                if root.connected : Key {
-                    icon: @image-url("icons/camera-switch.svg");
-                    label: @tr("Switch camera");
-                    clicked => { root.flip-camera(); }
+                // Asks, and while the question is open, takes it back.
+                if root.connected && !root.video : Key {
+                    icon: @image-url("icons/video-key.svg");
+                    label: root.asking ? @tr("Asking to switch to video") : @tr("Switch to video");
+                    on: root.asking;
+                    enabled: !root.reconnecting;
+                    clicked => { root.ask-video(!root.asking); }
                 }
-                // Folds the call away rather than ending it, which is the difference between
-                // looking something up mid-call and having to call back.
-                if root.connected : Key {
-                    icon: @image-url("icons/minimise.svg");
-                    label: @tr("Fold away");
-                    clicked => { root.minimise(); }
-                }
-                if !root.incoming : Key {
+                if !root.incoming && !root.lost : Key {
                     icon: @image-url("icons/call-end.svg");
                     label: @tr("End call");
                     danger: true;
                     clicked => { root.hangup(); }
+                }
+            }
+        }
+    }
+
+    // The question is open: who was asked, and a way to take it back.
+    if root.connected && root.asking : Rectangle {
+        x: Theme.self-view-edge;
+        width: parent.width - Theme.self-view-edge * 2;
+        height: Theme.asking-height;
+        y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
+        border-radius: Theme.asking-radius;
+        background: Theme.asking-fill;
+        border-width: 1px;
+        border-color: Theme.key-edge;
+        Row {
+            padding-left: Theme.asking-pad;
+            padding-right: Theme.asking-pad;
+            spacing: Theme.call-bar-gap;
+            cross-axis-alignment: center;
+            Text {
+                horizontal-stretch: 1;
+                text: @tr("Asking {} to switch to video…", root.peer-name);
+                color: Theme.on-video;
+                font-size: 0.875rem;
+                overflow: elide;
+                horizontal-alignment: Theme.start;
+                vertical-alignment: center;
+            }
+            Text {
+                text: @tr("Cancel");
+                color: Theme.on-video-beacon;
+                font-size: 0.875rem;
+                font-weight: 600;
+                vertical-alignment: center;
+                accessible-role: button;
+                accessible-label: self.text;
+                accessible-action-default => { root.ask-video(false); }
+                Tap {
+                    tapped => { root.ask-video(false); }
                 }
             }
         }

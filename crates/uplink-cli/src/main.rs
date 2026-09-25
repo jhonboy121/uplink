@@ -16,7 +16,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
-use uplink_core::node::{Behind, Command, EndReason, Event, Network, Node};
+use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node};
 use uplink_core::relays::Relays;
 use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, identity, runtime};
@@ -50,14 +50,17 @@ enum Cli {
     Add { name: String, key: EndpointId },
     /// Remove a contact
     Remove { name: String },
-    /// Wait for calls (a accept, r reject, h hang up, q quit)
+    /// Wait for calls (a accept, r reject, h hang up, v ask for video, y/n answer it, q quit)
     Listen {
         #[command(flatten)]
         media: MediaArgs,
     },
-    /// Call a contact name or key (h hang up, q quit)
+    /// Call a contact name or key (h hang up, v ask for video, y/n answer it, q quit)
     Call {
         target: String,
+        /// Place it as a voice call
+        #[arg(long)]
+        voice: bool,
         #[command(flatten)]
         media: MediaArgs,
     },
@@ -108,16 +111,17 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
             Contacts::open(Db::open(dir)?)?.remove(&name)?;
         }
         Cli::Listen { media } => session(dir, None, media).await?,
-        Cli::Call { target, media } => {
+        Cli::Call { target, voice, media } => {
             let peer = Contacts::open(Db::open(dir)?)?.resolve(&target)?;
-            session(dir, Some(peer), media).await?;
+            let mode = if voice { Mode::Voice } else { Mode::Video };
+            session(dir, Some((peer, mode)), media).await?;
         }
     }
     Ok(())
 }
 
 /// Runs the node until quit; when placing a call, also until that call ends.
-async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) -> Result<()> {
+async fn session(dir: &Path, call: Option<(EndpointId, Mode)>, media_args: MediaArgs) -> Result<()> {
     let MediaArgs { video, record } = media_args;
     if let Some(path) = &video {
         // Fail early on a bad clip; each call reopens it to start from the beginning.
@@ -130,8 +134,8 @@ async fn session(dir: &Path, call: Option<EndpointId>, media_args: MediaArgs) ->
     let relays = Relays::load(&Settings::open(db)?);
     let (node, mut events) =
         Node::start(identity::load_or_create(dir).await?, Network::Public(relays), APP).await?;
-    if let Some(peer) = call {
-        node.send(Command::Call(peer)).await?;
+    if let Some((peer, mode)) = call {
+        node.send(Command::Call(peer, mode)).await?;
     }
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut call_media: Option<AbortOnDrop> = None;
@@ -192,10 +196,13 @@ async fn handle_input(node: &Node, line: &str) -> Result<bool> {
         "a" => Command::Answer(true),
         "r" => Command::Answer(false),
         "h" => Command::Hangup,
+        "v" => Command::AskVideo(true),
+        "y" => Command::AnswerVideo(true),
+        "n" => Command::AnswerVideo(false),
         "q" => return Ok(false),
         "" => return Ok(true),
         other => {
-            println!("unknown input `{other}` (a accept, r reject, h hang up, q quit)");
+            println!("unknown input `{other}` (a accept, r reject, h hang up, v ask for video, y/n answer it, q quit)");
             return Ok(true);
         }
     };
@@ -212,10 +219,21 @@ fn describe(event: &Event, contacts: &Contacts) -> String {
         Event::Ready { id } => format!("ready as {id}"),
         Event::Online => "reachable".to_owned(),
         Event::Offline => "not reachable".to_owned(),
-        Event::Dialing { peer } => format!("dialing {}", name(contacts, peer)),
+        Event::Dialing { peer, mode } => format!("dialing {} ({mode:?})", name(contacts, peer)),
         Event::Ringing { peer } => format!("ringing {}", name(contacts, peer)),
-        Event::Incoming { peer } => format!("incoming call from {} (a accept, r reject)", name(contacts, peer)),
-        Event::Connected { peer, key_exchange, .. } => format!("connected to {} [{key_exchange:?}]", name(contacts, peer)),
+        Event::Incoming { peer, mode } => {
+            format!("incoming {mode:?} call from {} (a accept, r reject)", name(contacts, peer))
+        }
+        Event::Connected { peer, key_exchange, mode, .. } => {
+            format!("connected to {} [{key_exchange:?}] ({mode:?})", name(contacts, peer))
+        }
+        Event::PeerMedia(state) => format!("their mic off: {}, camera off: {}", state.mic_off, state.camera_off),
+        Event::VideoAsked(true) => "they ask to switch to video (y switch, n keep voice)".to_owned(),
+        Event::VideoAsked(false) => "they took back the ask for video".to_owned(),
+        Event::VideoOn => "switched to video".to_owned(),
+        Event::VideoDeclined => "they kept it voice".to_owned(),
+        Event::Reconnecting => "connection lost; reconnecting".to_owned(),
+        Event::Reconnected => "reconnected".to_owned(),
         Event::Ended { peer, reason } => {
             let who = peer.as_ref().map_or_else(|| "unknown peer".to_owned(), |p| name(contacts, p));
             match reason {

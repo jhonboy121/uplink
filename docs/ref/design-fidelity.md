@@ -17,6 +17,11 @@ Read this before touching the markup in `crates/uplink/ui/`.
 Screens are named by the mockup's own captions: `People`, `Add someone`, `Settings`, `In a call`,
 `Incoming`, `العربية`.
 
+- The shell (People rows, contact and call pages, the call log) has its own mockup,
+  `docs/design/uplink-shell.html`. Measure it with
+  `UPLINK_DESIGN=uplink-shell` before `python3 tools/design-probe/probe.py` and `table.py`; it writes
+  `geometry-uplink-shell.json`. Where two frames share a caption, the later one is what gets measured.
+  Its older rows differ from the built ones by a few dp; only what a change touches is matched to it.
 - `just design-measure` → `target/design/geometry.json`: every element of every screen, measured in
   headless Chromium. Positions, sizes, computed font/colour/border/padding/gap, and the glyph run.
 - `just design-table <Screen>` prints one screen scaled to dp, in the same column layout as the

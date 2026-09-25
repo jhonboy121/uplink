@@ -103,9 +103,10 @@ default); keep disk usage lean. Avoid build scripts.
    themed. 7b: the shell (People / Calls / Connect / Settings), the splash, the permission gate, `rusqlite` contacts
    and the call log, the contact screen, ringtone, ringback and the outgoing timeout — **done**; still open are the
    profile over the wire and the privacy switches. 7c PiP, lock-screen calls and the diagnostics report **done**;
-   7d verification, identity rotation. 7e call modes (2026-09-24, see Revisions): voice-only calls, camera off
-   mid-call, the peer's camera and mic state shown, and a voice call upgraded to video. 7f (2026-09-24): a call that
-   survives the network dropping out and coming back (first of these), screen sharing, call recording.
+   7d verification, identity rotation. 7e call modes — voice-only calls, camera off mid-call, the peer's camera
+   and mic state shown, a voice call upgraded to video — **built, not yet device-tested**. 7f: a call that survives
+   the network dropping out and coming back **built, not yet device-tested**; screen sharing and call recording
+   still to do.
 8. ~~**Resource table**~~ **done**: `tools/android-res` compiles `android/` into the manifest, `resources.arsc` and the
    APK itself. Launcher icon and system splash confirmed on the S24. See [docs/ref/android-res.md](ref/android-res.md).
 9. Security to-dos above; then iOS (CI) and web.
@@ -752,8 +753,9 @@ default); keep disk usage lean. Avoid build scripts.
     direct over IPv6 and relayed; whether each side offered IPv6; whether a path of each family
     ever opened; and `paths_recorded`, so an older call reads as unknown rather than "no IPv6".
     The details page shows the breakdown ("IPv6 72% · relay 28%") and what happened with IPv6.
-  - **Next:** two test calls with the other phone, both on mobile data and then the other on wifi, and
-    both logs read together. Then the fix for whichever it is: an address not offered
+  - **Next (deferred, 2026-09-24 — waits on the next real call with the other phone):** two test
+    calls with the other phone, both on mobile data and then the other on wifi, and both logs read
+    together. Then the fix for whichever it is: an address not offered
     (configurable external addresses), offered but not tried (ours or iroh's — reported with both
     logs), tried and dropped (port mapping / their router), or opened and not kept (path
     selection). Relayed calls are made good regardless: bitrate that follows the path, and relays
@@ -822,3 +824,48 @@ default); keep disk usage lean. Avoid build scripts.
   `just tr-check` checks both, placeholders included. The card's caption is **shaped** (harfrust,
   already in the lock) in **Noto Sans Arabic SemiBold** (vendored, OFL), so Arabic joins and runs
   right to left. The Language row has its own globe icon.
+- **2026-09-24**: **call modes and surviving a drop, built** (roadmap 7e, and 7f's first item). Not yet
+  device-tested. Designed first, then locked: the call UI mockup's "Call modes & reconnecting" section and
+  the shell mockup (now vendored as `docs/design/uplink-shell.html`, measured with
+  `UPLINK_DESIGN=uplink-shell`). **Both phones are assumed to run the same build** for now: none of this is
+  gated by capabilities (see docs/ref/wire.md).
+  - **Wire:** an offer carries a `Setup` (call id, voice, resume); new signals for mic/camera state, the
+    video ask (and its withdrawal) and its answer; close code `6` for a connection a call has moved off.
+  - **Voice calls:** placed from People's quick actions, a contact's or a call's Voice call; no camera, no
+    codecs, and the call service holds the microphone type alone. The log keeps the kind, and a row rings
+    back the same kind.
+  - **Switching to video:** either side asks; the other gets a sheet (Back is Keep voice); both asking at once
+    is agreement. On a yes the parked video half starts and the call service is restarted with the camera
+    type — refused from the background, in which case it keeps the microphone it had. The log keeps when.
+  - **Camera off** stops the camera (and so the encoder's input); on again starts with a keyframe. Each
+    side's mic and camera state is sent, and shown over the other's video as a pill, never guessed.
+  - **Surviving a drop:** a call whose connection times out or is reset gets 30 s. The side with the lower
+    key re-dials with an offer naming the call; the other side's engine hands it to the call instead of
+    answering busy. Media follows the call's current connection through a `watch`, so the codecs, the
+    sequence numbers and the audio pump carry on untouched; telemetry restarts per connection; the first
+    frame is a keyframe. Drops and rejoins go into the quality summary. Past the grace the call ends as
+    **Connection lost** (its own outcome), and the screen stays 4 s with Close and Call again.
+  - **Saying it:** QUIC keep-alive is now 1 s on call connections (only those; an idle endpoint has none),
+    so nothing arriving for 2 s means the network, and "Reconnecting…" shows from that — well before the
+    30 s idle timeout gives up on the connection.
+  - The key-exchange chip is gone from the call screen: it is always X25519MLKEM768. Only Direct/Relayed
+    stays. Fold away moved to a chevron at the start of the call's top bar (six keys do not fit 360dp).
+  - Not matched: the reconnecting sentence's 1.5 line spacing (Slint 1.18 `Text` has none; 11dp short),
+    and the design's frozen-frame greyscale under the reconnecting scrim (no filter in Slint; the scrim
+    covers it).
+  - Tested on the host: every new signal round-trips; voice calls, media state, asking, declining,
+    withdrawing and asking at once between two nodes; a staged re-dial carries a live call over to a new
+    connection and closes the old one with `6`, a re-dial naming another call is busy, and one for a call
+    that is over is turned away without ringing or logging. A real drop cannot be staged on loopback —
+    that is for the phones.
+- **2026-09-25**: **first drop test, CLI ↔ app on the same phone, and one open bug.** Wifi off: video froze,
+  "Reconnecting…", then carried on — QUIC moved paths itself, no rejoin needed. Wifi back: the CLI's video to
+  the phone stopped for good while its voice and the phone's video carried on over the same connection; every
+  CLI frame timed out opening or writing its stream. Suspected: stream credit or the flow-control window left
+  used up by frames abandoned on the dead path (datagrams need neither, which is why voice lived). The stats
+  line now carries `unopened`, `streams_blocked`, `data_blocked`, `stream_data_blocked`, `max_streams_in`,
+  `max_data_in` and `resets_out` to say which. **Deferred:** a second run on one phone did not drop at all —
+  the path was an address the phone owns that outlives wifi, and traffic to yourself never touches a radio —
+  so the repro needs two machines (an EC2 CLI, or the other phone). Also fixed: a backgrounded call kept
+  images naming deleted GL textures and drew the app's mark in place of stopped video; the route chip is in
+  the accent the encryption chip had.

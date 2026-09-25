@@ -186,9 +186,12 @@ export component Key inherits Rectangle {
     in property <bool> on: false;
     in property <bool> danger: false;
     in property <bool> positive: false;
+    // Dimmed and deaf: there while it cannot be used, so the row does not shift under the thumb.
+    in property <bool> enabled: true;
     in property <image> icon;
     in property <string> label;
     callback clicked();
+    opacity: enabled ? 1.0 : Theme.key-dimmed;
     width: danger || positive ? Theme.key-wide : Theme.key-size;
     height: Theme.key-size;
     border-radius: self.height / 2;
@@ -200,7 +203,12 @@ export component Key inherits Rectangle {
     border-color: #E9F0F728;
     accessible-role: button;
     accessible-label: label;
-    accessible-action-default => { root.clicked(); }
+    accessible-enabled: enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
     Image {
         source: root.icon;
         width: Theme.key-icon;
@@ -208,11 +216,15 @@ export component Key inherits Rectangle {
         colorize: danger || positive ? #FFFFFF : on ? Theme.under-video : Theme.on-video;
     }
     touch := Tap {
-        tapped => { root.clicked(); }
+        tapped => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
     }
     states [
-        pressed when touch.pressed : { opacity: 0.6; }
-        hovered when touch.has-hover : { opacity: 0.85; }
+        pressed when touch.pressed && root.enabled : { opacity: 0.6; }
+        hovered when touch.has-hover && root.enabled : { opacity: 0.85; }
     ]
     animate opacity, background { duration: Theme.feedback; easing: ease-out; }
 }
@@ -248,8 +260,11 @@ export component Wide inherits Rectangle {
     in property <bool> primary: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    // Before the words, when it has one.
+    in property <image> icon;
     callback clicked();
     property <color> accent: root.danger ? Theme.end-call : Theme.beacon;
+    property <color> ink: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : root.accent;
     height: Theme.wide-height;
     border-radius: Theme.wide-radius;
     background: root.primary ? Theme.beacon : self.accent.with-alpha(0.12);
@@ -259,13 +274,24 @@ export component Wide inherits Rectangle {
     accessible-role: button;
     accessible-label: text;
     accessible-action-default => { root.clicked(); }
-    Text {
-        text: root.text;
-        color: root.primary ? (Theme.dark ? #04121F : #FFFFFF) : root.accent;
-        font-size: 1rem;
-        font-weight: root.primary ? 600 : 400;
-        height: self.font-size * Theme.line-box;
-        vertical-alignment: center;
+    Row {
+        alignment: center;
+        spacing: Theme.wide-icon-gap;
+        cross-axis-alignment: center;
+        if root.icon.width > 0 : Image {
+            source: root.icon;
+            width: Theme.wide-icon;
+            height: Theme.wide-icon;
+            colorize: root.ink;
+        }
+        Text {
+            text: root.text;
+            color: root.ink;
+            font-size: 1rem;
+            font-weight: root.primary ? 600 : 400;
+            height: self.font-size * Theme.line-box;
+            vertical-alignment: center;
+        }
     }
     touch := Tap {
         mouse-cursor: root.enabled ? pointer : default;
@@ -311,6 +337,87 @@ export component Pill inherits Rectangle {
     }
     states [ pressed when touch.pressed && root.enabled : { opacity: 0.6; } ]
     animate opacity { duration: Theme.feedback; easing: ease-out; }
+}
+
+// Voice call and Video call, side by side and equal: on a contact, and on a call's details.
+export component CallPair inherits Row {
+    // Whether as voice.
+    callback call(bool);
+    spacing: Theme.pair-gap;
+    // Equal halves, whatever the words: both grow from nothing rather than from their labels.
+    Wide {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        preferred-width: 0px;
+        text: @tr("Voice call");
+        icon: @image-url("icons/call.svg");
+        clicked => { root.call(true); }
+    }
+    Wide {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        preferred-width: 0px;
+        text: @tr("Video call");
+        icon: @image-url("icons/video-key.svg");
+        primary: true;
+        clicked => { root.call(false); }
+    }
+}
+
+// The pill's shape with an icon in place of words: the call log's ring back, whose icon says
+// which kind of call it rings.
+export component IconPill inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+    width: Theme.icon-pill-width;
+    height: Theme.pill-height;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: Theme.beacon.with-alpha(0.35);
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    Image {
+        source: root.icon;
+        width: Theme.icon-pill-icon;
+        height: Theme.icon-pill-icon;
+        colorize: Theme.beacon;
+    }
+    touch := Tap {
+        tapped => { root.clicked(); }
+    }
+    states [ pressed when touch.pressed : { opacity: 0.6; } ]
+    animate opacity { duration: Theme.feedback; easing: ease-out; }
+}
+
+// One of a row's two quick calls: a full touch target around a small ring.
+export component QuickCall inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+    width: Theme.quick-hit;
+    height: Theme.quick-hit;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    ring := Rectangle {
+        width: Theme.quick-ring;
+        height: Theme.quick-ring;
+        border-radius: self.width / 2;
+        border-width: 1px;
+        border-color: Theme.beacon.with-alpha(0.35);
+        Image {
+            source: root.icon;
+            width: Theme.quick-icon;
+            height: Theme.quick-icon;
+            colorize: Theme.beacon;
+        }
+    }
+    touch := Tap {
+        tapped => { root.clicked(); }
+    }
+    states [ pressed when touch.pressed : { ring.opacity: 0.6; } ]
 }
 
 // A pill in a bar, centred on the bar's line.
@@ -391,6 +498,8 @@ export component DetailRow inherits Rectangle {
     // and a missing one renders as nothing at all.
     in property <image> icon;
     in property <bool> danger: false;
+    // The value alone is bad news: a call the network ended.
+    in property <bool> value-danger: false;
     in property <bool> tappable: true;
     callback clicked();
     height: Theme.detail-height;
@@ -439,7 +548,8 @@ export component DetailRow inherits Rectangle {
             }
             if root.icon.width <= 0 : Line {
                 text: root.value;
-                color: root.danger ? Theme.end-call : root.tappable ? Theme.beacon : Theme.muted;
+                color: root.danger || root.value-danger ? Theme.end-call : root.tappable ? Theme.beacon : Theme.muted;
+                font-weight: root.value-danger ? 600 : 400;
                 font-size: 0.908rem;
                 font-family: Theme.mono;
             }

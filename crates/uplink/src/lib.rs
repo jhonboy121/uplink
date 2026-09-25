@@ -42,8 +42,8 @@ use uplink_core::logs;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
 use uplink_core::relays::{self, Relays};
-use uplink_core::media::{MediaSession, Route};
-use uplink_core::node::{Behind, Command, EndReason, Event};
+use uplink_core::media::{MediaSession, MediaStats, Route};
+use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode};
 use uplink_core::EndpointId;
 
 use crate::clock::LocalClock;
@@ -96,6 +96,8 @@ const SECONDS_PER_MINUTE: u64 = 60;
 /// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
 const FRESH_FOR: Duration = Duration::from_millis(3200);
 const PERCENT: f64 = 100.0;
+/// How long a call the network ended stays on screen to say so.
+const LOST_LINGER: Duration = Duration::from_secs(4);
 
 #[derive(Default)]
 struct FrameStats {
@@ -138,6 +140,18 @@ struct State {
     selected_calls: FxHashSet<CallId>,
     /// For the on-screen timer only; the call log is the core's to write.
     connected_at: Option<Instant>,
+    /// How the call in progress was placed or offered.
+    mode: Mode,
+    /// A voice call's video half, kept unstarted until both sides agree to switch to video.
+    parked: Option<VideoParts>,
+    /// Who the call in progress, or the one just lost, is with: what Call again dials.
+    peer: Option<EndpointId>,
+    /// Ours, as the other side is told it. Off stops the camera, and with it the encoder's input.
+    camera_on: bool,
+    /// The core is getting a dropped connection back.
+    reconnecting: bool,
+    /// The call's counters, voice or video: a voice call has no codecs to hold them.
+    media: Option<Arc<MediaStats>>,
     /// This phone's own key, which is never anyone to call or save.
     me: EndpointId,
     /// The contact just added, shimmering in the People list until [`FRESH_FOR`] has passed.
@@ -315,6 +329,27 @@ impl State {
         self.audio.as_ref().is_some_and(CallAudio::toggle_mute)
     }
 
+    /// Turns our camera off, which stops what the encoder is fed, or back on, starting with a
+    /// keyframe. Returns whether it ended up on.
+    fn toggle_camera(&mut self) -> bool {
+        self.camera_on = !self.camera_on;
+        if self.camera_on {
+            self.start_camera();
+            if let Some(call) = &self.call {
+                call.request_keyframe();
+            }
+        } else {
+            self.session = None;
+        }
+        self.camera_on
+    }
+
+    /// What the other side is told about our mic and camera.
+    fn media_state(&self) -> MediaState {
+        let mic_off = self.audio.as_ref().is_some_and(CallAudio::muted);
+        MediaState { mic_off, camera_off: !self.camera_on }
+    }
+
     /// mm:ss since the call connected.
     fn call_timer(&self) -> String {
         let elapsed = self.connected_at.map(|at| at.elapsed().as_secs()).unwrap_or_default();
@@ -347,6 +382,7 @@ impl State {
         let camera_was_running = self.session.take().is_some();
         self.audio = None;
         self.call = None;
+        self.parked = None;
         if camera_was_running {
             self.start_camera();
         }
@@ -679,7 +715,13 @@ fn spawn_ui(task: impl Future<Output = ()> + 'static) {
 /// the background when there is nothing left to close. Java hands every press here rather than
 /// finishing the activity, because finishing it takes the endpoint with it.
 fn went_back(ui: &App) -> bool {
-    if ui.get_notice().row_count() > 0 {
+    if ui.get_video_asked() {
+        // Back out of their ask is Keep voice: nothing turns on that was not agreed to.
+        ui.set_video_asked(false);
+        ui.invoke_answer_video(false);
+    } else if ui.get_call_state() == CallState::Lost {
+        ui.set_call_state(CallState::Idle);
+    } else if ui.get_notice().row_count() > 0 {
         ui.set_notice(none());
     } else if ui.get_confirming() != Confirm::None {
         ui.set_confirming(Confirm::None);
@@ -1059,6 +1101,12 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         selected: FxHashSet::default(),
         selected_calls: FxHashSet::default(),
         connected_at: None,
+        mode: Mode::Video,
+        parked: None,
+        peer: None,
+        camera_on: true,
+        reconnecting: false,
+        media: None,
         me: identity,
         fresh: None,
         clock: LocalClock::new(platform.context()),
@@ -1481,37 +1529,60 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
 
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
-    ui.on_call(move |key| match peer_key(&key, &identity) {
-        // One call at a time, said here rather than dialled and refused: the node refusing is
-        // silent, and the optimistic Dialing below would have renamed the call that is up.
-        Ok(_) if weak.upgrade().is_some_and(|ui| ui.get_call_state() != CallState::Idle) => {
-            if let Some(ui) = weak.upgrade() {
-                toast(&ui, Say::AlreadyInCall, "");
-            }
-        }
-        Ok(peer) => {
-            if send_call_command(&s, Command::Call(peer), &weak)
-                && let Some(ui) = weak.upgrade()
-            {
-                // Optimistic: the node confirms with Dialing, or reverts via Ended.
-                ui.set_call_state(CallState::Dialing);
-                let name = with_contacts(&s, |contacts| view::name_of(contacts, &peer)).unwrap_or_else(|| view::short(&peer));
-                set_peer(&ui, &name);
-                start_call_service(&p, &name);
-            }
-        }
+    ui.on_call(move |key, voice| match peer_key(&key, &identity) {
+        Ok(peer) => place_call(&s, &weak, &p, peer, if voice { Mode::Voice } else { Mode::Video }),
         Err(unusable) => {
             if let Some(ui) = weak.upgrade() {
                 toast(&ui, unusable.say(), "");
             }
         }
     });
+    // The same person, the same way, from the screen that said the last call was lost.
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
+    ui.on_call_again(move || {
+        let again = with_state_value(&s, |state| state.peer.map(|peer| (peer, state.mode))).flatten();
+        if let Some(ui) = weak.upgrade() {
+            ui.set_call_state(CallState::Idle);
+        }
+        if let Some((peer, mode)) = again {
+            place_call(&s, &weak, &p, peer, mode);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_close_call(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_call_state(CallState::Idle);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_toggle_camera(move || {
+        let on = with_state_value(&s, State::toggle_camera);
+        if let (Some(on), Some(ui)) = (on, weak.upgrade()) {
+            ui.set_camera_on(on);
+        }
+        tell_media(&s, &weak);
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_ask_video(move |ask| {
+        if send_call_command(&s, Command::AskVideo(ask), &weak)
+            && let Some(ui) = weak.upgrade()
+        {
+            ui.set_video_asking(ask);
+            // Asking again is the answer they gave last time no longer standing.
+            ui.set_kept_voice(false);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_answer_video(move |accept| {
+        send_call_command(&s, Command::AnswerVideo(accept), &weak);
+    });
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_accept(move || {
         if send_call_command(&s, Command::Answer(true), &weak)
             && let Some(ui) = weak.upgrade()
         {
-            start_call_service(&p, &ui.get_peer_name());
+            let mode = with_state_value(&s, |state| state.mode).unwrap_or(Mode::Video);
+            start_call_service(&p, &ui.get_peer_name(), mode);
         }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
@@ -1538,6 +1609,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if let Some(ui) = weak.upgrade() {
             ui.set_mic_on(!muted);
         }
+        // A muted mic sounds exactly like a quiet room: the other side is told which it is.
+        tell_media(&s, &weak);
         // The picture-in-picture window carries its own mute button; it has to agree.
         if let Err(e) = p.set_mic_on(!muted) {
             tracing::warn!("mic state for the call window: {e}");
@@ -1676,7 +1749,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         // A call keeps its camera, rebuilt without the scan stream. Outside one, the camera goes:
         // it used to be rebuilt anyway, and a front camera ran behind the Connect page for as
         // long as it was open, feeding a picture nothing showed.
-        let in_call = weak.upgrade().is_some_and(|ui| ui.get_call_state() != CallState::Idle);
+        let in_call = weak.upgrade().is_some_and(|ui| in_call(&ui));
         with_state(&s, |s| {
             if in_call && s.session.is_some() {
                 s.start_camera();
@@ -1719,6 +1792,15 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 // SAFETY: Slint keeps the GL context current during RenderingTeardown.
                 unsafe { preview.destroy() };
             }
+            // The images name textures that are gone now. Kept, they draw whatever the new
+            // context reuses the number for — the app's own mark, over a call whose video had
+            // stopped — until a new frame replaces them.
+            with_state(&s, |state| {
+                if let Some(ui) = state.ui.upgrade() {
+                    ui.set_frame(slint::Image::default());
+                    ui.set_remote_frame(slint::Image::default());
+                }
+            });
         }
         _ => {}
     })?;
@@ -1748,16 +1830,22 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             if busy && ticks.is_multiple_of(STATS_LOG_EVERY) {
                 tracing::info!("{text}");
             }
-            let route = state.call.as_ref().map_or(Route::Unknown, |call| call.stats.route());
+            // From the call's own counters, which a voice call has too.
+            let route = state.media.as_ref().map_or(Route::Unknown, |media| media.route());
+            let stalled = state.media.as_ref().is_some_and(|media| media.stalled());
             if let Some(ui) = state.ui.upgrade() {
-                ui.set_call_timer(state.call_timer().into());
+                // Only while it runs: a lost call's screen keeps the length it ended at.
+                if state.connected_at.is_some() {
+                    ui.set_call_timer(state.call_timer().into());
+                }
                 ui.set_call_route(view::route(route));
+                ui.set_call_reconnecting(state.reconnecting || stalled);
             }
         });
     });
 
     let outcome = ui.run();
-    if let Err(e) = platform.set_call_service(false, "") {
+    if let Err(e) = platform.set_call_service(false, "", false) {
         tracing::warn!("stopping call service: {e}");
     }
     // Only what this window owned. The endpoint and the runtime stay: they belong to the process,
@@ -1815,8 +1903,41 @@ fn peer_key(text: &str, me: &EndpointId) -> Result<EndpointId, Unusable> {
 /// microphone service types are only granted while the app is in front, and by the time a call
 /// connects the user may have gone elsewhere — which Android answered with a SecurityException
 /// that took the whole app down. Starting here also arms picture-in-picture while it rings.
-fn start_call_service(platform: &Platform, peer: &str) {
-    if let Err(e) = platform.set_call_service(true, peer) {
+/// Whether a call is up or on its way. A lost call's screen is only saying so.
+fn in_call(ui: &App) -> bool {
+    !matches!(ui.get_call_state(), CallState::Idle | CallState::Lost)
+}
+
+/// Dials `peer`, voice or video. One call at a time, said here rather than dialled and refused:
+/// the node refusing is silent, and the optimistic Dialing below would have renamed the call
+/// that is up.
+fn place_call(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>, platform: &Platform, peer: EndpointId, mode: Mode) {
+    let Some(ui) = weak.upgrade() else { return };
+    if in_call(&ui) {
+        toast(&ui, Say::AlreadyInCall, "");
+        return;
+    }
+    if send_call_command(state, Command::Call(peer, mode), weak) {
+        // Optimistic: the node confirms with Dialing, or reverts via Ended.
+        ui.set_call_state(CallState::Dialing);
+        ui.set_call_voice(mode == Mode::Voice);
+        let name = with_contacts(state, |contacts| view::name_of(contacts, &peer)).unwrap_or_else(|| view::short(&peer));
+        set_peer(&ui, &name);
+        start_call_service(platform, &name, mode);
+    }
+}
+
+/// Tells the other side what our mic and camera are doing now.
+fn tell_media(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>) {
+    if let Some(media) = with_state_value(state, |s| s.media_state()) {
+        send_call_command(state, Command::Media(media), weak);
+    }
+}
+
+/// A voice call holds the microphone type alone: asking for a camera it never uses is wrong, and
+/// one more thing Android can refuse.
+fn start_call_service(platform: &Platform, peer: &str, mode: Mode) {
+    if let Err(e) = platform.set_call_service(true, peer, mode == Mode::Video) {
         tracing::warn!("call service: {e}");
     }
 }
@@ -1844,17 +1965,32 @@ fn send_call_command(state: &Rc<RefCell<State>>, command: Command, ui: &slint::W
 /// The peer an event concerns, when it names one.
 const fn peer_of(event: &Event) -> Option<EndpointId> {
     match event {
-        Event::Dialing { peer } | Event::Ringing { peer } | Event::Incoming { peer } | Event::Connected { peer, .. } => {
-            Some(*peer)
-        }
-        Event::Ready { .. } | Event::Online | Event::Offline | Event::Ended { .. } => None,
+        Event::Dialing { peer, .. }
+        | Event::Ringing { peer }
+        | Event::Incoming { peer, .. }
+        | Event::Connected { peer, .. } => Some(*peer),
+        _ => None,
     }
+}
+
+/// Starts the codecs, then the camera with the encoder as a second output.
+fn start_call_video(state: &Rc<RefCell<State>>, platform: &Rc<Platform>, parts: VideoParts) {
+    with_state(state, |s| s.start_video(parts));
+    request_camera(state, platform);
 }
 
 /// UI call state implied by an event; `None` leaves it unchanged.
 const fn call_state(event: &Event) -> Option<CallState> {
     match event {
-        Event::Ready { .. } | Event::Online | Event::Offline => None,
+        Event::Ready { .. }
+        | Event::Online
+        | Event::Offline
+        | Event::PeerMedia(_)
+        | Event::VideoAsked(_)
+        | Event::VideoOn
+        | Event::VideoDeclined
+        | Event::Reconnecting
+        | Event::Reconnected => None,
         Event::Dialing { .. } => Some(CallState::Dialing),
         Event::Ringing { .. } => Some(CallState::Ringing),
         Event::Incoming { .. } => Some(CallState::Incoming),
@@ -1868,10 +2004,18 @@ fn describe(event: &Event) -> String {
         Event::Ready { id } => format!("ready as {}", id.fmt_short()),
         Event::Online => "reachable".to_owned(),
         Event::Offline => "not reachable".to_owned(),
-        Event::Dialing { peer } => format!("dialing {}", peer.fmt_short()),
+        Event::Dialing { peer, mode } => format!("dialing {} ({mode:?})", peer.fmt_short()),
         Event::Ringing { peer } => format!("ringing {}", peer.fmt_short()),
-        Event::Incoming { peer } => format!("incoming call from {}", peer.fmt_short()),
-        Event::Connected { peer, key_exchange, .. } => format!("connected to {} [{key_exchange:?}]", peer.fmt_short()),
+        Event::Incoming { peer, mode } => format!("incoming {mode:?} call from {}", peer.fmt_short()),
+        Event::Connected { peer, key_exchange, mode, .. } => {
+            format!("connected to {} [{key_exchange:?}] ({mode:?})", peer.fmt_short())
+        }
+        Event::PeerMedia(state) => format!("their mic off {}, camera off {}", state.mic_off, state.camera_off),
+        Event::VideoAsked(asking) => format!("they ask to switch to video: {asking}"),
+        Event::VideoOn => "switched to video".to_owned(),
+        Event::VideoDeclined => "they kept it voice".to_owned(),
+        Event::Reconnecting => "connection lost; reconnecting".to_owned(),
+        Event::Reconnected => "reconnected".to_owned(),
         Event::Ended { peer, reason } => match peer {
             Some(peer) => format!("call with {} ended: {reason:?}", peer.fmt_short()),
             None => format!("call ended: {reason:?}"),
@@ -1901,7 +2045,38 @@ async fn handle_node_events(
         }
         match &event {
             // Whatever went wrong last time was about last time.
-            Event::Dialing { .. } | Event::Incoming { .. } => ui.set_video_failed(false),
+            Event::Dialing { mode, peer } | Event::Incoming { mode, peer } => {
+                ui.set_video_failed(false);
+                ui.set_call_voice(*mode == Mode::Voice);
+                ui.set_camera_on(true);
+                ui.set_peer_mic_off(false);
+                ui.set_peer_camera_off(false);
+                ui.set_video_asking(false);
+                ui.set_video_asked(false);
+                ui.set_kept_voice(false);
+                ui.set_call_reconnecting(false);
+                let (mode, peer) = (*mode, *peer);
+                with_state(&state, |s| {
+                    s.mode = mode;
+                    s.peer = Some(peer);
+                    s.camera_on = true;
+                    s.reconnecting = false;
+                });
+            }
+            Event::PeerMedia(theirs) => {
+                ui.set_peer_mic_off(theirs.mic_off);
+                ui.set_peer_camera_off(theirs.camera_off);
+            }
+            Event::VideoAsked(asking) => ui.set_video_asked(*asking),
+            Event::VideoDeclined => {
+                ui.set_video_asking(false);
+                ui.set_kept_voice(true);
+            }
+            Event::Reconnecting | Event::Reconnected => {
+                let reconnecting = matches!(event, Event::Reconnecting);
+                with_state(&state, |s| s.reconnecting = reconnecting);
+                ui.set_call_reconnecting(reconnecting);
+            }
             // The core has already written the call and stamped the contact; read both back.
             Event::Ended { peer, reason } => {
                 with_state(&state, |s| {
@@ -1930,27 +2105,62 @@ async fn handle_node_events(
         match event {
             Event::Online => ui.set_online(true),
             Event::Offline => ui.set_online(false),
-            Event::Connected { media, key_exchange, .. } => {
-                ui.set_key_exchange(format!("{key_exchange:?}").into());
-                with_state(&state, |s| s.connected_at = Some(Instant::now()));
+            Event::Connected { media, mode, .. } => {
+                with_state(&state, |s| {
+                    s.connected_at = Some(Instant::now());
+                    s.mode = mode;
+                });
                 let MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats } = *media;
+                with_state(&state, |s| s.media = Some(Arc::clone(&stats)));
                 let parts =
                     VideoParts { sender: video, incoming: incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
-                with_state(&state, |s| s.start_video(parts));
                 // The peer is already named on the window; the notification names them too.
-                if let Err(e) = platform.set_call_service(true, &ui.get_peer_name()) {
-                    tracing::warn!("call service: {e}");
+                start_call_service(&platform, &ui.get_peer_name(), mode);
+                match mode {
+                    Mode::Video => start_call_video(&state, &platform, parts),
+                    // No camera and no codecs: the battery and data a voice call should cost.
+                    Mode::Voice => with_state(&state, |s| s.parked = Some(parts)),
                 }
-                // (Re)starts the camera with the encoder as a second output.
-                request_camera(&state, &platform);
                 start_voice(&state, &platform, audio, incoming_audio);
             }
-            Event::Ended { .. } => {
-                with_state(&state, |s| {
-                    s.connected_at = None;
-                    s.end_call();
+            // The screen changes over in place: same call, same timer.
+            Event::VideoOn => {
+                ui.set_call_voice(false);
+                ui.set_video_asking(false);
+                ui.set_video_asked(false);
+                ui.set_kept_voice(false);
+                let parked = with_state_value(&state, |s| {
+                    s.mode = Mode::Video;
+                    s.parked.take()
                 });
-                if let Err(e) = platform.set_call_service(false, "") {
+                if let Some(parts) = parked.flatten() {
+                    start_call_service(&platform, &ui.get_peer_name(), Mode::Video);
+                    start_call_video(&state, &platform, parts);
+                }
+            }
+            Event::Ended { reason, .. } => {
+                let answered = with_state_value(&state, |s| {
+                    let answered = s.connected_at.is_some();
+                    s.connected_at = None;
+                    s.media = None;
+                    s.reconnecting = false;
+                    s.end_call();
+                    answered
+                });
+                // A call the network ended stays on screen a moment to say so, as a call that
+                // never connected would; Close or Call again, or it goes by itself.
+                if answered == Some(true) && matches!(reason, EndReason::ConnectionLost) {
+                    ui.set_call_state(CallState::Lost);
+                    let weak = ui.as_weak();
+                    Timer::single_shot(LOST_LINGER, move || {
+                        if let Some(ui) = weak.upgrade()
+                            && ui.get_call_state() == CallState::Lost
+                        {
+                            ui.set_call_state(CallState::Idle);
+                        }
+                    });
+                }
+                if let Err(e) = platform.set_call_service(false, "", false) {
                     tracing::warn!("stopping call service: {e}");
                 }
                 if let Err(e) = platform.set_in_call(false) {

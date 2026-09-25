@@ -3,12 +3,17 @@
 //! [`Node::start`] binds the endpoint and returns the node (commands in) plus an event receiver.
 //! Each call runs in its own task; signals are read by a separate reader task so `select!`
 //! never cancels a half-read frame.
+//!
+//! A connected call outlives its connection: when the network drops it, the side with the lower
+//! key re-dials with an offer naming the call, the other side's engine hands that to the call
+//! instead of answering busy, and the media carries on over the new connection.
 
+use std::hash::{BuildHasher, RandomState};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use iroh::endpoint::{Connection, Incoming, SendStream, presets};
+use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, presets};
 use iroh::address_lookup::MemoryLookup;
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
@@ -17,11 +22,13 @@ use tokio::task::JoinHandle;
 
 /// Part of [`EndReason::Incompatible`], so it is ours to hand out; the rest of the wire stays in.
 pub use crate::protocol::Behind;
+/// What each side says about its mic and camera; the app sends ours and is told theirs.
+pub use crate::protocol::MediaState;
 use crate::protocol::{
     self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_INCOMPATIBLE, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL,
-    CLOSE_REJECTED, Hello, Signal,
+    CLOSE_REJECTED, CLOSE_REJOINED, Hello, Setup, Signal,
 };
-use crate::media::{self, MediaSession};
+use crate::media::{self, MediaLinks, MediaSession, MediaStats};
 use crate::relays::Relays;
 use crate::{EndpointId, Error, crypto};
 
@@ -41,12 +48,35 @@ const RING_TIMEOUT: Duration = Duration::from_secs(45);
 /// How often the endpoint says what it has been doing. Long enough that the line costs nothing
 /// over a night, short enough to place a stall within the log.
 const BEAT: Duration = Duration::from_secs(300);
+/// How long a call whose connection dropped keeps trying to get it back before it ends.
+const RESUME_GRACE: Duration = Duration::from_secs(30);
+/// Between two attempts to re-dial a dropped call.
+const REDIAL_PAUSE: Duration = Duration::from_secs(1);
+/// How long a connection arriving mid-call gets to say whether it is that call coming back.
+const OFFER_WAIT: Duration = Duration::from_secs(10);
+/// A call's connection is never quiet for longer than this, muted with the camera off or not, so
+/// a longer silence is the network rather than the people. It costs a packet a second, and only
+/// on a connection that exists: an idle endpoint has none.
+pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(1);
+
+/// How a call is placed: with the camera, or voice alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Video,
+    Voice,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
-    Call(EndpointId),
+    Call(EndpointId, Mode),
     Answer(bool),
     Hangup,
+    /// Our mic or camera changed; the other side is told.
+    Media(MediaState),
+    /// Asks the other side to switch this voice call to video, or (false) takes the ask back.
+    AskVideo(bool),
+    /// Answers their ask to switch to video.
+    AnswerVideo(bool),
 }
 
 #[derive(Debug)]
@@ -56,12 +86,24 @@ pub enum Event {
     /// that stops being true, which is what the reachability chip reads.
     Online,
     Offline,
-    Dialing { peer: EndpointId },
+    Dialing { peer: EndpointId, mode: Mode },
     /// Our offer reached the peer; waiting for them to answer.
     Ringing { peer: EndpointId },
-    Incoming { peer: EndpointId },
+    Incoming { peer: EndpointId, mode: Mode },
     /// Always post-quantum: other key exchanges are refused.
-    Connected { peer: EndpointId, key_exchange: NamedGroup, media: Box<MediaSession> },
+    Connected { peer: EndpointId, key_exchange: NamedGroup, mode: Mode, media: Box<MediaSession> },
+    /// Their mic or camera changed.
+    PeerMedia(MediaState),
+    /// They ask to switch to video, or (false) took the ask back.
+    VideoAsked(bool),
+    /// Both sides agreed: the call is video from here on.
+    VideoOn,
+    /// They kept it voice.
+    VideoDeclined,
+    /// The connection is gone and the call is trying to get it back.
+    Reconnecting,
+    /// Back, over a new connection; the media carries on by itself.
+    Reconnected,
     Ended { peer: Option<EndpointId>, reason: EndReason },
 }
 
@@ -81,13 +123,35 @@ pub enum EndReason {
     /// One side needs something the other cannot do, so the two cannot call until one updates.
     /// `theirs` is the other side's app version, for the notice that says so.
     Incompatible { behind: Behind, theirs: String },
+    /// Connected, then the network went and did not come back in time.
+    ConnectionLost,
     Failed(String),
 }
 
 enum Control {
     Answer(bool),
     Hangup,
+    Media(MediaState),
+    AskVideo(bool),
+    AnswerVideo(bool),
+    /// Someone dialled in to rejoin a call. Only the call can tell whether it is this one.
+    Rejoin(Box<Rejoin>),
 }
+
+type Signals = mpsc::Receiver<Result<Signal, Error>>;
+
+/// A new connection for a call whose old one dropped, with its signalling open and the other
+/// side's hello read: their offer when they re-dialled us, their answer when we re-dialled them.
+struct Rejoin {
+    connection: Connection,
+    send: SendStream,
+    signals: Signals,
+    theirs: Hello,
+}
+
+/// What an outgoing or incoming call task comes to. `None` is a connection that was never a call
+/// worth reporting: a re-dial for a call this side no longer has.
+type CallOutcome = (Option<EndpointId>, Result<Option<EndReason>, Error>);
 
 pub struct Node {
     commands: mpsc::Sender<Command>,
@@ -181,7 +245,11 @@ async fn bind(secret: SecretKey, network: &Network) -> Result<Endpoint, Error> {
         }
         Network::Local(lookup) => Endpoint::builder(presets::Minimal).address_lookup(lookup.clone()),
     };
+    // iroh's own transport defaults, which its holepunching is tuned for, with only the keep-alive
+    // shortened: that is what lets a call tell a stalled network from two quiet people.
+    let transport = QuicTransportConfig::builder().keep_alive_interval(KEEP_ALIVE).build();
     Ok(builder
+        .transport_config(transport)
         .crypto_provider(crypto::provider())
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec()])
@@ -357,26 +425,30 @@ impl Engine {
 
     async fn command(&mut self, command: Command) {
         match (command, &self.call) {
-            (Command::Call(peer), None) => {
+            (Command::Call(peer, mode), None) => {
                 let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
-                let task = outgoing(self.endpoint.clone(), peer, control_rx, self.events.clone(), self.hello.clone());
+                let task =
+                    outgoing(self.endpoint.clone(), peer, mode, control_rx, self.events.clone(), self.hello.clone());
                 self.spawn_call(control, Some(peer), task);
             }
             // Refused, and said only in the log. It used to go out as `Ended`, which every listener
             // read as the end of the call that *is* up: the app logged that call as failed and
             // tore its media down while it carried on.
-            (Command::Call(peer), Some(_)) => {
+            (Command::Call(peer, _), Some(_)) => {
                 tracing::warn!(peer = %peer.fmt_short(), "refused a call while one is up");
             }
             (Command::Answer(accept), Some(call)) => forward(call, Control::Answer(accept)).await,
             (Command::Hangup, Some(call)) => forward(call, Control::Hangup).await,
-            (Command::Answer(_) | Command::Hangup, None) => tracing::debug!(?command, "no call"),
+            (Command::Media(state), Some(call)) => forward(call, Control::Media(state)).await,
+            (Command::AskVideo(ask), Some(call)) => forward(call, Control::AskVideo(ask)).await,
+            (Command::AnswerVideo(accept), Some(call)) => forward(call, Control::AnswerVideo(accept)).await,
+            (_, None) => tracing::debug!(?command, "no call"),
         }
     }
 
     fn incoming(&mut self, incoming: Incoming) {
-        if self.call.is_some() {
-            tokio::spawn(reply_busy(incoming));
+        if let Some(call) = &self.call {
+            tokio::spawn(screen(incoming, call.control.clone()));
             return;
         }
         let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
@@ -389,7 +461,7 @@ impl Engine {
         &mut self,
         control: mpsc::Sender<Control>,
         peer: Option<EndpointId>,
-        task: impl Future<Output = (Option<EndpointId>, Result<EndReason, Error>)> + Send + 'static,
+        task: impl Future<Output = CallOutcome> + Send + 'static,
     ) {
         let id = self.next_call;
         self.next_call += 1;
@@ -397,9 +469,13 @@ impl Engine {
         let (events, finished) = (self.events.clone(), self.finished.clone());
         tokio::spawn(async move {
             let (known_peer, outcome) = task.await;
-            let reason = outcome.unwrap_or_else(|e| EndReason::Failed(e.to_string()));
-            tracing::info!(peer = ?known_peer.or(peer), ?reason, "call ended");
-            emit(&events, Event::Ended { peer: known_peer.or(peer), reason }).await;
+            match outcome.unwrap_or_else(|e| Some(EndReason::Failed(e.to_string()))) {
+                Some(reason) => {
+                    tracing::info!(peer = ?known_peer.or(peer), ?reason, "call ended");
+                    emit(&events, Event::Ended { peer: known_peer.or(peer), reason }).await;
+                }
+                None => tracing::info!(peer = ?known_peer.or(peer), "turned away a re-dial for a call that is over"),
+            }
             if finished.send(id).await.is_err() {
                 tracing::debug!("engine gone before call finished");
             }
@@ -440,11 +516,26 @@ async fn finish(connection: &Connection, send: &mut SendStream, signal: Signal, 
 async fn outgoing(
     endpoint: Endpoint,
     peer: EndpointId,
+    mode: Mode,
     control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: Hello,
-) -> (Option<EndpointId>, Result<EndReason, Error>) {
-    (Some(peer), dial(endpoint, peer, control, events, hello).await)
+) -> CallOutcome {
+    (Some(peer), dial(endpoint, peer, mode, control, events, hello).await.map(Some))
+}
+
+/// A name for a new call, unique enough that a re-dial can never be taken for a different call
+/// with the same person. `RandomState` is std's own randomly keyed hasher: no extra dependency.
+fn new_call_id() -> u64 {
+    RandomState::new().hash_one(SystemTime::now())
+}
+
+/// Turns away a connection that came to rejoin a call this side cannot give it.
+async fn refuse(mut rejoin: Rejoin, signal: Signal, code: iroh::endpoint::VarInt) {
+    tracing::info!(peer = %rejoin.connection.remote_id().fmt_short(), ?signal, "refused a re-dial");
+    if let Err(e) = finish(&rejoin.connection, &mut rejoin.send, signal, code).await {
+        tracing::debug!("refusing a re-dial: {e}");
+    }
 }
 
 /// Ends a call the two sides cannot have, telling the other why, and says which side is behind.
@@ -463,23 +554,36 @@ async fn incompatible(
 async fn dial(
     endpoint: Endpoint,
     peer: EndpointId,
+    mode: Mode,
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: Hello,
 ) -> Result<EndReason, Error> {
-    emit(&events, Event::Dialing { peer }).await;
+    emit(&events, Event::Dialing { peer, mode }).await;
+    // What the user does to the mic before they answer is theirs to hear about once they do.
+    let mut ours = MediaState::default();
     // Dialling a key nobody is listening on has no natural end: iroh keeps trying relays and
     // holepunching for as long as it is asked to, so the deadline has to come from here.
-    let connection = tokio::select! {
-        connection = tokio::time::timeout(DIAL_TIMEOUT, endpoint.connect(peer, ALPN)) => match connection {
-            Ok(connection) => connection?,
-            Err(_) => return Ok(EndReason::DialTimeout),
-        },
-        Some(Control::Hangup) = control.recv() => return Ok(EndReason::LocalHangup),
+    let dialling = tokio::time::timeout(DIAL_TIMEOUT, endpoint.connect(peer, ALPN));
+    tokio::pin!(dialling);
+    let connection = loop {
+        tokio::select! {
+            connection = &mut dialling => match connection {
+                Ok(connection) => break connection?,
+                Err(_) => return Ok(EndReason::DialTimeout),
+            },
+            command = control.recv() => match command {
+                Some(Control::Hangup) | None => return Ok(EndReason::LocalHangup),
+                Some(Control::Media(state)) => ours = state,
+                Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
+                Some(Control::Answer(_) | Control::AskVideo(_) | Control::AnswerVideo(_)) => {}
+            },
+        }
     };
     let key_exchange = secure(&connection)?;
     let (mut send, recv) = connection.open_bi().await?;
-    protocol::send(&mut send, Signal::Offer(hello.clone())).await?;
+    let setup = Setup { call: new_call_id(), voice: mode == Mode::Voice, resume: false };
+    protocol::send(&mut send, Signal::Offer(hello.offer(setup))).await?;
     let mut signals = spawn_reader(recv);
     emit(&events, Event::Ringing { peer }).await;
     // Reached them, so now it is a question of whether anyone picks up. Hanging up properly on
@@ -497,7 +601,11 @@ async fn dial(
                 // know whether we can do it.
                 Some(Ok(Signal::Accept(theirs))) => match protocol::behind(&hello, &theirs) {
                     Some(behind) => incompatible(&connection, &mut send, &hello, &theirs, behind).await,
-                    None => active(&connection, &endpoint, key_exchange, send, signals, &mut control, &events).await,
+                    None => {
+                        let call = Call { peer, key_exchange, mode, setup, ours };
+                        let link = Rejoin { connection, send, signals, theirs };
+                        connected(link, call, &endpoint, &mut control, &events, &hello).await
+                    }
                 },
                 // They could not take our offer. Which of us is behind is in the two hellos.
                 Some(Ok(Signal::Incompatible(theirs))) => {
@@ -511,6 +619,10 @@ async fn dial(
                     tracing::debug!("ignored a signal from a newer build");
                     continue;
                 }
+                // Nothing to say about a call that has not started.
+                Some(Ok(Signal::Media(_) | Signal::AskVideo | Signal::WithdrawVideo | Signal::AnswerVideo(_))) => {
+                    continue;
+                }
                 Some(Ok(Signal::Offer(_) | Signal::KeyframeRequest)) => {
                     protocol_error(&connection, "unexpected signal while ringing")
                 }
@@ -521,7 +633,11 @@ async fn dial(
                     finish(&connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
                     return Ok(EndReason::LocalHangup);
                 }
-                Some(Control::Answer(_)) => tracing::debug!("answer ignored on outgoing call"),
+                Some(Control::Media(state)) => ours = state,
+                Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
+                Some(Control::Answer(_) | Control::AskVideo(_) | Control::AnswerVideo(_)) => {
+                    tracing::debug!("ignored on a call not yet answered");
+                }
             },
         }
     }
@@ -533,7 +649,7 @@ async fn answer(
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: Hello,
-) -> (Option<EndpointId>, Result<EndReason, Error>) {
+) -> CallOutcome {
     let connection = match accept_connection(incoming).await {
         Ok(connection) => connection,
         Err(e) => return (None, Err(e)),
@@ -546,94 +662,402 @@ async fn accept_connection(incoming: Incoming) -> Result<Connection, Error> {
     Ok(incoming.accept()?.await?)
 }
 
+/// Reads up to the offer that opens a call's signalling.
+async fn first_offer(connection: &Connection, signals: &mut Signals) -> Result<Hello, Error> {
+    loop {
+        match signals.recv().await {
+            Some(Ok(Signal::Offer(theirs))) => return Ok(theirs),
+            Some(Ok(Signal::Unknown)) => tracing::debug!("ignored a signal from a newer build"),
+            Some(Err(e)) => return Err(e),
+            Some(Ok(_)) | None => return protocol_error(connection, "expected offer").map(|_| Hello::default()),
+        }
+    }
+}
+
 async fn ring(
     connection: Connection,
     endpoint: &Endpoint,
     control: &mut mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: &Hello,
-) -> Result<EndReason, Error> {
+) -> Result<Option<EndReason>, Error> {
     let peer = connection.remote_id();
     let key_exchange = secure(&connection)?;
     let (mut send, recv) = connection.accept_bi().await?;
     let mut signals = spawn_reader(recv);
-    let theirs = loop {
-        match signals.recv().await {
-            Some(Ok(Signal::Offer(theirs))) => break theirs,
-            Some(Ok(Signal::Unknown)) => tracing::debug!("ignored a signal from a newer build"),
-            Some(Err(e)) => return Err(e),
-            Some(Ok(_)) | None => return protocol_error(&connection, "expected offer"),
-        }
-    };
+    let theirs = first_offer(&connection, &mut signals).await?;
     // Checked before anything rings: a call that cannot happen should not ring, only say why.
     if let Some(behind) = protocol::behind(hello, &theirs) {
-        return incompatible(&connection, &mut send, hello, &theirs, behind).await;
+        return incompatible(&connection, &mut send, hello, &theirs, behind).await.map(Some);
     }
-    tracing::info!(%peer, protocol = theirs.protocol, app = theirs.app, "incoming call");
-    emit(&events, Event::Incoming { peer }).await;
+    let setup = theirs.setup.unwrap_or_default();
+    // A re-dial for a call that has already ended here: nothing to ring for, and nothing to log.
+    if setup.resume {
+        finish(&connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
+        return Ok(None);
+    }
+    let mode = if setup.voice { Mode::Voice } else { Mode::Video };
+    tracing::info!(%peer, protocol = theirs.protocol, app = theirs.app, ?mode, "incoming call");
+    emit(&events, Event::Incoming { peer, mode }).await;
+    let mut ours = MediaState::default();
     loop {
         tokio::select! {
             signal = signals.recv() => return match signal {
-                Some(Ok(Signal::Hangup)) | None => Ok(EndReason::RemoteHangup),
-                Some(Ok(Signal::Unknown)) => {
-                    tracing::debug!("ignored a signal from a newer build");
-                    continue;
-                }
-                Some(Ok(_)) => protocol_error(&connection, "unexpected signal while ringing"),
+                Some(Ok(Signal::Hangup)) | None => Ok(Some(EndReason::RemoteHangup)),
+                Some(Ok(Signal::Unknown | Signal::Media(_))) => continue,
+                Some(Ok(_)) => protocol_error(&connection, "unexpected signal while ringing").map(Some),
                 Some(Err(e)) => Err(e),
             },
-            command = control.recv() => return match command {
+            command = control.recv() => match command {
                 Some(Control::Answer(true)) => {
                     protocol::send(&mut send, Signal::Accept(hello.clone())).await?;
-                    active(&connection, endpoint, key_exchange, send, signals, control, &events).await
+                    let call = Call { peer, key_exchange, mode, setup, ours };
+                    let link = Rejoin { connection, send, signals, theirs };
+                    return connected(link, call, endpoint, control, &events, hello).await.map(Some);
                 }
                 Some(Control::Answer(false) | Control::Hangup) | None => {
                     finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
-                    Ok(EndReason::Declined)
+                    return Ok(Some(EndReason::Declined));
+                }
+                Some(Control::Media(state)) => ours = state,
+                Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
+                Some(Control::AskVideo(_) | Control::AnswerVideo(_)) => {
+                    tracing::debug!("ignored on a call not yet answered");
                 }
             },
         }
     }
 }
 
-async fn active(
-    connection: &Connection,
-    endpoint: &Endpoint,
+/// What a call was set up as, carried from ringing into the call.
+struct Call {
+    peer: EndpointId,
     key_exchange: NamedGroup,
-    mut send: SendStream,
-    mut signals: mpsc::Receiver<Result<Signal, Error>>,
+    mode: Mode,
+    setup: Setup,
+    ours: MediaState,
+}
+
+/// Starts the media and runs the call until it ends, over as many connections as it takes.
+async fn connected(
+    link: Rejoin,
+    call: Call,
+    endpoint: &Endpoint,
     control: &mut mpsc::Receiver<Control>,
     events: &mpsc::Sender<Event>,
+    hello: &Hello,
 ) -> Result<EndReason, Error> {
-    let peer = connection.remote_id();
-    tracing::info!(%peer, ?key_exchange, "call connected");
-    let (media, mut links) = media::start(connection, endpoint)?;
-    emit(events, Event::Connected { peer, key_exchange, media: Box::new(media) }).await;
-    loop {
-        tokio::select! {
-            signal = signals.recv() => match signal {
-                Some(Ok(Signal::KeyframeRequest)) => {
-                    links.stats.keyframe_requests_received.fetch_add(1, Ordering::Relaxed);
-                    if links.keyframe_requested.try_send(()).is_err() {
-                        tracing::debug!("keyframe request already pending");
+    let Call { peer, key_exchange, mode, setup, ours } = call;
+    tracing::info!(%peer, ?key_exchange, ?mode, "call connected");
+    let (media, links) = media::start(&link.connection, endpoint)?;
+    emit(events, Event::Connected { peer, key_exchange, mode, media: Box::new(media) }).await;
+    let mut live = Live {
+        endpoint,
+        events,
+        control,
+        hello,
+        peer,
+        call: setup.call,
+        link,
+        links,
+        video: mode == Mode::Video,
+        ours,
+        asked: false,
+        their_ask: false,
+    };
+    live.retell().await;
+    live.run().await
+}
+
+/// How a stretch of a call on one connection ended.
+enum Turn {
+    Over(EndReason),
+    Lost,
+}
+
+/// A connected call, across every connection it comes to have.
+struct Live<'a> {
+    endpoint: &'a Endpoint,
+    events: &'a mpsc::Sender<Event>,
+    control: &'a mut mpsc::Receiver<Control>,
+    hello: &'a Hello,
+    peer: EndpointId,
+    /// The name its offer gave it, which a re-dial must repeat.
+    call: u64,
+    /// The connection it runs over now, with its signalling and the other side's hello.
+    link: Rejoin,
+    links: MediaLinks,
+    video: bool,
+    /// What we last said about our mic and camera, said again after a rejoin.
+    ours: MediaState,
+    /// We asked to switch to video and have no answer yet.
+    asked: bool,
+    /// They asked, and we have not answered.
+    their_ask: bool,
+}
+
+impl Live<'_> {
+    async fn run(mut self) -> Result<EndReason, Error> {
+        loop {
+            match self.connected().await? {
+                Turn::Over(reason) => return Ok(reason),
+                Turn::Lost => {
+                    MediaStats::count(&self.links.stats.drops, 1);
+                    tracing::info!("connection lost; trying to rejoin");
+                    emit(self.events, Event::Reconnecting).await;
+                    if let Some(reason) = self.rejoin().await {
+                        return Ok(reason);
+                    }
+                    emit(self.events, Event::Reconnected).await;
+                    self.retell().await;
+                }
+            }
+        }
+    }
+
+    /// Runs the call over its current connection until it ends or the connection goes.
+    async fn connected(&mut self) -> Result<Turn, Error> {
+        loop {
+            tokio::select! {
+                signal = self.link.signals.recv() => match signal {
+                    Some(Ok(signal)) => {
+                        if let Some(turn) = self.signal(signal).await? {
+                            return Ok(turn);
+                        }
+                    }
+                    Some(Err(e)) => return self.stopped(e),
+                    None => return self.stopped(Error::Protocol("signalling ended")),
+                },
+                Some(()) = self.links.request_keyframe.recv() => self.say(Signal::KeyframeRequest).await,
+                command = self.control.recv() => {
+                    if let Some(turn) = self.command(command).await {
+                        return Ok(turn);
                     }
                 }
-                Some(Ok(Signal::Hangup)) | None => {
-                    connection.close(CLOSE_HANGUP, b"");
-                    return Ok(EndReason::RemoteHangup);
+            }
+        }
+    }
+
+    /// Why signalling stopped: the network, or their hang-up arriving without its signal, or a
+    /// failure that is neither.
+    fn stopped(&self, e: Error) -> Result<Turn, Error> {
+        match self.link.connection.close_reason() {
+            Some(ConnectionError::TimedOut | ConnectionError::Reset) => Ok(Turn::Lost),
+            Some(ConnectionError::ApplicationClosed(close)) if close.error_code == CLOSE_HANGUP => {
+                Ok(Turn::Over(EndReason::RemoteHangup))
+            }
+            _ => Err(e),
+        }
+    }
+
+    async fn signal(&mut self, signal: Signal) -> Result<Option<Turn>, Error> {
+        match signal {
+            Signal::KeyframeRequest => {
+                self.links.stats.keyframe_requests_received.fetch_add(1, Ordering::Relaxed);
+                if self.links.keyframe_requested.try_send(()).is_err() {
+                    tracing::debug!("keyframe request already pending");
                 }
-                Some(Ok(Signal::Unknown)) => tracing::debug!("ignored a signal from a newer build"),
-                Some(Ok(_)) => return protocol_error(connection, "unexpected signal in call"),
-                Some(Err(e)) => return Err(e),
-            },
-            Some(()) = links.request_keyframe.recv() => protocol::send(&mut send, Signal::KeyframeRequest).await?,
-            command = control.recv() => match command {
-                Some(Control::Hangup) | None => {
-                    finish(connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
-                    return Ok(EndReason::LocalHangup);
+            }
+            Signal::Hangup => {
+                self.link.connection.close(CLOSE_HANGUP, b"");
+                return Ok(Some(Turn::Over(EndReason::RemoteHangup)));
+            }
+            Signal::Media(state) => emit(self.events, Event::PeerMedia(state)).await,
+            Signal::AskVideo if self.video => tracing::debug!("asked for video on a video call"),
+            // Both asked at once: each is the other's yes.
+            Signal::AskVideo if self.asked => {
+                self.asked = false;
+                self.their_ask = true;
+                self.answer_video(true).await;
+            }
+            Signal::AskVideo => {
+                self.their_ask = true;
+                emit(self.events, Event::VideoAsked(true)).await;
+            }
+            Signal::WithdrawVideo => {
+                if std::mem::take(&mut self.their_ask) {
+                    emit(self.events, Event::VideoAsked(false)).await;
                 }
-                Some(Control::Answer(_)) => tracing::debug!("answer ignored during call"),
-            },
+            }
+            Signal::AnswerVideo(accepted) => {
+                if std::mem::take(&mut self.asked) {
+                    self.video |= accepted;
+                    emit(self.events, if accepted { Event::VideoOn } else { Event::VideoDeclined }).await;
+                }
+            }
+            Signal::Unknown => tracing::debug!("ignored a signal from a newer build"),
+            Signal::Offer(_) | Signal::Accept(_) | Signal::Reject | Signal::Busy | Signal::Incompatible(_) => {
+                return protocol_error(&self.link.connection, "unexpected signal in call").map(|_| None);
+            }
+        }
+        Ok(None)
+    }
+
+    async fn command(&mut self, command: Option<Control>) -> Option<Turn> {
+        match command {
+            Some(Control::Hangup) | None => {
+                // Said if it can be; a hang-up is a hang-up whether or not the network carries it.
+                if let Err(e) = finish(&self.link.connection, &mut self.link.send, Signal::Hangup, CLOSE_HANGUP).await {
+                    tracing::debug!("hanging up: {e}");
+                }
+                return Some(Turn::Over(EndReason::LocalHangup));
+            }
+            Some(Control::Answer(_)) => tracing::debug!("answer ignored during call"),
+            Some(Control::Media(state)) => {
+                self.ours = state;
+                self.say(Signal::Media(state)).await;
+            }
+            // Asking back is saying yes.
+            Some(Control::AskVideo(true)) if self.their_ask => self.answer_video(true).await,
+            Some(Control::AskVideo(true)) => {
+                if self.video || self.asked {
+                    tracing::debug!(video = self.video, asked = self.asked, "not asking for video");
+                } else {
+                    self.asked = true;
+                    self.say(Signal::AskVideo).await;
+                }
+            }
+            Some(Control::AskVideo(false)) => {
+                if std::mem::take(&mut self.asked) {
+                    self.say(Signal::WithdrawVideo).await;
+                }
+            }
+            Some(Control::AnswerVideo(accepted)) => self.answer_video(accepted).await,
+            // They lost the connection before we noticed, and are back on a new one.
+            Some(Control::Rejoin(rejoin)) => {
+                if self.accept_rejoin(*rejoin).await {
+                    MediaStats::count(&self.links.stats.drops, 1);
+                    self.retell().await;
+                }
+            }
+        }
+        None
+    }
+
+    async fn answer_video(&mut self, accepted: bool) {
+        if !std::mem::take(&mut self.their_ask) {
+            return;
+        }
+        self.say(Signal::AnswerVideo(accepted)).await;
+        if accepted {
+            self.video = true;
+            emit(self.events, Event::VideoOn).await;
+        }
+    }
+
+    /// A signal that matters only while the call is up. A lost connection is for the reader to
+    /// notice, which it will; failing here as well would say the same thing twice.
+    async fn say(&mut self, signal: Signal) {
+        if let Err(e) = protocol::send(&mut self.link.send, signal).await {
+            tracing::debug!("signal not sent: {e}");
+        }
+    }
+
+    /// What they may have missed while the connection was down.
+    async fn retell(&mut self) {
+        if self.ours != MediaState::default() {
+            self.say(Signal::Media(self.ours)).await;
+        }
+        if self.asked {
+            self.say(Signal::AskVideo).await;
+        }
+    }
+
+    /// Gets the call back onto a new connection within [`RESUME_GRACE`]; the reason it ended
+    /// otherwise. Only the side with the lower key re-dials, so the two never dial each other at
+    /// once; the other waits for it.
+    async fn rejoin(&mut self) -> Option<EndReason> {
+        let grace = tokio::time::sleep(RESUME_GRACE);
+        tokio::pin!(grace);
+        let redials = self.endpoint.id() < self.peer;
+        let offer = self.hello.offer(Setup { call: self.call, voice: false, resume: true });
+        let (endpoint, peer) = (self.endpoint, self.peer);
+        let mut pause = false;
+        loop {
+            let attempt = async {
+                if !redials {
+                    return std::future::pending().await;
+                }
+                if pause {
+                    tokio::time::sleep(REDIAL_PAUSE).await;
+                }
+                redial(endpoint, peer, &offer).await
+            };
+            tokio::select! {
+                () = &mut grace => {
+                    tracing::info!("could not rejoin in time");
+                    return Some(EndReason::ConnectionLost);
+                }
+                attempt = attempt => match attempt {
+                    Ok(Some(link)) => {
+                        self.adopt(link);
+                        return None;
+                    }
+                    Ok(None) => return Some(EndReason::ConnectionLost),
+                    Err(e) => {
+                        tracing::info!("re-dial failed: {e}");
+                        pause = true;
+                    }
+                },
+                command = self.control.recv() => match command {
+                    // Nothing to tell them over; their own grace runs out instead.
+                    Some(Control::Hangup) | None => return Some(EndReason::LocalHangup),
+                    Some(Control::Media(state)) => self.ours = state,
+                    Some(Control::Rejoin(rejoin)) => {
+                        if self.accept_rejoin(*rejoin).await {
+                            return None;
+                        }
+                    }
+                    Some(Control::Answer(_) | Control::AskVideo(_) | Control::AnswerVideo(_)) => {
+                        tracing::debug!("ignored while reconnecting");
+                    }
+                },
+            }
+        }
+    }
+
+    /// Takes a re-dial the other side made, if it is this call; turns it away otherwise.
+    async fn accept_rejoin(&mut self, mut rejoin: Rejoin) -> bool {
+        let named = rejoin.theirs.setup.map(|setup| setup.call);
+        if rejoin.connection.remote_id() != self.peer || named != Some(self.call) {
+            refuse(rejoin, Signal::Busy, CLOSE_BUSY).await;
+            return false;
+        }
+        if let Err(e) = protocol::send(&mut rejoin.send, Signal::Accept(self.hello.clone())).await {
+            tracing::info!("answering a re-dial: {e}");
+            return false;
+        }
+        self.adopt(rejoin);
+        true
+    }
+
+    /// Carries the call on over a new connection, and lets the old one go.
+    fn adopt(&mut self, link: Rejoin) {
+        let old = std::mem::replace(&mut self.link, link);
+        old.connection.close(CLOSE_REJOINED, b"");
+        self.links.rejoin(&self.link.connection);
+        tracing::info!(peer = %self.peer.fmt_short(), "call rejoined");
+    }
+}
+
+/// Dials a dropped call's peer again with an offer that names it. `None` when they answer with
+/// anything but taking it back: the call is over on their side.
+async fn redial(endpoint: &Endpoint, peer: EndpointId, offer: &Hello) -> Result<Option<Rejoin>, Error> {
+    let connection = endpoint.connect(peer, ALPN).await?;
+    secure(&connection)?;
+    let (mut send, recv) = connection.open_bi().await?;
+    protocol::send(&mut send, Signal::Offer(offer.clone())).await?;
+    let mut signals = spawn_reader(recv);
+    loop {
+        match signals.recv().await {
+            Some(Ok(Signal::Accept(theirs))) => return Ok(Some(Rejoin { connection, send, signals, theirs })),
+            Some(Ok(Signal::Unknown)) => {}
+            Some(Ok(answer)) => {
+                tracing::info!(?answer, "their phone has no call to rejoin");
+                return Ok(None);
+            }
+            Some(Err(e)) => return Err(e),
+            None => return Err(Error::Protocol("no answer to a re-dial")),
         }
     }
 }
@@ -651,15 +1075,31 @@ fn protocol_error(connection: &Connection, what: &'static str) -> Result<EndReas
     Err(Error::Protocol(what))
 }
 
-async fn reply_busy(incoming: Incoming) {
+/// A connection arriving while a call is up: the other side of that call re-dialling after a
+/// drop goes to the call, which alone can tell whether it is the same one; anyone else is busy.
+async fn screen(incoming: Incoming, call: mpsc::Sender<Control>) {
     let outcome = async {
         let connection = accept_connection(incoming).await?;
-        tracing::info!(peer = %connection.remote_id(), "busy: declining call");
-        let (mut send, _recv) = connection.accept_bi().await?;
-        finish(&connection, &mut send, Signal::Busy, CLOSE_BUSY).await
+        secure(&connection)?;
+        let (mut send, recv) = connection.accept_bi().await?;
+        let mut signals = spawn_reader(recv);
+        let offer = tokio::time::timeout(OFFER_WAIT, first_offer(&connection, &mut signals)).await;
+        let theirs = match offer {
+            Ok(Ok(theirs)) if theirs.setup.is_some_and(|setup| setup.resume) => theirs,
+            _ => {
+                tracing::info!(peer = %connection.remote_id(), "busy: declining call");
+                return finish(&connection, &mut send, Signal::Busy, CLOSE_BUSY).await;
+            }
+        };
+        let rejoin = Box::new(Rejoin { connection, send, signals, theirs });
+        // The call ended in the meantime: it has nothing to rejoin.
+        if let Err(mpsc::error::SendError(Control::Rejoin(rejoin))) = call.send(Control::Rejoin(rejoin)).await {
+            refuse(*rejoin, Signal::Hangup, CLOSE_HANGUP).await;
+        }
+        Ok::<_, Error>(())
     };
     if let Err(e) = outcome.await {
-        tracing::debug!("busy reply failed: {e}");
+        tracing::debug!("screening a connection mid-call: {e}");
     }
 }
 
@@ -693,6 +1133,78 @@ mod tests {
             "unexpected close: {closed:?}"
         );
 
+        client.close().await;
+        node.shutdown().await;
+        Ok(())
+    }
+
+    /// A peer speaking the wire by hand, for what two nodes on loopback cannot be made to do:
+    /// the network never drops there, so a re-dial has to be staged.
+    async fn by_hand(lookup: MemoryLookup) -> anyhow::Result<(Node, mpsc::Receiver<Event>, EndpointId, Endpoint)> {
+        let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone()), "test").await?;
+        let Some(Event::Ready { id }) = events.recv().await else { bail!("node not ready") };
+        let client =
+            Endpoint::builder(presets::Minimal).crypto_provider(crypto::provider()).address_lookup(lookup).bind().await?;
+        Ok((node, events, id, client))
+    }
+
+    async fn next(events: &mut mpsc::Receiver<Event>) -> anyhow::Result<Event> {
+        tokio::time::timeout(TIMEOUT, events.recv()).await.context("no event")?.context("events closed")
+    }
+
+    async fn offer(client: &Endpoint, id: EndpointId, setup: Setup) -> anyhow::Result<(Connection, SendStream, iroh::endpoint::RecvStream)> {
+        let connection = tokio::time::timeout(TIMEOUT, client.connect(id, ALPN)).await.context("connect timed out")??;
+        let (mut send, recv) = connection.open_bi().await?;
+        protocol::send(&mut send, Signal::Offer(Hello::ours("by hand").offer(setup))).await?;
+        Ok((connection, send, recv))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_redial_mid_call_carries_the_call_over() -> anyhow::Result<()> {
+        let (node, mut events, id, client) = by_hand(MemoryLookup::new()).await?;
+        let call = Setup { call: 42, voice: true, resume: false };
+        let (first, _send, mut recv) = offer(&client, id, call).await?;
+        assert!(matches!(next(&mut events).await?, Event::Incoming { mode: Mode::Voice, .. }));
+        node.send(Command::Answer(true)).await?;
+        assert!(matches!(protocol::recv(&mut recv).await?, Signal::Accept(_)));
+        assert!(matches!(next(&mut events).await?, Event::Connected { mode: Mode::Voice, .. }));
+
+        // Someone else's call, or an old one: busy, and the call carries on.
+        let (_other, _send, mut refused) = offer(&client, id, Setup { call: 7, resume: true, ..call }).await?;
+        assert!(matches!(protocol::recv(&mut refused).await?, Signal::Busy));
+
+        let (_second, mut send, mut recv) = offer(&client, id, Setup { resume: true, ..call }).await?;
+        assert!(matches!(protocol::recv(&mut recv).await?, Signal::Accept(_)));
+        let closed = tokio::time::timeout(TIMEOUT, first.closed()).await.context("old connection kept")?;
+        assert!(
+            matches!(&closed, ConnectionError::ApplicationClosed(close) if close.error_code == CLOSE_REJOINED),
+            "unexpected close: {closed:?}"
+        );
+
+        // The same call, over the new connection, until it is hung up there.
+        protocol::send(&mut send, Signal::Hangup).await?;
+        loop {
+            match next(&mut events).await? {
+                Event::Ended { reason, .. } => {
+                    assert!(matches!(reason, EndReason::RemoteHangup), "ended as {reason:?}");
+                    break;
+                }
+                Event::Incoming { .. } | Event::Connected { .. } => bail!("the re-dial rang as a new call"),
+                _ => {}
+            }
+        }
+        client.close().await;
+        node.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_redial_for_a_call_that_is_over_is_turned_away_quietly() -> anyhow::Result<()> {
+        const QUIET: Duration = Duration::from_millis(500);
+        let (node, mut events, id, client) = by_hand(MemoryLookup::new()).await?;
+        let (_connection, _send, mut recv) = offer(&client, id, Setup { call: 9, voice: false, resume: true }).await?;
+        assert!(matches!(protocol::recv(&mut recv).await?, Signal::Hangup));
+        assert!(tokio::time::timeout(QUIET, events.recv()).await.is_err(), "a re-dial rang or was logged");
         client.close().await;
         node.shutdown().await;
         Ok(())

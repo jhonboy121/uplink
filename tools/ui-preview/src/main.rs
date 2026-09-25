@@ -18,7 +18,7 @@ mod dump;
 mod ui;
 
 use ui::{
-    Ago, App, Appearance, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
+    Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
     Language, Permission, PermissionItem, Route, Screen, Theme, Unit,
 };
 
@@ -120,6 +120,13 @@ fn main() -> Result<()> {
     shoot(&window, &app, canvas, "contact")?;
     app.set_open_contact(none());
 
+    // A call opened from the log: a voice call that switched to video, dropped twice, and was
+    // lost in the end.
+    app.set_screen(Screen::Calls);
+    app.set_open_call(one(open_call()));
+    shoot(&window, &app, canvas, "call-details")?;
+    app.set_open_call(none());
+
     // A key that has arrived and has no name yet, over whatever screen you were on.
     app.set_screen(Screen::People);
     app.set_pending_key(one(keys()[1].1.into()));
@@ -153,6 +160,49 @@ fn main() -> Result<()> {
     app.set_mic_on(false);
     shoot(&window, &app, canvas, "call-connected-muted")?;
     app.set_mic_on(true);
+
+    // Call modes, named as the design's frames are.
+    app.set_camera_on(false);
+    shoot(&window, &app, canvas, "your-camera-off")?;
+    app.set_camera_on(true);
+    app.set_peer_mic_off(true);
+    shoot(&window, &app, canvas, "they-muted")?;
+    app.set_peer_camera_off(true);
+    shoot(&window, &app, canvas, "their-camera-off")?;
+    app.set_peer_mic_off(false);
+    app.set_peer_camera_off(false);
+    app.set_call_reconnecting(true);
+    shoot(&window, &app, canvas, "reconnecting-video")?;
+    app.set_call_reconnecting(false);
+    app.set_call_route(Route::Direct);
+    app.set_call_voice(true);
+    for (state, name) in [
+        (CallState::Dialing, "voice-calling"),
+        (CallState::Incoming, "voice-incoming"),
+        (CallState::Connected, "voice-in-a-call"),
+    ] {
+        app.set_call_state(state);
+        shoot(&window, &app, canvas, name)?;
+    }
+    app.set_video_asked(true);
+    shoot(&window, &app, canvas, "asked-to-switch")?;
+    app.set_video_asked(false);
+    app.set_video_asking(true);
+    shoot(&window, &app, canvas, "asking-to-switch")?;
+    app.set_video_asking(false);
+    app.set_kept_voice(true);
+    shoot(&window, &app, canvas, "kept-voice")?;
+    app.set_kept_voice(false);
+    app.set_call_reconnecting(true);
+    shoot(&window, &app, canvas, "reconnecting-voice")?;
+    app.set_call_reconnecting(false);
+    app.set_call_timer("09:14".into());
+    app.set_call_state(CallState::Lost);
+    shoot(&window, &app, canvas, "connection-lost")?;
+    app.set_call_timer("04:12".into());
+    app.set_call_voice(false);
+    app.set_call_route(Route::Relayed);
+    app.set_call_state(CallState::Connected);
 
     // The call folded into a corner, with People underneath it and usable.
     app.set_screen(Screen::People);
@@ -250,16 +300,17 @@ fn populate(app: &App) -> Result<()> {
     let today = DayAgo { day: Day::Today, count: 0 };
     let yesterday = DayAgo { day: Day::Yesterday, count: 1 };
     let log = [
-        ("Noor", Ending::Missed, None, "23:04", Some(today), true),
-        ("Ammar", Ending::Answered, Some("4:12"), "22:15", None, false),
-        ("Noor", Ending::Cancelled, None, "19:40", Some(yesterday), false),
-        ("7d19 2bb4", Ending::Declined, None, "11:02", None, true),
+        ("Noor", Ending::Lost, Some("9:14"), "23:10", Some(today), false, true),
+        ("Noor", Ending::Missed, None, "23:04", None, true, false),
+        ("Ammar", Ending::Answered, Some("4:12"), "22:15", None, false, true),
+        ("Noor", Ending::Cancelled, None, "19:40", Some(yesterday), false, false),
+        ("7d19 2bb4", Ending::Declined, None, "11:02", None, true, false),
     ];
     let calls: Vec<CallItem> = log
         .iter()
         .zip(keys.iter().cycle())
         .enumerate()
-        .map(|(row, ((name, ending, duration, time, day, incoming), (_, key)))| CallItem {
+        .map(|(row, ((name, ending, duration, time, day, incoming, voice), (_, key)))| CallItem {
             initial: initial(name),
             name: (*name).into(),
             id: (*key).into(),
@@ -267,6 +318,7 @@ fn populate(app: &App) -> Result<()> {
             tint: 0,
             ending: *ending,
             incoming: *incoming,
+            voice: *voice,
             duration: maybe(duration.map(slint::SharedString::from)),
             time: (*time).into(),
             selected: false,
@@ -281,7 +333,6 @@ fn populate(app: &App) -> Result<()> {
     app.set_peer_name("Noor".into());
     app.set_peer_initial("N".into());
     app.set_call_timer("04:12".into());
-    app.set_key_exchange("X25519MLKEM768".into());
     app.set_call_route(Route::Relayed);
     app.set_frame(stand_in(0x2B, 0x4B, 0x6B));
     app.set_remote_frame(stand_in(0x3A, 0x33, 0x50));
@@ -308,6 +359,33 @@ fn open_contact() -> ContactDetail {
         advertised: one("Noor A.".into()),
         favourite: true,
         fingerprint: fingerprint_lines(key),
+    }
+}
+
+/// Noor's lost voice call, as the details page gets it.
+fn open_call() -> CallDetail {
+    let key = keys()[0].1;
+    CallDetail {
+        entry: "0".into(),
+        peer: key.into(),
+        name: "Noor".into(),
+        initial: "N".into(),
+        known: true,
+        fingerprint: fingerprint_lines(key),
+        ending: Ending::Lost,
+        incoming: false,
+        voice_call: true,
+        day: DayAgo { day: Day::Today, count: 0 },
+        time: "23:01".into(),
+        duration: one("09:14".into()),
+        video_from: one("03:12".into()),
+        rejoins: 2,
+        traffic: none(),
+        video: none(),
+        voice: none(),
+        path: none(),
+        ipv6: none(),
+        network: none(),
     }
 }
 

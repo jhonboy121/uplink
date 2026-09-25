@@ -81,6 +81,10 @@ impl CallAudio {
         muted
     }
 
+    pub fn muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
     /// Samples the callbacks moved, and samples lost at the rings, since the last call.
     pub fn taken_counts(&self) -> VoiceCounts {
         let take = |counter: &std::sync::atomic::AtomicU64| counter.swap(0, Ordering::Relaxed);

@@ -3,16 +3,19 @@
 //! Frames are reliable individually but never block each other. The sender resets frames that
 //! miss [`FRAME_DEADLINE`]; the receiver's [`Sequencer`] delivers in order, and after a gap drops
 //! frames until the next keyframe while asking the peer for one.
+//!
+//! Everything here follows the call's [`Link`] rather than one connection: a call that drops and
+//! rejoins carries on over the new connection with the same codecs, counters and sequence numbers.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use iroh::Endpoint;
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 use tokio::runtime::Handle;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::time::Instant;
 
 use crate::audio::{self, AudioReceiver, AudioSender};
@@ -32,6 +35,15 @@ const KEYFRAME_REQUEST_QUEUE: usize = 1;
 /// Highest QUIC stream priority wins; video yields to signalling and (later) audio.
 const VIDEO_PRIORITY: i32 = 0;
 const STALE_FRAME: VarInt = VarInt::from_u32(0);
+/// How often arrivals are checked for a stall.
+const ARRIVAL_CHECK: Duration = Duration::from_millis(500);
+/// Nothing at all from the peer for this long is a call that has stopped, not a quiet one: QUIC
+/// keeps a call's connection busy at least every [`crate::node::KEEP_ALIVE`], muted or not.
+const STALL_AFTER: Duration = Duration::from_secs(2);
+
+/// The connection a call's media currently runs over. Replaced when a dropped call rejoins; the
+/// call ends, and everything following it stops, when the sending side is dropped.
+pub(crate) type Link = watch::Receiver<Connection>;
 
 /// An encoded video frame as produced by the encoder / consumed by the decoder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +92,12 @@ pub struct MediaStats {
     /// The path QUIC currently sends on, as a [`Route`] code. Written by telemetry each interval
     /// and read by the UI, which is the only way the call screen can say which one it has.
     route: AtomicU8,
+    /// Nothing has arrived from the peer for [`STALL_AFTER`]: what "Reconnecting…" is shown from,
+    /// well before the connection itself would be given up on.
+    stalled: AtomicBool,
+    /// Times the connection was lost mid-call, and times the call was rejoined on a new one.
+    pub drops: AtomicU64,
+    pub rejoins: AtomicU64,
     pub frames_sent: AtomicU64,
     /// Media payload each way, video frames and audio packets both: what a call carried, as the
     /// log reports it, without QUIC's own overhead.
@@ -88,6 +106,8 @@ pub struct MediaStats {
     pub frames_dropped_congested: AtomicU64,
     /// Sent but reset after missing the deadline.
     pub frames_late: AtomicU64,
+    /// The late ones whose stream never opened: the peer had given no credit for another.
+    pub frames_unopened: AtomicU64,
     pub frames_received: AtomicU64,
     pub bytes_received: AtomicU64,
     /// Received but useless: older than already delivered frames, or after a gap.
@@ -138,6 +158,8 @@ impl MediaStats {
             rebuilt: count(&self.audio_fec_recovered),
             concealed: count(&self.audio_concealed),
         };
+        quality.drops = u32::try_from(count(&self.drops)).unwrap_or(u32::MAX);
+        quality.rejoins = u32::try_from(count(&self.rejoins)).unwrap_or(u32::MAX);
         quality
     }
 
@@ -148,12 +170,16 @@ impl MediaStats {
     pub(crate) fn set_route(&self, route: Route) {
         self.route.store(route.code(), Ordering::Relaxed);
     }
+
+    pub fn stalled(&self) -> bool {
+        self.stalled.load(Ordering::Relaxed)
+    }
 }
 
 /// Sends encoded frames; usable from any thread (e.g. an encoder callback).
 #[derive(Debug)]
 pub struct VideoSender {
-    connection: Connection,
+    link: Link,
     runtime: Handle,
     in_flight: Arc<Semaphore>,
     next_sequence: u64,
@@ -170,11 +196,11 @@ impl VideoSender {
             MediaStats::count(&self.stats.frames_dropped_congested, 1);
             return;
         };
-        let (connection, stats) = (self.connection.clone(), Arc::clone(&self.stats));
+        let (connection, stats) = (self.link.borrow().clone(), Arc::clone(&self.stats));
         self.runtime.spawn(async move {
             let _permit = permit;
             let bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
-            match send_frame(&connection, sequence, frame).await {
+            match send_frame(&connection, sequence, frame, &stats).await {
                 Ok(()) => {
                     MediaStats::count(&stats.frames_sent, 1);
                     MediaStats::count(&stats.bytes_sent, bytes);
@@ -186,7 +212,7 @@ impl VideoSender {
     }
 }
 
-async fn send_frame(connection: &Connection, sequence: u64, frame: Frame) -> Result<(), Error> {
+async fn send_frame(connection: &Connection, sequence: u64, frame: Frame, stats: &MediaStats) -> Result<(), Error> {
     let header = StreamHeader {
         kind: Some(StreamKind::Video(FrameHeader {
             sequence,
@@ -196,8 +222,10 @@ async fn send_frame(connection: &Connection, sequence: u64, frame: Frame) -> Res
             turns: u32::from(frame.turns),
         })),
     };
-    let mut stream =
-        tokio::time::timeout(FRAME_DEADLINE, connection.open_uni()).await.map_err(|_| Error::FrameLate)??;
+    let mut stream = tokio::time::timeout(FRAME_DEADLINE, connection.open_uni()).await.map_err(|_| {
+        MediaStats::count(&stats.frames_unopened, 1);
+        Error::FrameLate
+    })??;
     stream.set_priority(VIDEO_PRIORITY)?;
     match tokio::time::timeout(FRAME_DEADLINE, write_frame(&mut stream, &header, &frame.data)).await {
         Ok(written) => {
@@ -237,26 +265,44 @@ impl std::fmt::Debug for MediaSession {
     }
 }
 
-/// Call-task side of the media plumbing.
+/// Call-task side of the media plumbing. Dropping it ends the media: everything following the
+/// link stops once its sender is gone.
 pub(crate) struct MediaLinks {
     /// Our receiver lost a reference frame: ask the peer for a keyframe.
     pub request_keyframe: mpsc::Receiver<()>,
     /// The peer asked us for a keyframe.
     pub keyframe_requested: mpsc::Sender<()>,
     pub stats: Arc<MediaStats>,
+    link: watch::Sender<Connection>,
+    endpoint: Endpoint,
+}
+
+impl MediaLinks {
+    /// Carries the call on over `connection`, after the one before it was lost. The first frame
+    /// on it is a keyframe: whatever the peer's decoder last had is no use to it now.
+    pub fn rejoin(&self, connection: &Connection) {
+        MediaStats::count(&self.stats.rejoins, 1);
+        self.link.send_replace(connection.clone());
+        tokio::spawn(telemetry::run(connection.clone(), self.endpoint.clone(), Arc::clone(&self.stats)));
+        if self.keyframe_requested.try_send(()).is_err() {
+            tracing::debug!("keyframe already asked for");
+        }
+    }
 }
 
 /// `endpoint` is for telemetry, which asks it what each side could offer for a direct path.
 pub(crate) fn start(connection: &Connection, endpoint: &Endpoint) -> Result<(MediaSession, MediaLinks), Error> {
     let stats = Arc::<MediaStats>::default();
-    let (audio, incoming_audio) = audio::start(connection, &stats)?;
+    let (link, following) = watch::channel(connection.clone());
+    let (audio, incoming_audio) = audio::start(&following, &stats)?;
     let (incoming_tx, incoming_video) = mpsc::channel(INCOMING_FRAME_QUEUE);
     let (request_tx, request_keyframe) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     let (keyframe_requested, keyframe_requests) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
-    tokio::spawn(receive_video(connection.clone(), incoming_tx, request_tx, Arc::clone(&stats)));
+    tokio::spawn(receive_video(following.clone(), incoming_tx, request_tx, Arc::clone(&stats)));
+    tokio::spawn(watch_arrivals(following.clone(), Arc::clone(&stats)));
     tokio::spawn(telemetry::run(connection.clone(), endpoint.clone(), Arc::clone(&stats)));
     let video = VideoSender {
-        connection: connection.clone(),
+        link: following,
         runtime: Handle::current(),
         in_flight: Arc::new(Semaphore::new(MAX_FRAMES_IN_FLIGHT)),
         next_sequence: 0,
@@ -264,24 +310,63 @@ pub(crate) fn start(connection: &Connection, endpoint: &Endpoint) -> Result<(Med
     };
     let session =
         MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats: Arc::clone(&stats) };
-    Ok((session, MediaLinks { request_keyframe, keyframe_requested, stats }))
+    let links = MediaLinks { request_keyframe, keyframe_requested, stats, link, endpoint: endpoint.clone() };
+    Ok((session, links))
 }
 
-/// Accepts one stream per frame and feeds the sequencer until the connection ends.
+/// Says whether anything at all is arriving from the peer, for as long as the call lasts.
+async fn watch_arrivals(mut link: Link, stats: Arc<MediaStats>) {
+    let mut tick = tokio::time::interval(ARRIVAL_CHECK);
+    let (mut last, mut since) = (None, Instant::now());
+    loop {
+        tick.tick().await;
+        // An error here is the call over, not a new connection.
+        if link.has_changed().is_err() {
+            break;
+        }
+        let connection = link.borrow_and_update().clone();
+        let arrived = (connection.stable_id(), connection.stats().udp_rx.datagrams);
+        let now = Instant::now();
+        if last != Some(arrived) {
+            (last, since) = (Some(arrived), now);
+        }
+        let stalled = now.duration_since(since) >= STALL_AFTER;
+        if stats.stalled.swap(stalled, Ordering::Relaxed) != stalled {
+            tracing::info!(stalled, "arrivals");
+        }
+    }
+}
+
+/// Accepts one stream per frame and feeds the sequencer, over each connection the call has.
 async fn receive_video(
-    connection: Connection,
+    mut link: Link,
     deliver: mpsc::Sender<Frame>,
     request_keyframe: mpsc::Sender<()>,
     stats: Arc<MediaStats>,
 ) {
     let (arrived_tx, mut arrived) = mpsc::channel(MAX_FRAMES_IN_FLIGHT);
     let mut sequencer = Sequencer::new(Instant::now());
+    let mut connection = link.borrow_and_update().clone();
+    // The connection is gone and the next has not come yet.
+    let mut lost = false;
     loop {
         let wake = sequencer.next_deadline();
         let outputs = tokio::select! {
-            stream = connection.accept_uni() => {
-                let Ok(stream) = stream else { break };
-                tokio::spawn(read_frame(stream, arrived_tx.clone(), Arc::clone(&stats)));
+            changed = link.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                connection = link.borrow_and_update().clone();
+                lost = false;
+                continue;
+            }
+            stream = connection.accept_uni(), if !lost => {
+                match stream {
+                    Ok(stream) => {
+                        tokio::spawn(read_frame(stream, arrived_tx.clone(), Arc::clone(&stats)));
+                    }
+                    Err(_) => lost = true,
+                }
                 continue;
             }
             Some((sequence, frame)) = arrived.recv() => sequencer.push(sequence, frame, Instant::now()),

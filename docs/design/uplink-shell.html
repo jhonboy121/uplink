@@ -1,0 +1,1170 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Uplink Shell &amp; Identity</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F5F7FA;
+    --panel: #FFFFFF;
+    --line: #DBE2EB;
+    --text: #0E151E;
+    --muted: #5B6B7D;
+    --beacon: #0A6FC2;
+    --good: #10894C;
+    --risk: #B4761B;
+    --shadow: 0 1px 2px rgba(14,21,30,.08), 0 8px 24px rgba(14,21,30,.06);
+
+    --app-ink: #070A0F;
+    --app-surface: #101720;
+    --app-line: #263140;
+    --app-text: #E9F0F7;
+    --app-muted: #93A3B5;
+    --app-beacon: #58B6FF;
+    --ease: cubic-bezier(.2,.8,.3,1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0A0E14; --panel: #111924; --line: #24303F;
+      --text: #E9F0F7; --muted: #93A3B5; --beacon: #58B6FF;
+      --good: #32C97A; --risk: #E0A34A;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0A0E14; --panel: #111924; --line: #24303F;
+    --text: #E9F0F7; --muted: #93A3B5; --beacon: #58B6FF;
+    --good: #32C97A; --risk: #E0A34A;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--text);
+    font-family: "Public Sans", system-ui, sans-serif; font-size: 15px; line-height: 1.6;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 0 72px; }
+  h1, h2, h3 { font-family: Outfit, system-ui, sans-serif; margin: 0; text-wrap: balance; }
+  h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  h2 { font-size: clamp(21px, 3vw, 27px); font-weight: 600; letter-spacing: -.01em; }
+  h3 { font-size: 16px; font-weight: 600; }
+  p { margin: 0; }
+  header.top { padding-block: 56px 32px; display: grid; gap: 16px; max-width: 760px; }
+  header.top p { color: var(--muted); font-size: 17px; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  section { margin-bottom: 64px; }
+  .section-head { display: grid; gap: 8px; margin-bottom: 24px; max-width: 70ch; }
+  .section-head p { color: var(--muted); }
+
+  /* ---- marks ---- */
+  .marks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+  .mark {
+    border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
+    padding: 22px; display: grid; gap: 14px; justify-items: center; text-align: center;
+  }
+  .mark.pick { border-color: color-mix(in srgb, var(--beacon) 45%, transparent); }
+  .mark .plate {
+    width: 104px; height: 104px; border-radius: 24px; background: var(--app-ink);
+    display: grid; place-items: center;
+  }
+  .mark h3 { font-size: 15px; }
+  .mark p { color: var(--muted); font-size: 13.5px; }
+  .tagline {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .mark.pick .tagline { color: var(--beacon); }
+
+  .sizes { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .size { display: grid; gap: 7px; justify-items: center; }
+  .size .plate { background: var(--app-ink); border-radius: 22%; display: grid; place-items: center; }
+  .size span { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--muted); }
+
+  .wordmark {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--app-ink); border-radius: 16px; padding: 26px 30px; border: 1px solid var(--line);
+  }
+  .wordmark b {
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 34px; letter-spacing: -.02em;
+    color: var(--app-text);
+  }
+
+  /* ---- phone frames: the same shape the probe measures ---- */
+  .screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 30px 24px; }
+  figure.frame { margin: 0; display: grid; gap: 12px; justify-items: center; }
+  figure.frame figcaption { font-size: 13px; color: var(--muted); text-align: center; max-width: 32ch; }
+  figure.frame figcaption b { color: var(--text); font-weight: 600; display: block; font-family: Outfit, sans-serif; }
+  .phone {
+    width: 100%; max-width: 264px; aspect-ratio: 9 / 19.3;
+    background: var(--app-ink); border: 1px solid var(--app-line); border-radius: 28px;
+    padding: 7px; box-shadow: var(--shadow); position: relative;
+  }
+  .screen {
+    position: relative; height: 100%; width: 100%; border-radius: 22px; overflow: hidden;
+    background: var(--app-ink); color: var(--app-text); font-size: 11px;
+    display: flex; flex-direction: column;
+  }
+  .screen.light { background: #FFFFFF; color: #0E151E; }
+  .statusbar {
+    display: flex; justify-content: space-between; padding: 7px 14px 3px;
+    font-size: 9px; color: var(--app-muted); font-family: "IBM Plex Mono", monospace;
+  }
+  .screen.light .statusbar { color: #6B7C8F; }
+
+  /* splash */
+  .splash { flex: 1; display: grid; place-items: center; align-content: center; gap: 14px; }
+  .splash .name {
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 21px; letter-spacing: -.01em;
+  }
+  .foot {
+    position: absolute; inset-inline: 0; bottom: 22px;
+    display: flex; justify-content: center;
+    font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: .14em;
+    color: var(--app-muted);
+  }
+
+  /* permissions */
+  .perm { display: grid; gap: 9px; padding: 4px 14px 14px; }
+  .prow { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px; }
+  .prow .why { display: grid; gap: 1px; min-width: 0; }
+  .prow .why b { font-family: Outfit, sans-serif; font-size: 11px; font-weight: 600; }
+  .prow .why span { font-size: 9px; color: var(--app-muted); }
+  .screen.light .prow .why span { color: #6B7C8F; }
+  .prow svg { width: 20px; height: 20px; }
+  .state {
+    font-family: "IBM Plex Mono", monospace; font-size: 8px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  }
+  .state.ok { color: #10894C; border: 1px solid rgba(16,137,76,.35); }
+  .state.no { color: #C62B2B; border: 1px solid rgba(198,43,43,.35); }
+  .state.wait { color: #6B7C8F; border: 1px solid rgba(107,124,143,.3); }
+  /* profile */
+  .picker { position: relative; width: 76px; margin: 2px auto 0; }
+  .picker .circle {
+    width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center;
+    background: #F6DDE6; color: #62243C; font-family: Outfit, sans-serif; font-weight: 600; font-size: 30px;
+  }
+  .picker .badge {
+    position: absolute; right: -2px; bottom: -2px; width: 27px; height: 27px; border-radius: 50%;
+    background: #0A6FC2; display: grid; place-items: center; border: 2px solid #fff;
+  }
+  .picker .badge svg { width: 14px; height: 14px; }
+  .field {
+    border: 1px solid #DBE2EB; border-radius: 10px; padding: 9px 11px; font-size: 11px;
+    display: flex; justify-content: space-between; align-items: center; background: #fff;
+  }
+  .field .ph { color: #9AA7B5; }
+  .field .caret { width: 1px; height: 13px; background: #0A6FC2; }
+
+  /* a dark call frame, enough to show who is calling */
+  .stage { flex: 1; position: relative; display: grid; place-items: center; align-content: center; gap: 9px;
+    background: radial-gradient(120% 80% at 70% 15%, #2B4B6B 0%, #16222F 55%, #0C121A 100%); }
+  .stage .face {
+    width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center;
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 28px;
+    background: linear-gradient(140deg, #FFC2D1, #E2789A); color: #2B0D18;
+  }
+  .stage .nm { font-family: Outfit, sans-serif; font-weight: 600; font-size: 15px; }
+  .stage .sub { font-size: 10px; color: var(--app-muted); }
+  .stage .fp {
+    font-family: "IBM Plex Mono", monospace; font-size: 8.5px; color: var(--app-muted); letter-spacing: .05em;
+  }
+  .warn {
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px;
+    font-family: "IBM Plex Mono", monospace; font-size: 8px; letter-spacing: .08em; text-transform: uppercase;
+    color: #E0A34A; border: 1px solid rgba(224,163,74,.4);
+  }
+  .stage .keys { position: absolute; inset-inline: 0; bottom: 16px; display: flex; justify-content: center; gap: 10px; }
+  .stage .keys span { width: 44px; height: 33px; border-radius: 17px; }
+
+  .list { flex: 1; }
+  .tabs { display: flex; gap: 4px; padding: 6px; background: #F1F4F8; }
+  .tabs span {
+    flex: 1; text-align: center; padding: 7px 0; font-size: 9px; color: #6B7C8F; border-radius: 9px;
+  }
+  .tabs span.on { background: #E4EAF1; color: #0A6FC2; font-weight: 600; }
+  .grouphead {
+    padding: 11px 14px 3px; font-family: "IBM Plex Mono", monospace; font-size: 8px;
+    letter-spacing: .14em; text-transform: uppercase; color: #6B7C8F;
+  }
+  .crow { display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; padding: 8px 14px; }
+  .crow + .crow { border-top: 1px solid #E7ECF2; }
+  .crow .av {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 12px;
+  }
+  .crow .who { display: grid; gap: 1px; min-width: 0; }
+  .crow .who b { font-family: Outfit, sans-serif; font-size: 12px; font-weight: 600; }
+  .crow .who span { font-size: 8.5px; color: #6B7C8F; }
+  .crow .star { font-size: 10px; color: #E0A34A; }
+  .mini {
+    border: 1px solid rgba(10,111,194,.35); color: #0A6FC2; background: transparent;
+    border-radius: 999px; padding: 3px 9px; font-size: 9px;
+  }
+  .bigav {
+    width: 72px; height: 72px; border-radius: 50%; margin-inline: auto; display: grid; place-items: center;
+    font-family: Outfit, sans-serif; font-weight: 600; font-size: 28px;
+  }
+  .drow {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px; border-top: 1px solid #E7ECF2; font-size: 11px;
+  }
+  .drow b { font-family: Outfit, sans-serif; font-weight: 600; }
+  .drow.danger b { color: #C62B2B; }
+  .steps { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border-radius: 10px; background: #F1F4F8; }
+  .steps div { display: grid; grid-template-columns: 14px 1fr; gap: 7px; font-size: 9.5px; align-items: start; }
+  .steps i {
+    font-style: normal; font-family: "IBM Plex Mono", monospace; font-size: 8.5px; color: #0A6FC2;
+  }
+
+  /* first run */
+  .appbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 10px; gap: 8px; }
+  .appbar h4 { margin: 0; font-family: Outfit, sans-serif; font-size: 16px; font-weight: 600; }
+  .stack { display: grid; gap: 12px; padding: 17px 14px; }
+  .lede { font-size: 11px; line-height: 1.55; }
+  .lede b { font-family: Outfit, sans-serif; }
+  .screen.light .muted, .muted { color: var(--app-muted); }
+  .screen.light .muted { color: #6B7C8F; }
+  .qr { width: 118px; height: 118px; margin-inline: auto; border-radius: 10px; background: #fff; padding: 8px; }
+  .qr canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .fingerprint {
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em;
+    text-align: center; color: var(--app-muted); word-spacing: .3em;
+  }
+  .screen.light .fingerprint { color: #6B7C8F; }
+  .wide {
+    width: 100%; border-radius: 10px; padding: 8px; font-size: 11px; text-align: center;
+    font-family: "Public Sans", sans-serif;
+    border: 1px solid rgba(10,111,194,.3); background: rgba(10,111,194,.1); color: #0A6FC2;
+  }
+  .wide.primary { background: #0A6FC2; color: #fff; border-color: transparent; font-weight: 600; }
+  .empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 6px; padding: 24px; text-align: center; }
+  .empty .t { font-family: Outfit, sans-serif; font-weight: 600; font-size: 13px; }
+  .keyrow {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 14px; border-top: 1px solid #E7ECF2;
+  }
+  .keyrow b { font-family: Outfit, sans-serif; font-size: 11px; }
+  .keyrow small { display: block; color: #6B7C8F; font-size: 9px; }
+  .keyrow .v { font-family: "IBM Plex Mono", monospace; font-size: 10px; color: #0A6FC2; }
+
+  .notes { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden; }
+  .note { display: grid; grid-template-columns: 20px 1fr; gap: 10px; padding: 11px 14px; align-items: start; }
+  .note + .note { border-top: 1px solid var(--line); }
+  .note .mark-i { line-height: 1.5; font-size: 13px; color: var(--muted); }
+  .note.risk .mark-i { color: var(--risk); }
+  .note.ok .mark-i { color: var(--good); }
+  .note b { font-family: Outfit, sans-serif; font-weight: 600; }
+  .note p { color: var(--muted); font-size: 14px; }
+
+  .scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td b { font-family: Outfit, sans-serif; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: .92em; }
+  footer { border-top: 1px solid var(--line); padding-top: 22px; color: var(--muted); font-size: 13px; }
+
+  /* ---- call modes in the shell (locked 2026-09-24) ---- */
+  .status-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill-risk {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+    color: var(--risk); border: 1px solid color-mix(in srgb, var(--risk) 40%, transparent);
+  }
+  .pill-ok {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+    color: var(--good); border: 1px solid color-mix(in srgb, var(--good) 40%, transparent);
+  }
+  /* People row quick actions: voice, then video. Each hit area is 48dp (33.07px at 248px =
+     360dp); the ring drawn inside it is 24px, and the pair is pulled into the row's end padding
+     so the last ring ends where the old pill did, 14px from the edge. */
+  .crow .qa { display: flex; margin-inline-end: -4.535px; }
+  .crow .qa-hit { width: 33.07px; height: 33.07px; display: grid; place-items: center; }
+  .crow .qa-ring {
+    width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; display: grid; place-items: center;
+    border: 1px solid rgba(10,111,194,.35); color: #0A6FC2;
+  }
+  .crow .qa-ring svg { width: 11px; height: 11px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .wide.ic { display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .wide.ic svg { width: 11px; height: 11px; flex: none; }
+  .crow .how { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .crow .how svg { width: 9px; height: 9px; flex: none; }
+  .crow .how .arrow-ok { color: #0A6FC2; }
+  .crow .how .arrow-bad { color: #C62B2B; }
+  .crow .how .mode { color: #6B7C8F; }
+  .crow .how span { font-size: 8.5px; color: #6B7C8F; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crow .who b.missed { color: #C62B2B; }
+  .crow .ic-pill { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 20px; padding: 0; }
+  .crow .ic-pill svg { width: 10px; height: 10px; }
+  .drow small { display: block; color: #6B7C8F; font-size: 9px; font-weight: 400; font-family: "Public Sans", sans-serif; }
+  .drow .val { color: #6B7C8F; font-size: 10px; text-align: end; white-space: nowrap; }
+  .drow .val.lost { color: #C62B2B; font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">step 7 · everything outside a call</span>
+    <h1>Uplink Shell &amp; Identity</h1>
+    <p>
+      What a fresh install sees before it sees anything else: a mark, a splash while the endpoint
+      comes up, a gate for the three permissions a call cannot happen without, a name and a face to
+      call people with, and the key that is the whole account. Drawn to the tokens already locked,
+      in the same frames the measuring probe reads.
+    </p>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <h2>The mark</h2>
+      <p>
+        <b>The u-link is chosen.</b> The two it was picked over are kept here, because why a mark
+        was not chosen is worth as much later as why it was. All three are two-colour, need no
+        gradient, and are a handful of SVG paths — which matters, because the same drawing has to
+        serve a 24dp control, a 108dp adaptive icon and a monochrome themed icon.
+      </p>
+    </div>
+    <div class="marks">
+      <div class="mark">
+        <div class="plate">
+          <svg width="62" height="62" viewBox="0 0 48 48" fill="none" aria-label="Direct mark">
+            <path d="M17.5 30.5 L30.5 17.5" stroke="#58B6FF" stroke-width="5" stroke-linecap="round"/>
+            <circle cx="12" cy="36" r="6.5" fill="#E9F0F7"/>
+            <circle cx="36" cy="12" r="5" fill="none" stroke="#E9F0F7" stroke-width="3.5"/>
+          </svg>
+        </div>
+        <div>
+          <h3>Direct</h3>
+          <p>Two peers, one line, nothing in between. The thesis of the product drawn literally.</p>
+        </div>
+        <span class="tagline">simplest · reads at 16dp</span>
+      </div>
+
+      <div class="mark pick" style="order: -1;">
+        <div class="plate">
+          <svg width="62" height="62" viewBox="0 0 48 48" fill="none" aria-label="Uplink u mark">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="5.5"
+                  stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="4.6" fill="#E9F0F7"/>
+            <circle cx="35" cy="9" r="4.6" fill="#E9F0F7"/>
+          </svg>
+        </div>
+        <div>
+          <h3>The u-link</h3>
+          <p>A lowercase <b>u</b> whose two ends are the people it joins. Carries the name and the thesis in one shape.</p>
+        </div>
+        <span class="tagline">chosen</span>
+      </div>
+
+      <div class="mark">
+        <div class="plate">
+          <svg width="62" height="62" viewBox="0 0 48 48" fill="none" aria-label="Beacon mark">
+            <circle cx="24" cy="35" r="5.5" fill="#E9F0F7"/>
+            <path d="M14.5 26.5 A13 13 0 0 1 33.5 26.5" stroke="#58B6FF" stroke-width="4.5" stroke-linecap="round"/>
+            <path d="M7.5 19 A22 22 0 0 1 40.5 19" stroke="#58B6FF" stroke-width="4.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <h3>Beacon</h3>
+          <p>Named for the accent already in the palette. Honest about reach — but arcs read as "network", not "peer".</p>
+        </div>
+        <span class="tagline">weakest · looks like wifi</span>
+      </div>
+    </div>
+
+    <div class="notes" style="margin-top: 20px;">
+      <div class="note ok"><span class="mark-i">✓</span><div><b>Why the u-link</b><p>It is the only one of the three that says the product's name and its argument at the same time: the curve is a <b>u</b>, and its two ends are two people with a direct line between them. It also survives the adaptive-icon mask, which the diagonal in <b>Direct</b> does not do as comfortably — a diagonal wants the corners the circular mask cuts off.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>Two colours, never more</b><p>Accent for the link, text for the peers. In the monochrome themed icon the whole mark collapses to one colour and still reads, because the shapes do the work and not the hues.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>At the sizes it has to live</h2>
+      <p>The launcher's adaptive icon is 108dp with only the middle 72dp guaranteed — anything outside can be masked away, so the mark sits inside 60dp and the rest is ground.</p>
+    </div>
+    <div class="sizes">
+      <div class="size">
+        <div class="plate" style="width: 108px; height: 108px;">
+          <svg width="60" height="60" viewBox="0 0 48 48" fill="none">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="5.5" stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="4.6" fill="#E9F0F7"/><circle cx="35" cy="9" r="4.6" fill="#E9F0F7"/>
+          </svg>
+        </div>
+        <span>108 · adaptive</span>
+      </div>
+      <div class="size">
+        <div class="plate" style="width: 108px; height: 108px; border-radius: 50%;">
+          <svg width="60" height="60" viewBox="0 0 48 48" fill="none">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="5.5" stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="4.6" fill="#E9F0F7"/><circle cx="35" cy="9" r="4.6" fill="#E9F0F7"/>
+          </svg>
+        </div>
+        <span>circular mask</span>
+      </div>
+      <div class="size">
+        <div class="plate" style="width: 56px; height: 56px;">
+          <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="6" stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="5" fill="#E9F0F7"/><circle cx="35" cy="9" r="5" fill="#E9F0F7"/>
+          </svg>
+        </div>
+        <span>56</span>
+      </div>
+      <div class="size">
+        <div class="plate" style="width: 32px; height: 32px; border-radius: 8px;">
+          <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="7" stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="5.5" fill="#E9F0F7"/><circle cx="35" cy="9" r="5.5" fill="#E9F0F7"/>
+          </svg>
+        </div>
+        <span>24 · in-app</span>
+      </div>
+      <div class="size">
+        <div class="plate" style="width: 56px; height: 56px; background: #E9F0F7;">
+          <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
+            <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0E151E" stroke-width="6" stroke-linecap="round"/>
+            <circle cx="13" cy="9" r="5" fill="#0E151E"/><circle cx="35" cy="9" r="5" fill="#0E151E"/>
+          </svg>
+        </div>
+        <span>monochrome</span>
+      </div>
+    </div>
+
+    <div class="wordmark" style="margin-top: 22px;">
+      <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+        <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="5.5" stroke-linecap="round"/>
+        <circle cx="13" cy="9" r="4.6" fill="#E9F0F7"/><circle cx="35" cy="9" r="4.6" fill="#E9F0F7"/>
+      </svg>
+      <b>uplink</b>
+    </div>
+    <p style="color: var(--muted); font-size: 13.5px; margin-top: 10px;">
+      Outfit 600, lowercase, always — the app never shouts its own name. The mark's height matches
+      the cap height of the word beside it.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>First run, in order</h2>
+      <p>
+        Splash, then permissions, then the key. The splash is not decoration: the endpoint has to
+        reach a relay before a call can arrive, and that is the wait it covers. Everything after it
+        happens once — except the blocked screen, which returns whenever a permission is missing.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:01</span><span>5G ▚ 86%</span></div>
+            <div class="splash">
+              <svg width="72" height="72" viewBox="0 0 48 48" fill="none">
+                <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#58B6FF" stroke-width="5.5" stroke-linecap="round"/>
+                <circle cx="13" cy="9" r="4.6" fill="#E9F0F7"/><circle cx="35" cy="9" r="4.6" fill="#E9F0F7"/>
+              </svg>
+              <div class="name">uplink</div>
+            </div>
+            <div class="foot"><span>P2P · E2EE</span></div>
+          </div>
+        </div>
+        <figcaption><b>Splash</b>Mark, name, and one line saying what it is. Dark whatever the theme, like a call.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:01</span><span>5G ▚ 86%</span></div>
+            <div class="appbar"><h4>Before your first call</h4></div>
+            <div class="stack" style="padding-bottom: 6px;">
+              <p class="lede">
+                A call needs all three. uplink asks once, and asks for nothing else —
+                no contacts, no location, no storage.
+              </p>
+            </div>
+            <div class="perm">
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#0A6FC2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
+                <div class="why"><b>Camera</b><span>So they can see you</span></div>
+                <span class="state wait">needed</span>
+              </div>
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#0A6FC2" stroke-width="2" stroke-linecap="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                <div class="why"><b>Microphone</b><span>So they can hear you</span></div>
+                <span class="state wait">needed</span>
+              </div>
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#0A6FC2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15V10a6 6 0 0 0-12 0v5l-2 3h16z"/><path d="M10 21h4"/></svg>
+                <div class="why"><b>Notifications</b><span>So you know when someone calls</span></div>
+                <span class="state wait">needed</span>
+              </div>
+              <div class="wide primary" style="margin-top: 4px;">Continue</div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Permissions</b>One screen saying why, before Android's own dialogs. Asking cold, with no reason given, is how people tap Deny.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:01</span><span>5G ▚ 86%</span></div>
+            <div class="appbar"><h4>uplink can't call yet</h4></div>
+            <div class="stack" style="padding-bottom: 6px;">
+              <p class="lede">
+                Android won't ask again, so these have to be turned on in settings. It takes two
+                taps and uplink will be waiting when you come back.
+              </p>
+            </div>
+            <div class="perm">
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10894C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
+                <div class="why"><b>Camera</b><span>Allowed</span></div>
+                <span class="state ok">on</span>
+              </div>
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#C62B2B" stroke-width="2" stroke-linecap="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                <div class="why"><b>Microphone</b><span>Blocked</span></div>
+                <span class="state no">off</span>
+              </div>
+              <div class="prow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#C62B2B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15V10a6 6 0 0 0-12 0v5l-2 3h16z"/><path d="M10 21h4"/></svg>
+                <div class="why"><b>Notifications</b><span>Blocked</span></div>
+                <span class="state no">off</span>
+              </div>
+              <div class="steps">
+                <div><i>1</i><span>Open settings below</span></div>
+                <div><i>2</i><span>Tap <b>Permissions</b></span></div>
+                <div><i>3</i><span>Allow Microphone and Notifications</span></div>
+              </div>
+              <div class="wide primary">Open settings</div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Blocked</b>Which ones, what to do, and a button that lands on this app's own settings page — not the top of Settings.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:01</span><span>5G ▚ 86%</span></div>
+            <div class="appbar"><h4>Who are you?</h4></div>
+            <div class="stack">
+              <p class="lede">
+                The name and picture people see when you call them. It stays on your phone and is
+                sent to the person you are calling — nowhere else.
+              </p>
+              <div class="picker">
+                <div class="circle">A</div>
+                <div class="badge">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><circle cx="12" cy="13" r="3.2"/></svg>
+                </div>
+              </div>
+              <div class="field"><span>Alfred</span><span class="caret"></span></div>
+              <div class="wide primary">Continue</div>
+              <div style="text-align:center;font-size:9px;color:#6B7C8F;">A picture is optional — your initial works.</div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Who are you</b>One name, one optional picture. The only thing in uplink you fill in about yourself.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:01</span><span>5G ▚ 86%</span></div>
+            <div class="appbar"><h4>This is your identity</h4></div>
+            <div class="stack">
+              <p class="lede">
+                No account, no sign-up. The code carries your key and your name, so whoever scans it
+                has you saved already — and only they can call you.
+              </p>
+              <div class="qr"><canvas id="qr" width="29" height="29" aria-label="Your identity as a QR code"></canvas></div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div class="wide primary">Share my identity</div>
+              <div class="wide">Add someone now</div>
+            </div>
+            <div style="flex:1"></div>
+            <div class="keyrow" style="justify-content:center;">
+              <span class="v" style="color:#6B7C8F;">Skip for now</span>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>First run</b>Shown once. The key is the product, so it is the first thing the app hands over.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:02</span><span>5G ▚ 86%</span></div>
+            <div class="appbar"><h4>People</h4></div>
+            <div class="empty">
+              <svg width="46" height="46" viewBox="0 0 48 48" fill="none" style="opacity:.35">
+                <path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/>
+                <circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/>
+              </svg>
+              <div class="t">No one here yet</div>
+              <div class="muted" style="font-size:10px;">Open Connect to scan a code, or send them yours.</div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Empty people</b>Where every later launch lands. The mark returns, quietly, as the empty state.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>The shell</h2>
+      <p>
+        Three tabs, always there: <b>People</b> is who you can call, <b>Connect</b> is how anyone
+        becomes one of them, <b>Settings</b> is everything else. Your own identity leaves People
+        entirely — it was never a contact, and a list of people is a poor place to keep yourself.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow">
+                <div class="av" style="background:#F6DDE6;color:#62243C;">N</div>
+                <div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div>
+                <span class="qa"><span class="qa-hit" role="button" aria-label="Voice call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span></span><span class="qa-hit" role="button" aria-label="Video call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span></span></span>
+              </div>
+              <div class="grouphead">All</div>
+              <div class="crow">
+                <div class="av" style="background:#D8E7F5;color:#123A5C;">A</div>
+                <div class="who"><b>Ammar</b><span>Called Tuesday</span></div>
+                <span class="qa"><span class="qa-hit" role="button" aria-label="Voice call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span></span><span class="qa-hit" role="button" aria-label="Video call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span></span></span>
+              </div>
+              <div class="crow">
+                <div class="av" style="background:#DCEEDF;color:#1D4A2C;">L</div>
+                <div class="who"><b>Laptop</b><span>Never called</span></div>
+                <span class="qa"><span class="qa-hit" role="button" aria-label="Voice call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span></span><span class="qa-hit" role="button" aria-label="Video call"><span class="qa-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span></span></span>
+              </div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>People</b>Contacts and nothing else. Favourites float to the top; the line under a name is the last call, which is what you actually look for.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>Noor</h4><span class="mini">Done</span></div>
+            <div class="stack" style="padding-bottom:6px;">
+              <div class="bigav" style="background:#F6DDE6;color:#62243C;">N</div>
+              <div style="text-align:center;">
+                <div style="font-family:Outfit,sans-serif;font-weight:600;font-size:14px;">Noor</div>
+                <div style="font-size:9px;color:#6B7C8F;">calls herself “Noor A.”</div>
+              </div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div class="wide primary">Call</div>
+            </div>
+            <div class="list">
+              <div class="drow"><b>Favourite</b><span class="star">★</span></div>
+              <div class="drow"><b>Rename</b><span style="color:#6B7C8F;">Noor</span></div>
+              <div class="drow danger"><b>Remove</b><span style="color:#C62B2B;">✕</span></div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>One contact</b>Opened by tapping the row. Their own name is quoted under yours, so a change on their side is visible but never rewrites what you chose.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:05</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>Connect</h4></div>
+            <div class="stack">
+              <div class="qr"><canvas id="qr3" width="29" height="29" aria-label="Your identity as a code"></canvas></div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div class="wide primary">Scan a code</div>
+              <div class="wide">Choose an image</div>
+              <div class="wide">Share my identity</div>
+            </div>
+            <div class="tabs"><span>People</span><span class="on">Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Connect</b>Yours to give and theirs to take, on one screen — the only two things that ever add a person.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:06</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>Settings</h4></div>
+            <div class="list">
+              <div class="keyrow" style="border-top:1px solid #E7ECF2;">
+                <div><b>You</b><small>Alfred · name and picture</small></div><span class="v">Edit</span>
+              </div>
+              <div class="keyrow"><div><b>Appearance</b><small>Follows the system</small></div><span class="v">System</span></div>
+              <div class="keyrow"><div><b>Language</b><small>App text and layout</small></div><span class="v">English</span></div>
+              <div class="keyrow"><div><b>Privacy</b><small>Profile sharing, unknown callers</small></div><span class="v">›</span></div>
+              <div class="keyrow"><div><b>Call quality</b><small>Caps what the camera sends</small></div><span class="v">720p · 30</span></div>
+              <div class="keyrow"><div><b>Diagnostics</b><small>Last 5 calls, sharable</small></div><span class="v">Report</span></div>
+            </div>
+            <div class="tabs"><span>People</span><span>Connect</span><span class="on">Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Settings</b>You first, since it is the one row about the person holding the phone. Privacy opens its own screen.</figcaption>
+      </figure>
+    </div>
+    <div class="notes" style="margin-top: 18px;">
+      <div class="note ok"><span class="mark-i">✓</span><div><b>Tapping a row opens, the two buttons call</b><p>A contact now has four things you can do to it, so the row cannot be a single button any more. Voice and video sit at the row's end, each one tap away and each a full 48dp target, and the rest of the row opens the contact — no long press, which is undiscoverable and hostile to TalkBack. Two labelled icons, not one pill, because a pill saying Call could not say which kind of call it places.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>What this supersedes</b><p>The locked design ends People with a "Your key" row and puts Add in its header. Both go: adding lives in Connect, and your identity lives in Connect and Settings. The bar is also permanent now, where the last build hid it on People.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>Last called earns its line</b><p>It is the only per-contact fact worth the second line, and it is already on the device — a fingerprint under every name was decoration, since the one place it matters is a caller you have not saved.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>What an identity is, and what fits in one</h2>
+      <p>
+        An identity is the key plus what you call yourself. Scanning one saves a contact outright
+        — nickname pre-filled, nothing to type. The picture is the exception, and not by choice.
+      </p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Travels in</th><th>Carries</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>The code</b></td>
+            <td>Key + display name</td>
+            <td>A QR tops out near 2.9 KB. A key is 32 bytes and a name is tens — both fit with room to spare.</td>
+          </tr>
+          <tr>
+            <td><b>A shared link</b></td>
+            <td>Key + display name</td>
+            <td>Same payload, so a code and a link save the same contact.</td>
+          </tr>
+          <tr>
+            <td><b>The connection</b></td>
+            <td>Picture, and the name again</td>
+            <td>A 256px picture is tens of kilobytes — ten times what any QR holds. It arrives on first contact and refreshes when it changes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note risk"><span class="mark-i">▲</span><div><b>A picture cannot go in the code</b><p>This is arithmetic, not a decision: the largest QR holds about 2,953 bytes, and a usable picture is an order of magnitude past that. So a scanned contact appears with their name and their initial, and grows a face the first time you connect. It is worth knowing that the two are not simultaneous.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>The name arrives twice on purpose</b><p>In the code, so a contact saves without typing; and on every connection, so it is current. The one in the code seeds the nickname. The one on the wire never overwrites it.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Privacy</h2>
+      <p>
+        Two switches, both off by default in the sense that costs you nothing: your profile is
+        shared, and anyone with your key can reach you. Turning either on trades reach for quiet.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:08</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>Privacy</h4></div>
+            <div class="list">
+              <div class="keyrow" style="border-top:1px solid #E7ECF2;">
+                <div><b>Share my profile</b><small>Name and picture, when you share or call</small></div>
+                <span class="v">On</span>
+              </div>
+              <div class="keyrow">
+                <div><b>Reject unknown callers</b><small>Only people in your contacts ring</small></div>
+                <span class="v" style="color:#6B7C8F;">Off</span>
+              </div>
+              <div class="keyrow">
+                <div><b>Who can see you</b><small>Nobody is told you are online</small></div>
+                <span class="v" style="color:#6B7C8F;">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Privacy</b>Its own section in Settings, because these two are the only choices that change what leaves the phone.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:08</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>This is your identity</h4></div>
+            <div class="stack">
+              <p class="lede">
+                Sharing your profile is off, so this code is your key and nothing else. Whoever
+                scans it will have to name you themselves.
+              </p>
+              <div class="qr" style="opacity:.92"><canvas id="qr2" width="29" height="29" aria-label="Identity code without a profile"></canvas></div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div style="display:flex;justify-content:center;">
+                <span class="warn" style="color:#6B7C8F;border-color:rgba(107,124,143,.4);">anonymous</span>
+              </div>
+              <div class="wide primary">Share my identity</div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Anonymous</b>The same screen with the profile withheld. It says so rather than quietly sharing less.</figcaption>
+      </figure>
+    </div>
+    <div class="scroller" style="margin-top: 18px;">
+      <table>
+        <thead><tr><th>Switch</th><th>On</th><th>Off</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Share my profile</b></td>
+            <td>Code carries your name; every call advertises name and picture.</td>
+            <td>Code is key-only; calls advertise nothing. You are a fingerprint to everyone, including contacts.</td>
+          </tr>
+          <tr>
+            <td><b>Reject unknown callers</b></td>
+            <td>A key you have not saved never rings. It is refused at signalling and written to the call log, so you can see what you missed.</td>
+            <td>Unknown keys ring, shown as a claim — quoted name, fingerprint, no picture.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note"><span class="mark-i">○</span><div><b>The two switches explain each other</b><p>Advertising a profile on every call only matters while unknown callers are allowed — it is what lets a stranger say who they are. With rejection on, only saved contacts get through and you already have their name. That is why they live side by side rather than in different places.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>Rejected is not blocked</b><p>Refusing at signalling stops the phone ringing; it does not stop someone knowing your key is reachable, because the connection is established before we can see who it is. Worth being straight about in the caption rather than implying invisibility.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>A name is a claim, not an identity</h2>
+      <p>
+        The key is who someone is; a name and a picture are what they say about themselves, and
+        anyone can say anything. Uplink has no server to check it against, so the rule is simple:
+        <b>your own nickname always wins</b>, and a name you did not choose is never shown as if
+        you had.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="face">N</div>
+              <div class="nm">Noor</div>
+              <div class="sub">Incoming video call</div>
+              <div class="keys">
+                <span style="background:#FF5252;"></span><span style="background:#32C97A;"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Someone you know</b>Your nickname and the picture they sent. No fingerprint, no warning — you already decided who this key is.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="face" style="background:linear-gradient(140deg,#3A4A5E,#222B38);color:#93A3B5;">?</div>
+              <div class="nm">“Noor”</div>
+              <div class="fp">7d19 · 2bb4 · 0af6 · 55c2</div>
+              <span class="warn">not in your contacts</span>
+              <div class="keys">
+                <span style="background:#FF5252;"></span><span style="background:#32C97A;"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Someone you don't</b>The name they claim, in quotes, under it the key — and their picture is not shown at all.</figcaption>
+      </figure>
+    </div>
+    <div class="notes" style="margin-top: 18px;">
+      <div class="note risk"><span class="mark-i">▲</span><div><b>Why this matters here more than elsewhere</b><p>Anyone who has your key can call you, and nothing stops them setting their name to a contact's. Without this rule a stranger could ring you as "Noor" and look identical to Noor. Quotation marks, the fingerprint and the chip are what make the two calls tell apart at a glance — and the stranger's picture is withheld, because a photograph is the most convincing lie of the three.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>What it changes in the locked plan</b><p>Contacts stay key-only and nicknames stay local — nothing there moves. What is new is that a profile now travels: <code>plan.md</code> says avatars are initials with "no image pipeline, no storage", and this replaces that.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>Renaming is still yours</b><p>Adding a claimed name as a contact pre-fills the nickname field with it — pre-fills, never sets. From then on it is your name for them, and if they change theirs, yours does not move.</p></div></div>
+    </div>
+  </section>
+
+  <section id="modes">
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">roadmap 7e · 7f</span><span class="pill-ok">Locked 2026-09-24</span></div>
+      <h2>Voice or video, from the shell</h2>
+      <p>
+        A call can now start as voice. So everywhere a call starts, you choose which kind, and
+        everywhere a call is remembered, the log says which kind it was. The call screens themselves are in
+        the call UI mockup, under "Call modes &amp; reconnecting". These frames use the build's four tabs.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>Noor</h4><span class="mini">Done</span></div>
+            <div class="stack" style="padding-bottom:6px;">
+              <div class="bigav" style="background:#F6DDE6;color:#62243C;">N</div>
+              <div style="text-align:center;">
+                <div style="font-size:9px;color:#6B7C8F;">calls themselves “Noor A.”</div>
+              </div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div class="pair">
+                <div class="wide ic">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                  Voice call
+                </div>
+                <div class="wide primary ic">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                  Video call
+                </div>
+              </div>
+            </div>
+            <div class="list">
+              <div class="drow"><div><b>Favourite</b><small>Kept at the top of People</small></div><span class="star">★</span></div>
+              <div class="drow"><div><b>Rename</b><small>What you call them, only on this phone</small></div><span class="val">Edit</span></div>
+              <div class="drow danger"><div><b>Remove</b><small>Their key goes; they can still call you</small></div><span style="color:#C62B2B;">✕</span></div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>One contact</b>The single Call becomes Voice call and Video call, side by side. Video stays the filled one, because the app's default call is still video.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:12</span><span>5G ▚ 82%</span></div>
+            <div class="appbar"><h4>Calls</h4><span class="mini" style="color:#C62B2B;border-color:rgba(198,43,43,.35);">Clear</span></div>
+            <div class="list">
+              <div class="grouphead">Today</div>
+              <div class="crow">
+                <div class="av" style="background:#F6DDE6;color:#62243C;">N</div>
+                <div class="who"><b>Noor</b>
+                  <div class="how">
+                    <svg class="arrow-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Outgoing"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>
+                    <svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Voice"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                    <span>09:14 · Connection lost · 23:10</span>
+                  </div>
+                </div>
+                <span class="mini ic-pill" aria-label="Call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                </span>
+              </div>
+              <div class="crow">
+                <div class="av" style="background:#D8E7F5;color:#123A5C;">A</div>
+                <div class="who"><b class="missed">Ammar</b>
+                  <div class="how">
+                    <svg class="arrow-bad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Incoming"><path d="M17 7L7 17"/><path d="M7 9v8h8"/></svg>
+                    <svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Voice"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                    <span>Missed · 18:40</span>
+                  </div>
+                </div>
+                <span class="mini ic-pill" aria-label="Call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                </span>
+              </div>
+              <div class="grouphead">Yesterday</div>
+              <div class="crow">
+                <div class="av" style="background:#F6DDE6;color:#62243C;">N</div>
+                <div class="who"><b>Noor</b>
+                  <div class="how">
+                    <svg class="arrow-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Incoming"><path d="M17 7L7 17"/><path d="M7 9v8h8"/></svg>
+                    <svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Video"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                    <span>21:37 · 21:02</span>
+                  </div>
+                </div>
+                <span class="mini ic-pill" aria-label="Video call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </span>
+              </div>
+              <div class="crow">
+                <div class="av" style="background:#DCEEDF;color:#1D4A2C;">L</div>
+                <div class="who"><b>Laptop</b>
+                  <div class="how">
+                    <svg class="arrow-bad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Outgoing"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>
+                    <svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Video"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                    <span>No answer · 09:15</span>
+                  </div>
+                </div>
+                <span class="mini ic-pill" aria-label="Video call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="tabs"><span>People</span><span class="on">Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Calls</b>After the direction arrow, a phone or a camera says which kind of call it was. The row's pill rings back the same kind, with the same icon.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:12</span><span>5G ▚ 82%</span></div>
+            <div class="appbar"><h4>Noor</h4><span class="mini">Done</span></div>
+            <div class="stack" style="padding-bottom:6px;">
+              <div class="bigav" style="background:#F6DDE6;color:#62243C;">N</div>
+              <div class="fingerprint">0e62 c812 91e3 83bb<br>c63b 3053 3820 0d85</div>
+              <div class="pair">
+                <div class="wide ic">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                  Voice call
+                </div>
+                <div class="wide primary ic">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                  Video call
+                </div>
+              </div>
+            </div>
+            <div class="list">
+              <div class="drow"><div><b>Outgoing voice call</b><small>Today · 23:01</small></div><span class="val lost">Connection lost</span></div>
+              <div class="drow"><div><b>Duration</b><small>From answer to hang-up</small></div><span class="val">09:14</span></div>
+              <div class="drow"><div><b>Switched to video</b><small>Both agreed</small></div><span class="val">at 03:12</span></div>
+              <div class="drow"><div><b>Reconnected</b><small>Times the network dropped and came back</small></div><span class="val">2</span></div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>A call's details</b>Call back becomes the same Voice call and Video call pair. The first row names the kind the call started as, and a switch to video gets its own row. Connection lost is an outcome of its own, not Did not connect.</figcaption>
+      </figure>
+    </div>
+    <div class="notes" style="margin-top: 18px;">
+      <div class="note"><span class="mark-i">○</span><div><b>The row pill rings back the same kind</b><p>On Calls, the pill carries the icon of the call it would place: a camera after a video call, a phone after a voice call. On People there is no pill: each row carries a voice and a video button, so either kind is one tap from the list.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>Where the call's ending shows</b><p>An answered call's row has always shown its length. A call that ended as Connection lost shows its length and the outcome, since both are true: <i>09:14 · Connection lost · 23:10</i>. It is not coloured as missed, because someone did answer.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Voice call · Video call · Outgoing voice call · Incoming voice call · Outgoing video call · Incoming video call · Connection lost · Switched to video · Both agreed · at {time} · Reconnected · Times the network dropped and came back · Voice · Video</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>How the gate behaves</h2>
+      <p>Three permissions, asked once, in this order. The rules below are Android's, not ours.</p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>State</th><th>What the app shows</th><th>How it is detected</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Never asked</b></td>
+            <td>The Permissions screen, then the system dialogs one after another.</td>
+            <td>First launch, or no grant recorded.</td>
+          </tr>
+          <tr>
+            <td><b>Denied once</b></td>
+            <td>The Blocked screen, with <b>Try again</b> instead of <b>Open settings</b> — Android will still ask.</td>
+            <td><code>shouldShowRequestPermissionRationale</code> is true.</td>
+          </tr>
+          <tr>
+            <td><b>Denied for good</b></td>
+            <td>The Blocked screen with <b>Open settings</b>, landing on this app's page.</td>
+            <td>Rationale false after a denial. <code>ACTION_APPLICATION_DETAILS_SETTINGS</code>, <code>package:</code> uri.</td>
+          </tr>
+          <tr>
+            <td><b>Returning from settings</b></td>
+            <td>Re-checks on resume and moves on by itself. No "I've done it" button to tap.</td>
+            <td><code>onResume</code> → re-check → continue.</td>
+          </tr>
+          <tr>
+            <td><b>Revoked later</b></td>
+            <td>The same Blocked screen, on the next launch or the next call.</td>
+            <td>Android restarts the process when permissions change.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note"><span class="mark-i">○</span><div><b>Notifications is only runtime from API 33</b><p>minSdk is 30, so on Android 11 and 12 <code>POST_NOTIFICATIONS</code> is granted at install and the gate silently counts it as on. The screen shows two rows there, not three.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>Mandatory notifications is the strong choice</b><p>Camera and microphone genuinely make a video call impossible. Notifications only stop <em>incoming</em> calls being announced — with them off you could still place calls, and receive them while the app is open. Blocking the whole app is defensible and simpler to explain, but it is a choice worth making on purpose. Drawn as you asked: all three required.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Motion</h2>
+      <p>The locked spec allows four movements and says nothing else moves. This adds one, and only because it explains something.</p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Moment</th><th>What moves</th><th>Timing</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Splash</b></td>
+            <td>The link draws from one peer to the other, left to right, then the name fades up beneath it. The two dots are already there — it is the connection that arrives.</td>
+            <td><code>520ms · cubic-bezier(.2,.8,.3,1)</code></td>
+          </tr>
+          <tr>
+            <td><b>Leaving the splash</b></td>
+            <td>Straight cut once the endpoint is up. Never a fade — a fade would read as slowness we did not have.</td>
+            <td><code>0ms</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color: var(--muted); font-size: 13.5px; margin-top: 12px;">
+      Reduced motion draws the link already complete. The splash never waits for the animation: if
+      the endpoint is up in 200ms, the splash is gone in 200ms.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>What this needs that we do not have</h2>
+    </div>
+    <div class="notes">
+      <div class="note risk"><span class="mark-i">▲</span><div><b>A launcher icon needs a resource table</b><p><code>android:icon</code> is a reference into <code>resources.arsc</code>, and we have no aapt2 and no resource-table writer — our <code>axml</code> tool emits binary XML only. Until that exists the launcher shows Android's grey placeholder, whatever we draw. The table format is the same chunk-and-string-pool machinery <code>axml</code> already writes, so this is a day of work, not a rewrite.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>So does the system splash</b><p>Android 12+ draws its own splash from <code>windowSplashScreenBackground</code> and <code>windowSplashScreenAnimatedIcon</code> in the app's theme — also resources. Without them the system shows a plain window before ours appears. The in-app splash above needs none of this and can ship first.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>A profile has to cross the wire</b><p>Today nothing about a person travels but their key. A name and a picture need a message in the signalling stream, storage for the peer's copy, and a rule for refreshing it. The picture wants a cap — around 256px and a few tens of kilobytes, re-encoded by us on the way in, never forwarded as the file the user picked, which carries its own metadata. Sending a hash first and the bytes only when the peer does not have that hash keeps a familiar caller from re-sending their face every call.</p></div></div>
+      <div class="note ok"><span class="mark-i">✓</span><div><b>Contacts outgrow a file — rusqlite</b><p>A contact is now a key, a nickname, an advertised name, a picture hash, a favourite flag and a last-called time, which is a table and not a JSON file. <b>rusqlite</b> with bundled SQLite, built through the same clang wrapper that already compiles libopus. Turso's pure-Rust SQLite was the tempting alternative and is the wrong risk here: its own maintainers call it beta and advise against anything mission-critical, and contacts are the one thing in uplink a person cannot regenerate — lose the table and every key they ever collected is gone. Pictures never go in the table: they are files in the app's private directory named by their own hash, and the row holds the hash. Private, not external — a face someone sent you has no business in the gallery, and the same rule already keeps the logs out of public storage. A hash for a filename also means the same picture is stored once however many contacts send it, and a changed picture is a new file rather than an overwrite mid-read.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>And it leaks a little</b><p>Anyone who can call you learns your name and sees your picture, which is more than a key alone told them. That is the cost of a friendlier incoming call, and it is worth knowing it is being spent — it cannot be taken back once someone has it.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>Order this suggests</b><p>Draw the mark as SVG in <code>assets/icons</code> and ship the in-app splash, the permission gate and the first-run screens — all of that works today. The profile needs protocol work, so it lands next to the picture-decoding path rather than with the splash. Then the resource table, which buys the launcher icon, the themed monochrome icon and the system splash at once.</p></div></div>
+    </div>
+  </section>
+
+  <footer>
+    Drawn to the tokens in docs/plan.md, in the frames <code>just design-measure</code> reads.
+    Nothing here is built yet.
+  </footer>
+</div>
+
+<script>
+  (function () {
+    draw(document.getElementById('qr'), 0x0e62c812);
+    draw(document.getElementById('qr2'), 0x7d192bb4);
+    draw(document.getElementById('qr3'), 0x0e62c812);
+    function draw(canvas, start) {
+    if (!canvas || !canvas.getContext) return;
+    var size = 29, ctx = canvas.getContext('2d'), seed = start;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#0E151E';
+    function rand() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; }
+    function finder(x, y) {
+      ctx.fillRect(x, y, 7, 1); ctx.fillRect(x, y + 6, 7, 1);
+      ctx.fillRect(x, y, 1, 7); ctx.fillRect(x + 6, y, 1, 7);
+      ctx.fillRect(x + 2, y + 2, 3, 3);
+    }
+    for (var y = 0; y < size; y++) {
+      for (var x = 0; x < size; x++) {
+        var inFinder = (x < 8 && y < 8) || (x > size - 9 && y < 8) || (x < 8 && y > size - 9);
+        if (!inFinder && rand() > 0.52) { ctx.fillRect(x, y, 1, 1); }
+      }
+    }
+    finder(0, 0); finder(size - 7, 0); finder(0, size - 7);
+    ctx.fillRect(size - 9, size - 9, 5, 5);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(size - 8, size - 8, 3, 3);
+    ctx.fillStyle = '#0E151E';
+    ctx.fillRect(size - 7, size - 7, 1, 1);
+    }
+  })();
+</script>
+
+</body></html>

@@ -386,6 +386,77 @@
 
   footer { border-top: 1px solid var(--line); padding-top: 22px; color: var(--muted); font-size: 13px; }
 
+  /* ---------- call modes & reconnecting (locked 2026-09-24) ---------- */
+  .status-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .voice {
+    position: absolute; inset: 0; background: var(--app-surface);
+    display: grid; align-content: center; justify-items: center; gap: 10px;
+    padding: 20px 20px 80px; text-align: center;
+  }
+  .voice .face { width: 76px; height: 76px; font-size: 26px; }
+  .voice .who { font-family: Outfit, sans-serif; font-size: 16px; font-weight: 600; }
+  .voice .sub { color: var(--app-muted); font-size: 10.5px; }
+  .voice .sub.lost { color: var(--app-end); font-weight: 600; }
+  .callbar .start { display: flex; gap: 7px; align-items: flex-start; min-width: 0; }
+  .fold {
+    width: 22px; height: 22px; border-radius: 50%; flex: none; padding: 0;
+    border: 1px solid rgba(233, 240, 247, .16); background: rgba(233, 240, 247, .1);
+    color: var(--app-text); display: grid; place-items: center;
+  }
+  .fold svg { width: 12px; height: 12px; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip.route { background: rgba(233, 240, 247, .1); color: var(--app-muted); border-color: rgba(233, 240, 247, .24); }
+  .inline-line { font-size: 9px; color: var(--app-muted); }
+  .flags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+  .flag {
+    display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 5px; border-radius: 999px;
+    background: rgba(4, 8, 13, .62); border: 1px solid rgba(233, 240, 247, .18);
+    color: var(--app-text); font-size: 8.5px; white-space: nowrap;
+  }
+  .flag svg { width: 9px; height: 9px; }
+  .camoff { position: absolute; inset: 0; background: var(--app-raised); display: grid; place-items: center; color: var(--app-muted); }
+  .camoff svg { width: 16px; height: 16px; }
+  .peeroff {
+    position: absolute; inset: 0; background: var(--app-surface);
+    display: grid; align-content: center; justify-items: center; gap: 8px; padding-bottom: 60px;
+  }
+  .peeroff .face { width: 76px; height: 76px; font-size: 26px; }
+  .peeroff .who { font-family: Outfit, sans-serif; font-size: 13px; font-weight: 600; }
+  .video.frozen { filter: grayscale(.5) brightness(.75); }
+  .reconnect {
+    position: absolute; inset: 0; z-index: 3;
+    background: rgba(7, 10, 15, .82);
+    display: grid; align-content: center; justify-items: center; gap: 5px; padding: 0 24px 60px; text-align: center;
+  }
+  .reconnect b { font-family: Outfit, sans-serif; font-size: 14px; font-weight: 600; }
+  .reconnect span { font-size: 9.5px; color: var(--app-muted); max-width: 22ch; }
+  .dots { display: flex; gap: 4px; margin-bottom: 4px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--app-text); animation: dot 1.2s var(--ease) infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; }
+  .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes dot { 0%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .asking {
+    position: absolute; inset-inline: 12px; bottom: 66px; z-index: 5;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 7px 10px; border-radius: 10px;
+    background: rgba(4, 8, 13, .72); border: 1px solid rgba(233, 240, 247, .16);
+    font-size: 9.5px;
+  }
+  .asking button {
+    border: 0; background: none; padding: 0; color: var(--app-beacon);
+    font: 600 9.5px "Public Sans", sans-serif; cursor: pointer;
+  }
+  .sheetwrap {
+    position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, .8);
+    display: grid; align-items: center; padding: 0 12px;
+  }
+  .sheet { background: #FFFFFF; color: #0E151E; border-radius: 10px; padding: 12px; display: grid; gap: 9px; }
+  .sheet h5 { margin: 0; font-family: Outfit, sans-serif; font-size: 13px; font-weight: 600; text-wrap: balance; }
+  .sheet p { font-size: 9.5px; line-height: 1.5; color: #5B6B7D; }
+  .sheet .wide { border-color: rgba(10, 111, 194, .3); background: rgba(10, 111, 194, .1); color: #0A6FC2; }
+  .sheet .wide.primary { background: #0A6FC2; color: #fff; border-color: transparent; }
+  .key.muted-out { opacity: .4; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
@@ -405,6 +476,7 @@
   <nav class="jump">
     <ul>
       <li><a href="#screens">Screens</a></li>
+      <li><a href="#modes">Call modes</a></li>
       <li><a href="#color">Color</a></li>
       <li><a href="#type">Type</a></li>
       <li><a href="#motion">Motion</a></li>
@@ -585,6 +657,540 @@
         <figcaption><b>العربية</b>Mirrored layout, Arabic numerals in the status bar, keys stay left-to-right.</figcaption>
       </figure>
     </div>
+  </section>
+
+  <section id="modes">
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">Roadmap 7e · 7f</span><span class="pill ok">Locked 2026-09-24</span></div>
+      <h2>Call modes &amp; reconnecting</h2>
+      <p>
+        A call can now start as voice, switch to video if both people agree, and keep going when
+        the network drops for a moment. Each camera and each mic can be turned off without ending the
+        call. Every state below says what is happening in words and with an icon, never with colour
+        alone.
+      </p>
+    </div>
+
+    <div class="screens">
+      <!-- 1 · voice, calling -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:03</span><span>5G ▚ 85%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="sub">Calling…</div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" data-toggle="mic" aria-pressed="false" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Voice · calling</b>No camera starts, so the ground is the plain call surface, not a dimmed self-view. Mute and End call only.</figcaption>
+      </figure>
+
+      <!-- 2 · voice, incoming -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:03</span><span>5G ▚ 85%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="pulse"><div class="face rose">N</div></div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="sub">Incoming voice call</div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key end" type="button" aria-label="Decline">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+                <button class="key answer" type="button" aria-label="Answer">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Voice · incoming</b>Same layout as the video ring. Only the line under the name changes, so the camera never turns on as a surprise.</figcaption>
+      </figure>
+
+      <!-- 3 · voice, connected -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="timer">04:12</div>
+                </div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                </div>
+                <div class="chips"><span class="chip route">direct</span><span class="chip">X25519MLKEM768</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" data-toggle="mic" aria-pressed="false" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" data-toggle="speaker" aria-pressed="false" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch to video">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Voice · in a call</b>The avatar holds the middle, and the timer moves under the name. The Video key appears only when their build can switch; otherwise the row is Mute, Speaker, End call.</figcaption>
+      </figure>
+
+      <!-- 4 · your camera off -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="camoff" aria-label="Your camera is off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6H14a2 2 0 0 1 2 2v2l5-3v10"/><path d="M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/><path d="M3 3l18 18"/></svg>
+                </div>
+                <div class="label">Camera off</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">04:12</span></div>
+                </div>
+                <div class="chips"><span class="chip route">direct</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key on" type="button" aria-pressed="true" aria-label="Turn camera on">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6H14a2 2 0 0 1 2 2v2l5-3v10"/><path d="M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/><path d="M3 3l18 18"/></svg>
+                </button>
+                <button class="key muted-out" type="button" aria-label="Switch camera" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Your camera off</b>The Camera key sits beside Mute and fills when the camera is off, as Mute does. The corner card goes dark with the camera-off mark instead of holding the last frame. Switch camera dims.</figcaption>
+      </figure>
+
+      <!-- 5 · their mic muted -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:05</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer">
+                    <span class="name">Noor</span><span class="timer">05:31</span>
+                    <div class="flags">
+                      <span class="flag">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9v3a3 3 0 0 0 5 2.2"/><path d="M15 11V6a3 3 0 0 0-5.6-1.5"/><path d="M5 11a7 7 0 0 0 10.7 6"/><path d="M12 18v3"/><path d="M4 3l16 18"/></svg>
+                        Muted
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip route">direct</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>They muted</b>A pill under their name, with the mic-off icon and the word. Silence alone could be a quiet room or a broken line. This is the full video control row: Mute, Camera, Switch camera, Speaker, End call.</figcaption>
+      </figure>
+
+      <!-- 6 · their camera off -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:06</span><span>5G ▚ 84%</span></div>
+            <div class="stage">
+              <div class="peeroff">
+                <div class="face rose">N</div>
+                <div class="who">Noor</div>
+                <span class="flag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6H14a2 2 0 0 1 2 2v2l5-3v10"/><path d="M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/><path d="M3 3l18 18"/></svg>
+                  Camera off
+                </span>
+              </div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer">
+                    <span class="name">Noor</span><span class="timer">06:02</span>
+                    <div class="flags">
+                      <span class="flag">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9v3a3 3 0 0 0 5 2.2"/><path d="M15 11V6a3 3 0 0 0-5.6-1.5"/><path d="M5 11a7 7 0 0 0 10.7 6"/><path d="M12 18v3"/><path d="M4 3l16 18"/></svg>
+                        Muted
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip route">direct</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Their camera off</b>Their avatar and name replace the picture, with a Camera off pill. A frozen frame would look like a network fault. Their Muted pill stays where it always sits.</figcaption>
+      </figure>
+
+      <!-- 7 · asked to switch -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:07</span><span>5G ▚ 83%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div><div class="who">Noor</div><div class="timer">07:40</div></div>
+              </div>
+              <div class="sheetwrap">
+                <div class="sheet" role="dialog" aria-label="Switch to video?">
+                  <h5>Noor wants to switch to video</h5>
+                  <p>Your camera turns on only if you agree. You can turn it off again at any time.</p>
+                  <div class="wide primary">Switch to video</div>
+                  <div class="wide">Keep voice</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Asked to switch</b>A sheet, because it is a decision. Nothing turns on until you answer. Back means Keep voice. The sheet follows the app theme, like every other sheet.</figcaption>
+      </figure>
+
+      <!-- 8 · asking to switch -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:07</span><span>5G ▚ 83%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div><div class="who">Noor</div><div class="timer">07:40</div></div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                </div>
+                <div class="chips"><span class="chip route">direct</span><span class="chip">X25519MLKEM768</span></div>
+              </div>
+              <div class="asking" role="status">
+                <span>Asking Noor to switch to video…</span>
+                <button type="button">Cancel</button>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key on" type="button" aria-pressed="true" aria-label="Asking to switch to video">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Asking to switch</b>A bar above the keys says who is being asked, with Cancel. The Video key stays filled while the question is open. When they agree, the screen changes over in place: same call, same timer.</figcaption>
+      </figure>
+
+      <!-- 9 · kept voice -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:08</span><span>5G ▚ 83%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="timer">08:02</div>
+                  <div class="inline-line" style="margin-top: 4px;">Noor kept it voice</div>
+                </div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                </div>
+                <div class="chips"><span class="chip route">direct</span><span class="chip">X25519MLKEM768</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch to video">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Kept voice</b>Their answer stays as a line under the timer until you ask again. It does not vanish like a toast. The Video key goes back to normal.</figcaption>
+      </figure>
+
+      <!-- 10 · reconnecting, video -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:09</span><span>LTE ▚ 83%</span></div>
+            <div class="stage">
+              <div class="video frozen"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="reconnect" role="status">
+                <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <b>Reconnecting…</b>
+                <span>The call carries on when the network is back.</span>
+              </div>
+              <div class="callbar" style="z-index: 4;">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">09:14</span></div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Reconnecting · video</b>After about 2 s with nothing arriving, their last frame dims and desaturates under the message. The timer keeps running, and every key still works. The route chip hides until a path is back.</figcaption>
+      </figure>
+
+      <!-- 11 · reconnecting, voice -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:09</span><span>LTE ▚ 83%</span></div>
+            <div class="stage">
+              <div class="voice" aria-hidden="true"></div>
+              <div class="reconnect" role="status" style="background: transparent;">
+                <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <b>Reconnecting…</b>
+                <span>The call carries on when the network is back.</span>
+              </div>
+              <div class="callbar" style="z-index: 4;">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">09:14</span></div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key muted-out" type="button" aria-label="Switch to video" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Reconnecting · voice</b>The message takes the middle where the avatar was. The name and running timer move up to the bar. The Video key dims, because there is no one to ask until the call is back.</figcaption>
+      </figure>
+
+      <!-- 12 · connection lost -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:10</span><span>▚ 83%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="sub lost">Connection lost</div>
+                  <div class="timer" style="margin-top: 2px;">09:14</div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Close">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+                <button class="key answer" type="button" aria-label="Call again">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Connection lost</b>After 30 s of trying, the call screen stays up for a few seconds to say so, with the call's final length. It is the same pause a call that never connected gets. Call again redials in the same mode; Close or waiting returns to where you were.</figcaption>
+      </figure>
+    </div>
+
+    <div class="cards" style="margin-top: 26px;">
+      <div class="card">
+        <h3>Fold away moves to the top bar</h3>
+        <p>
+          The camera toggle makes a sixth key, and six don't fit a 360dp row: 5 × 49 + 64 + 5 × 13 = 374dp.
+          So Fold away becomes a small chevron at the start of the top bar on every connected call,
+          voice or video. That is where it points: the call folds down and away. The bottom row keeps
+          at most five keys.
+        </p>
+      </div>
+      <div class="card">
+        <h3>State over their video</h3>
+        <ul>
+          <li><b>Muted</b>: a pill under their name and timer, with the mic-off icon</li>
+          <li><b>Camera off</b>: their avatar and name replace the picture, with a pill</li>
+          <li>Pills sit on a dark glass fill, so they read over any frame</li>
+          <li>Both come from a state message they send, never guessed from traffic stopping</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Reconnecting, in time</h3>
+        <ul>
+          <li><b>~2 s</b> with no media: "Reconnecting…" over the call</li>
+          <li><b>Up to 30 s</b>: the call re-dials by itself; timer and log entry carry on</li>
+          <li><b>Back</b>: the message goes, and video restarts on a keyframe</li>
+          <li><b>30 s passed</b>: "Connection lost", its own outcome in the log</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>New strings</h3>
+        <ul>
+          <li>Incoming voice call · Calling…</li>
+          <li>Muted · Camera off · Fold away</li>
+          <li>{name} wants to switch to video · Switch to video · Keep voice</li>
+          <li>Your camera turns on only if you agree. You can turn it off again at any time.</li>
+          <li>Asking {name} to switch to video… · Cancel · {name} kept it voice</li>
+          <li>Reconnecting… · The call carries on when the network is back.</li>
+          <li>Connection lost · Call again · Close</li>
+        </ul>
+      </div>
+    </div>
+    <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
+      Motion added: the three reconnecting dots, 1.2 s loop, staggered 200 ms. Reduced motion shows them still.
+      Changing from voice to video uses the existing answer transition: the self-view grows in from full frame
+      and folds into its corner.
+    </p>
   </section>
 
   <section id="color">

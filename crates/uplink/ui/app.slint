@@ -20,7 +20,7 @@ import {
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
-import { ConfirmSheet, NameSheet, NoticeSheet, RelaySheet, ToastCard } from "sheets.slint";
+import { ConfirmSheet, NameSheet, NoticeSheet, RelaySheet, ToastCard, VideoAskSheet } from "sheets.slint";
 import { ContactPage, PeoplePage } from "people.slint";
 import { CallPage, CallsPage } from "calls.slint";
 import { ConnectPage, ScanPage } from "connect.slint";
@@ -92,7 +92,6 @@ export component App inherits Window {
     in property <string> peer-name;
     in property <string> peer-initial: "?";
     in property <string> call-timer;
-    in property <string> key-exchange;
     in property <[ContactItem]> contacts;
     in property <[CallItem]> calls;
     in property <bool> online: false;
@@ -137,8 +136,23 @@ export component App inherits Window {
     // when there is nothing to show.
     in property <length> contacts-reveal: -1px;
     in property <CallState> call-state: CallState.idle;
+    // How the call in progress runs, and what each side is doing with it.
+    in property <bool> call-voice: false;
+    in-out property <bool> camera-on: true;
+    in property <bool> peer-mic-off: false;
+    in property <bool> peer-camera-off: false;
+    in property <bool> call-reconnecting: false;
+    in-out property <bool> video-asking: false;
+    in-out property <bool> video-asked: false;
+    in property <bool> kept-voice: false;
 
-    callback call(string);
+    // Whether as voice.
+    callback call(string, bool);
+    callback toggle-camera();
+    callback ask-video(bool);
+    callback answer-video(bool);
+    callback call-again();
+    callback close-call();
     callback accept();
     callback reject();
     callback hangup();
@@ -229,7 +243,7 @@ export component App inherits Window {
     // A call that ends while folded unfolds, so the next one opens on the call screen. These
     // sit outside the scope below because `changed` belongs to whatever declares it.
     changed call-state => {
-        if (self.call-state == CallState.idle) {
+        if (self.call-state == CallState.idle || self.call-state == CallState.lost) {
             self.call-folded = false;
         }
     }
@@ -271,7 +285,7 @@ export component App inherits Window {
                     reveal: root.contacts-reveal;
                     selecting: root.selecting;
                     selected-count: root.selected-count;
-                    call(id) => { root.call(id); }
+                    call(id, voice) => { root.call(id, voice); }
                     open(id) => { root.open-contact-page(id); }
                     connect => { root.screen = Screen.connect; }
                     select(id) => { root.toggle-selected(id); }
@@ -284,7 +298,7 @@ export component App inherits Window {
                     calls: root.calls;
                     selecting: root.selecting-calls;
                     selected-count: root.selected-calls-count;
-                    call(id) => { root.call(id); }
+                    call(id, voice) => { root.call(id, voice); }
                     clear => { root.confirming = Confirm.clear-calls; }
                     select(entry) => { root.toggle-call-selected(entry); }
                     open(entry) => { root.show-call(entry); }
@@ -342,13 +356,19 @@ export component App inherits Window {
             peer-name: root.peer-name;
             peer-initial: root.peer-initial;
             timer: root.call-timer;
-            key-exchange: root.key-exchange;
             route: root.call-route;
             video-failed: root.video-failed;
             state: root.call-state;
             swapped <=> root.swapped;
             mic-on: root.mic-on;
             speaker-on: root.speaker-on;
+            voice: root.call-voice;
+            camera-on: root.camera-on;
+            peer-mic-off: root.peer-mic-off;
+            peer-camera-off: root.peer-camera-off;
+            reconnecting: root.call-reconnecting;
+            asking: root.video-asking;
+            kept-voice: root.kept-voice;
             top-inset: root.safe-area-insets.top;
             bottom-inset: root.safe-area-insets.bottom;
             accept => { root.accept(); }
@@ -356,8 +376,21 @@ export component App inherits Window {
             hangup => { root.hangup(); }
             toggle-mic => { root.toggle-mic(); }
             toggle-speaker => { root.toggle-speaker(); }
+            toggle-camera => { root.toggle-camera(); }
             flip-camera => { root.flip-camera(); }
             minimise => { root.call-folded = true; }
+            ask-video(ask) => { root.ask-video(ask); }
+            call-again => { root.call-again(); }
+            close => { root.close-call(); }
+        }
+
+        // Their ask to switch to video, over the call, whether it is up or folded away.
+        if root.video-asked && root.call-state == CallState.connected : VideoAskSheet {
+            name: root.peer-name;
+            answer(accept) => {
+                root.video-asked = false;
+                root.answer-video(accept);
+            }
         }
 
         // The folded call, over the pages and the tab bar but under anything that wants an
@@ -428,8 +461,8 @@ export component App inherits Window {
             top-inset: root.safe-area-insets.top;
             bottom-inset: root.safe-area-insets.bottom;
             call: call;
-            call-back => {
-                root.call(call.peer);
+            call-back(voice) => {
+                root.call(call.peer, voice);
                 root.open-call = [];
             }
             add => { root.pending-key = [call.peer]; }
@@ -457,7 +490,7 @@ export component App inherits Window {
             bottom-inset: root.safe-area-insets.bottom;
             contact: contact;
             draft <=> root.new-name;
-            call => { root.call(contact.id); }
+            call(voice) => { root.call(contact.id, voice); }
             toggle-favourite => { root.set-favourite(contact.id, !contact.favourite); }
             rename(name) => { root.rename-contact(contact.id, name); }
             remove => { root.confirming = Confirm.remove-contact; }

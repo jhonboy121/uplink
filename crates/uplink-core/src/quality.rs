@@ -134,6 +134,12 @@ pub struct Quality {
     pub v4_path_opened: bool,
     #[prost(bool, tag = "16")]
     pub v6_path_opened: bool,
+    /// Times the connection was lost mid-call, and times the call carried on over a new one: what
+    /// tells a bad call from a bad network afterwards.
+    #[prost(uint32, tag = "17")]
+    pub drops: u32,
+    #[prost(uint32, tag = "18")]
+    pub rejoins: u32,
 }
 
 impl Quality {

@@ -25,9 +25,15 @@ The first `Signal` each way carries a `Hello`: the caller's `Offer`, and the cal
 
 ```
 Signal (oneof kind)            1 Offer(Hello)  2 Accept(Hello)  3 Reject  4 Busy  5 Hangup
-                               6 KeyframeRequest  7 Incompatible(Hello)
+                               6 KeyframeRequest  7 Incompatible(Hello)  8 Media(MediaState)
+                               9 VideoAsk(VideoAsk)  10 VideoAnswer(VideoAnswer)
 Hello                          1 protocol: uint32  2 app: string
                                3 supports: repeated Capability  4 requires: repeated Capability
+                               5 setup: Setup (offers only)
+Setup                          1 call: uint64  2 voice: bool  3 resume: bool
+MediaState                     1 mic_off: bool  2 camera_off: bool
+VideoAsk                       1 withdrawn: bool
+VideoAnswer                    1 accepted: bool
 StreamHeader (oneof kind)      1 Video(FrameHeader)
 FrameHeader                    1 sequence: uint64  2 capture_micros: uint64  3 keyframe: bool
                                4 config: bool  5 turns: uint32
@@ -36,6 +42,17 @@ AudioHeader                    1 sequence: uint64  2 capture_micros: uint64
 ```
 
 Unit signals (`Reject`, `Busy`, …) carry an empty message, so each can grow fields later.
+
+**Calls that survive a drop.** A lost connection (idle timeout or reset, never a close) starts a
+30 s grace. The side with the lower key re-dials with an `Offer` whose setup names the same `call`
+and sets `resume`; the other side's engine hands it to the call in progress, which answers `Accept`
+and closes the old connection with `6`. A resume offer that names no call in progress is answered
+`Busy` (another call is up) or `Hangup` (nothing is), and never rings. Media keeps its sequence
+numbers across the new connection, and the first video frame on it is a keyframe.
+
+**For now both phones are assumed to run the same build** (2026-09-24): voice calls, the video ask
+and resuming are not gated by capabilities. Before a build with them meets an older one in the
+field, they each get one, per rule 4.
 
 ## Capabilities
 
@@ -53,7 +70,7 @@ Nothing is required yet; the first feature an older build would break goes into 
 ## Close codes
 
 QUIC application error codes: `0` hang-up, `1` rejected, `2` busy, `3` protocol error,
-`4` not post-quantum, `5` incompatible.
+`4` not post-quantum, `5` incompatible, `6` rejoined (the call carried on over a newer connection).
 
 ## Rules
 

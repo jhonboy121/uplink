@@ -3,7 +3,7 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ContactDetail, ContactItem, Group, Unit } from "types.slint";
-import { AppBar, BarPill, BigAvatar, Brand, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
+import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
 import { PersonRow } from "list.slint";
 
 export component PeoplePage inherits Rectangle {
@@ -14,7 +14,8 @@ export component PeoplePage inherits Rectangle {
     in property <bool> online;
     in property <bool> selecting;
     in property <int> selected-count;
-    callback call(string);
+    // Whether as voice.
+    callback call(string, bool);
     callback open(string);
     callback connect();
     callback select(string);
@@ -127,7 +128,8 @@ export component PeoplePage inherits Rectangle {
                             }
                             root.select(contact.id);
                         }
-                        call => { root.call(contact.id); }
+                        both: true;
+                        call(voice) => { root.call(contact.id, voice); }
                         RowName { text: contact.name; }
                         // When they were last called is prose, not a code, so it takes the body
                         // face rather than the monospace one.
@@ -157,7 +159,8 @@ export component ContactPage inherits Rectangle {
     in property <length> bottom-inset;
     in-out property <string> draft;
     in-out property <bool> renaming;
-    callback call();
+    // Whether as voice.
+    callback call(bool);
     callback toggle-favourite();
     callback rename(string);
     callback remove();
@@ -203,10 +206,9 @@ export component ContactPage inherits Rectangle {
                         overflow: elide;
                     }
                     Fingerprint { lines: root.contact.fingerprint; }
-                    if !root.renaming : Wide {
-                        text: @tr("Call");
-                        primary: true;
-                        clicked => { root.call(); }
+                    // Video stays the filled one: it is still the app's default call.
+                    if !root.renaming : CallPair {
+                        call(voice) => { root.call(voice); }
                     }
                     if root.renaming : LineEdit {
                         placeholder-text: @tr("Their name");

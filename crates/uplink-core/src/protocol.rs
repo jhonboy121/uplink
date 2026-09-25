@@ -38,6 +38,8 @@ pub const CLOSE_PROTOCOL: VarInt = VarInt::from_u32(3);
 pub const CLOSE_NOT_POST_QUANTUM: VarInt = VarInt::from_u32(4);
 /// One side requires a capability the other does not have.
 pub const CLOSE_INCOMPATIBLE: VarInt = VarInt::from_u32(5);
+/// The call carried on over a newer connection, and this one is no longer needed.
+pub const CLOSE_REJOINED: VarInt = VarInt::from_u32(6);
 
 /// Something a build can take part in. A new one takes the next number; a number is never reused,
 /// not even once its feature is gone.
@@ -70,12 +72,40 @@ pub struct Hello {
     pub supports: Vec<i32>,
     #[prost(enumeration = "Capability", repeated, tag = "4")]
     pub requires: Vec<i32>,
+    /// The call an offer is for; absent from answers.
+    #[prost(message, optional, tag = "5")]
+    pub setup: Option<Setup>,
+}
+
+/// One call, as its offer describes it.
+#[derive(Clone, Copy, PartialEq, Eq, Message)]
+pub struct Setup {
+    /// Names the call, so a re-dial after a drop can say which call it rejoins.
+    #[prost(uint64, tag = "1")]
+    pub call: u64,
+    /// Placed as voice alone: no camera, and no video streams.
+    #[prost(bool, tag = "2")]
+    pub voice: bool,
+    /// Rejoins `call` after its connection dropped, rather than ringing.
+    #[prost(bool, tag = "3")]
+    pub resume: bool,
 }
 
 impl Hello {
     pub fn ours(app: &str) -> Self {
         let numbers = |capabilities: &[Capability]| capabilities.iter().map(|&c| i32::from(c)).collect();
-        Self { protocol: PROTOCOL, app: app.to_owned(), supports: numbers(&SUPPORTED), requires: numbers(&REQUIRED) }
+        Self {
+            protocol: PROTOCOL,
+            app: app.to_owned(),
+            supports: numbers(&SUPPORTED),
+            requires: numbers(&REQUIRED),
+            setup: None,
+        }
+    }
+
+    /// This build's hello as the offer for `setup`.
+    pub fn offer(&self, setup: Setup) -> Self {
+        Self { setup: Some(setup), ..self.clone() }
     }
 
     /// Whether `other` needs something this side cannot do.
@@ -106,9 +136,32 @@ pub fn behind(ours: &Hello, theirs: &Hello) -> Option<Behind> {
 #[derive(Clone, Copy, PartialEq, Message)]
 pub struct Empty {}
 
+/// Whether each side's mic and camera are on, sent whenever either changes. The defaults are what
+/// a build that never sends it has: both on.
+#[derive(Clone, Copy, PartialEq, Eq, Message)]
+pub struct MediaState {
+    #[prost(bool, tag = "1")]
+    pub mic_off: bool,
+    #[prost(bool, tag = "2")]
+    pub camera_off: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Message)]
+struct VideoAsk {
+    /// The asker changed their mind before it was answered.
+    #[prost(bool, tag = "1")]
+    withdrawn: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Message)]
+struct VideoAnswer {
+    #[prost(bool, tag = "1")]
+    accepted: bool,
+}
+
 #[derive(Clone, PartialEq, Message)]
 struct WireSignal {
-    #[prost(oneof = "SignalKind", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "SignalKind", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
     kind: Option<SignalKind>,
 }
 
@@ -129,6 +182,13 @@ enum SignalKind {
     /// Instead of ringing, or instead of carrying on after an answer: the two cannot call.
     #[prost(message, tag = "7")]
     Incompatible(Hello),
+    /// An older build ignores it, and shows a muted mic or a stopped camera as it always has.
+    #[prost(message, tag = "8")]
+    Media(MediaState),
+    #[prost(message, tag = "9")]
+    VideoAsk(VideoAsk),
+    #[prost(message, tag = "10")]
+    VideoAnswer(VideoAnswer),
 }
 
 /// One message on the signalling stream.
@@ -142,6 +202,14 @@ pub enum Signal {
     /// The receiver lost a reference frame and needs a new keyframe.
     KeyframeRequest,
     Incompatible(Hello),
+    /// The sender's mic or camera changed.
+    Media(MediaState),
+    /// Asks to switch a voice call to video.
+    AskVideo,
+    /// Takes back an ask not yet answered.
+    WithdrawVideo,
+    /// The answer to [`Self::AskVideo`]: accepted or kept voice.
+    AnswerVideo(bool),
     /// A kind a newer build sent that this one does not know. Ignored, never an error.
     Unknown,
 }
@@ -156,6 +224,10 @@ impl From<Signal> for WireSignal {
             Signal::Hangup => Some(SignalKind::Hangup(Empty {})),
             Signal::KeyframeRequest => Some(SignalKind::KeyframeRequest(Empty {})),
             Signal::Incompatible(hello) => Some(SignalKind::Incompatible(hello)),
+            Signal::Media(state) => Some(SignalKind::Media(state)),
+            Signal::AskVideo => Some(SignalKind::VideoAsk(VideoAsk { withdrawn: false })),
+            Signal::WithdrawVideo => Some(SignalKind::VideoAsk(VideoAsk { withdrawn: true })),
+            Signal::AnswerVideo(accepted) => Some(SignalKind::VideoAnswer(VideoAnswer { accepted })),
             Signal::Unknown => None,
         };
         Self { kind }
@@ -172,6 +244,10 @@ impl From<WireSignal> for Signal {
             Some(SignalKind::Hangup(_)) => Self::Hangup,
             Some(SignalKind::KeyframeRequest(_)) => Self::KeyframeRequest,
             Some(SignalKind::Incompatible(hello)) => Self::Incompatible(hello),
+            Some(SignalKind::Media(state)) => Self::Media(state),
+            Some(SignalKind::VideoAsk(VideoAsk { withdrawn: false })) => Self::AskVideo,
+            Some(SignalKind::VideoAsk(VideoAsk { withdrawn: true })) => Self::WithdrawVideo,
+            Some(SignalKind::VideoAnswer(VideoAnswer { accepted })) => Self::AnswerVideo(accepted),
             None => Self::Unknown,
         }
     }
@@ -309,6 +385,12 @@ mod tests {
             Signal::Hangup,
             Signal::KeyframeRequest,
             Signal::Incompatible(hello()),
+            Signal::Offer(hello().offer(Setup { call: 7, voice: true, resume: false })),
+            Signal::Media(MediaState { mic_off: true, camera_off: false }),
+            Signal::AskVideo,
+            Signal::WithdrawVideo,
+            Signal::AnswerVideo(true),
+            Signal::AnswerVideo(false),
         ];
         for signal in all {
             let decoded: Signal = round_trip(&WireSignal::from(signal.clone()))?.into();

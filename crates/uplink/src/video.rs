@@ -19,6 +19,7 @@ use uplink_core::media::{Frame, MediaStats, VideoSender};
 use crate::tasks::Tasks;
 
 const REMOTE_MAX_IMAGES: i32 = 4;
+const KEYFRAME_QUEUE: usize = 1;
 
 /// The video half of a call's [`uplink_core::media::MediaSession`].
 pub struct VideoParts {
@@ -31,6 +32,8 @@ pub struct VideoParts {
 /// Field order is drop order: tasks stop first, then the shown image, then its reader.
 pub struct CallVideo {
     tasks: Tasks,
+    /// Our own ask for a keyframe: the camera coming back on after being off.
+    keyframe: mpsc::Sender<()>,
     pub shown: Option<Image>,
     pub remote: ImageReader,
     encoder_window: NativeWindow,
@@ -70,8 +73,17 @@ impl CallVideo {
         let mut tasks = Tasks::new(runtime);
         let cancel = tasks.cancel_token();
         tasks.spawn(decode(decoder, decoder_events, incoming_video, Arc::clone(&remote_turns), cancel.clone()));
-        tasks.spawn(encode(encoder, encoder_events, sender, keyframe_requests, Arc::clone(&local_turns), cancel));
-        Ok(Self { tasks, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+        let (keyframe, ours) = mpsc::channel(KEYFRAME_QUEUE);
+        let asks = Asks { theirs: keyframe_requests, ours };
+        tasks.spawn(encode(encoder, encoder_events, sender, asks, Arc::clone(&local_turns), cancel));
+        Ok(Self { tasks, keyframe, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+    }
+
+    /// The next frame is a keyframe, so the peer's decoder has something to start again from.
+    pub fn request_keyframe(&self) {
+        if self.keyframe.try_send(()).is_err() {
+            tracing::debug!("keyframe already asked for");
+        }
     }
 
     /// The surface the camera feeds for the peer.
@@ -112,21 +124,32 @@ fn routine(event: &Event, codec: &str) -> bool {
     true
 }
 
+/// Who can ask the encoder for a keyframe: the peer, and this side.
+struct Asks {
+    theirs: mpsc::Receiver<()>,
+    ours: mpsc::Receiver<()>,
+}
+
 async fn encode(
     mut encoder: Encoder,
     mut events: Events,
     mut sender: VideoSender,
-    mut keyframe_requests: mpsc::Receiver<()>,
+    mut asks: Asks,
     turns: Arc<AtomicU8>,
     cancel: CancellationToken,
 ) {
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
-            Some(()) = keyframe_requests.recv() => {
+            Some(()) = asks.theirs.recv() => {
                 match encoder.request_keyframe() {
                     Ok(()) => tracing::debug!("keyframe requested by peer"),
                     Err(e) => tracing::warn!("keyframe request: {e}"),
+                }
+            }
+            Some(()) = asks.ours.recv() => {
+                if let Err(e) = encoder.request_keyframe() {
+                    tracing::warn!("keyframe request: {e}");
                 }
             }
             event = events.recv() => match event {

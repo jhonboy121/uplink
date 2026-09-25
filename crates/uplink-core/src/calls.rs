@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{OptionalExtension, params};
 
 use crate::db::Db;
-use crate::node::EndReason;
+use crate::node::{EndReason, Mode};
 use crate::quality::Quality;
 use crate::{EndpointId, Error};
 /// Enough to look back over, and small enough that the screen never pages.
@@ -31,6 +31,8 @@ pub enum Outcome {
     Unreachable,
     /// One side needs an update before the two can call.
     Incompatible,
+    /// Answered, and then the network went and did not come back in time.
+    Lost,
     /// The network gave out, or the call failed for a reason worth reporting.
     Failed,
 }
@@ -40,12 +42,15 @@ impl Outcome {
     /// depending on which way the call went and whether anyone picked up; nothing else does.
     pub const fn of(reason: &EndReason, incoming: bool, answered: bool) -> Self {
         // A call someone picked up was answered, however it ended: a connection dropped a minute
-        // in is not a call that "did not connect".
+        // in is not a call that "did not connect". Losing it is still worth saying.
         if answered {
-            return Self::Answered;
+            return match reason {
+                EndReason::ConnectionLost => Self::Lost,
+                _ => Self::Answered,
+            };
         }
         match reason {
-            EndReason::Busy | EndReason::Failed(_) => Self::Failed,
+            EndReason::Busy | EndReason::Failed(_) | EndReason::ConnectionLost => Self::Failed,
             EndReason::Incompatible { .. } => Self::Incompatible,
             EndReason::DialTimeout => Self::Unreachable,
             EndReason::NoAnswer => Self::NoAnswer,
@@ -74,8 +79,14 @@ impl Outcome {
             Self::NoAnswer => "no-answer",
             Self::Unreachable => "unreachable",
             Self::Incompatible => "incompatible",
+            Self::Lost => "lost",
             Self::Failed => "failed",
         }
+    }
+
+    /// Answered, however it ended.
+    pub const fn answered(self) -> bool {
+        matches!(self, Self::Answered | Self::Lost)
     }
 
     /// Anything unrecognised — a row from a newer build — reads as failed rather than being
@@ -90,6 +101,7 @@ impl Outcome {
             "no-answer" => Self::NoAnswer,
             "unreachable" => Self::Unreachable,
             "incompatible" => Self::Incompatible,
+            "lost" => Self::Lost,
             _ => Self::Failed,
         }
     }
@@ -100,9 +112,13 @@ pub struct CallRecord {
     pub peer: EndpointId,
     pub incoming: bool,
     pub outcome: Outcome,
+    /// How it was placed. Calls logged before voice calls read as video, which they were.
+    pub mode: Mode,
     pub at: SystemTime,
     /// Only for a call that was answered.
     pub duration: Option<Duration>,
+    /// How far into a voice call both sides agreed to switch to video.
+    pub video_from: Option<Duration>,
     /// Only for a call that was answered, and only on calls logged since this was recorded.
     pub traffic: Option<Traffic>,
     /// How it went, for an answered call; see [`crate::quality`].
@@ -146,11 +162,17 @@ pub struct CallLog {
 }
 
 /// What every read selects, in the order [`read_row`] takes it.
-const COLUMNS: &str = "id, peer, incoming, outcome, at, seconds, sent, received, quality";
+const COLUMNS: &str = "id, peer, incoming, outcome, at, seconds, sent, received, quality, voice, video_at";
 
 /// Columns added after the table first shipped, with their types. `CREATE TABLE IF NOT EXISTS`
 /// leaves an existing table as it was, so these are added to it on open when missing.
-const ADDED: [(&str, &str); 3] = [("sent", "INTEGER"), ("received", "INTEGER"), ("quality", "BLOB")];
+const ADDED: [(&str, &str); 5] = [
+    ("sent", "INTEGER"),
+    ("received", "INTEGER"),
+    ("quality", "BLOB"),
+    ("voice", "INTEGER"),
+    ("video_at", "INTEGER"),
+];
 
 /// A row as [`COLUMNS`] reads it, or `None` for one whose key no longer parses.
 fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
@@ -170,8 +192,10 @@ fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
         peer: peer_id,
         incoming: row.get(2)?,
         outcome: Outcome::parse(&row.get::<_, String>(3)?),
+        mode: if row.get::<_, Option<bool>>(9)?.unwrap_or_default() { Mode::Voice } else { Mode::Video },
         at: UNIX_EPOCH + Duration::from_secs(unsigned(Some(row.get(4)?)).unwrap_or_default()),
         duration: unsigned(row.get(5)?).map(Duration::from_secs),
+        video_from: unsigned(row.get(10)?).map(Duration::from_secs),
         traffic: sent.zip(received).map(|(sent, received)| Traffic { sent, received }),
         quality,
     };
@@ -191,7 +215,9 @@ impl CallLog {
                      seconds  INTEGER,
                      sent     INTEGER,
                      received INTEGER,
-                     quality  BLOB
+                     quality  BLOB,
+                     voice    INTEGER,
+                     video_at INTEGER
                  );
                  CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)",
             )?;
@@ -215,10 +241,11 @@ impl CallLog {
         let signed = |bytes: u64| i64::try_from(bytes).unwrap_or(i64::MAX);
         let (sent, received) = record.traffic.map(|t| (signed(t.sent), signed(t.received))).unzip();
         let quality = record.quality.as_ref().map(Quality::to_bytes);
+        let video_at = record.video_from.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         self.db.with(|db| {
             db.execute(
-                "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality, voice, video_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     record.peer.to_string(),
                     record.incoming,
@@ -227,7 +254,9 @@ impl CallLog {
                     seconds,
                     sent,
                     received,
-                    quality
+                    quality,
+                    record.mode == Mode::Voice,
+                    video_at
                 ],
             )?;
             // Trimmed here rather than on a timer: the log only grows when a call ends.
@@ -301,8 +330,10 @@ mod tests {
             peer: SecretKey::generate().public(),
             incoming,
             outcome,
+            mode: Mode::Video,
             at,
             duration: None,
+            video_from: None,
             traffic: None,
             quality: None,
         }
@@ -316,6 +347,21 @@ mod tests {
         assert_eq!(Outcome::of(&EndReason::RemoteHangup, true, true), Outcome::Answered);
         assert_eq!(Outcome::of(&EndReason::Declined, true, false), Outcome::Declined);
         assert_eq!(Outcome::of(&EndReason::Failed("connection lost".into()), false, true), Outcome::Answered);
+        assert_eq!(Outcome::of(&EndReason::ConnectionLost, false, true), Outcome::Lost);
+        assert!(Outcome::Lost.answered());
+    }
+
+    #[test]
+    fn a_voice_call_that_became_video_survives_the_round_trip() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let log = CallLog::open(Db::open(dir.path())?)?;
+        let mut call = record(false, Outcome::Lost, SystemTime::now());
+        call.mode = Mode::Voice;
+        call.video_from = Some(Duration::from_secs(192));
+        log.record(&call)?;
+        let back = &log.recent(1)?[0].call;
+        assert_eq!((back.mode, back.video_from, back.outcome), (Mode::Voice, call.video_from, Outcome::Lost));
+        Ok(())
     }
 
     #[test]

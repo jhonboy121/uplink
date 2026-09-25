@@ -56,6 +56,15 @@ export global Theme {
     out property <color> under-video: #070A0F;
     out property <color> answer: #32C97A;
     out property <color> end-call: #FF5252;
+    out property <color> video-raised: #18212C;
+    out property <color> on-video-beacon: #58B6FF;
+    out property <color> key-fill: #E9F0F719;
+    out property <color> key-edge: #E9F0F728;
+    // A state pill over their video: dark glass, so it reads over any frame.
+    out property <color> flag-fill: #04080D9E;
+    out property <color> flag-edge: #E9F0F72D;
+    out property <color> asking-fill: #04080DB7;
+    out property <color> reconnect-scrim: #070A0FD1;
     // One spacing scale: 8, halved to 4 where tight.
     out property <length> gap: 8px;
     out property <length> gap-large: 16px;
@@ -77,6 +86,41 @@ export global Theme {
     out property <length> key-wide: 64px;
     out property <length> key-icon: 22px;
     out property <length> key-gap: 13px;
+    out property <float> key-dimmed: 0.4;
+    // Call modes, measured off the locked design like the rest.
+    out property <length> fold-size: 32px;
+    out property <length> fold-icon: 17px;
+    out property <length> fold-gap: 10px;
+    out property <length> call-bar-gap: 12px;
+    out property <length> chip-gap: 6px;
+    out property <length> flag-height: 28px;
+    out property <length> flag-icon: 13px;
+    out property <length> flag-pad-start: 7px;
+    out property <length> flag-pad-end: 9px;
+    out property <length> flag-gap: 4px;
+    out property <length> flags-top: 7px;
+    out property <length> self-label-height: 26px;
+    out property <length> self-label-pad: 7px;
+    out property <length> camera-off-icon: 23px;
+    out property <length> voice-edge: 29px;
+    out property <length> voice-lift: 116px;
+    out property <length> kept-voice-top: 6px;
+    out property <length> lost-timer-top: 3px;
+    out property <length> peer-off-gap: 12px;
+    out property <length> peer-off-lift: 87px;
+    out property <length> reconnect-edge: 35px;
+    out property <length> reconnect-text: 186px;
+    out property <length> reconnect-gap: 7px;
+    out property <length> dot: 7px;
+    out property <length> dot-gap: 6px;
+    out property <length> dots-under: 6px;
+    out property <duration> dot-cycle: 1200ms;
+    out property <duration> dot-stagger: 200ms;
+    out property <length> asking-height: 45px;
+    out property <length> asking-radius: 15px;
+    out property <length> asking-pad: 15px;
+    // From the keys' top edge to the bar's bottom edge.
+    out property <length> asking-lift: 24px;
     out property <length> call-edge: 19px;
     out property <length> call-top: 15px;
     out property <length> call-bottom: 23px;
@@ -96,6 +140,17 @@ export global Theme {
     // The call log's direction arrow, sized to its line of text.
     out property <length> call-arrow: 15px;
     out property <length> call-arrow-gap: 4px;
+    // A row's two quick calls: a full touch target each, around a smaller ring.
+    out property <length> quick-hit: 48px;
+    out property <length> quick-ring: 35px;
+    out property <length> quick-icon: 16px;
+    // The call log's ring-back pill, which says with its icon which kind it rings.
+    out property <length> icon-pill-width: 35px;
+    out property <length> icon-pill-icon: 15px;
+    // Voice call and Video call side by side, each with its icon.
+    out property <length> pair-gap: 12px;
+    out property <length> wide-icon: 16px;
+    out property <length> wide-icon-gap: 7px;
     // The scanner: the square's share of the screen's shorter side, the dim around it, and
     // the square's outline.
     out property <float> scan-window: 0.7;

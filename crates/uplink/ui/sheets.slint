@@ -86,6 +86,31 @@ export component ConfirmSheet inherits Sheet {
     }
 }
 
+// They asked to switch a voice call to video. A decision, so a sheet: the camera turns on only on
+// a yes, and Back is Keep voice.
+export component VideoAskSheet inherits Sheet {
+    in property <string> name;
+    callback answer(bool);
+
+    SheetTitle {
+        text: @tr("{} wants to switch to video", root.name);
+        overflow: elide;
+    }
+    Prose {
+        text: @tr("Your camera turns on only if you agree. You can turn it off again at any time.");
+        font-size: 0.875rem;
+    }
+    Wide {
+        text: @tr("Switch to video");
+        primary: true;
+        clicked => { root.answer(true); }
+    }
+    Wide {
+        text: @tr("Keep voice");
+        clicked => { root.answer(false); }
+    }
+}
+
 // Naming a key that has just arrived — scanned, opened from an image, or pasted. A sheet over
 // whatever screen you were on, because a key can arrive while you are anywhere and the one
 // thing left to do should not be somewhere else.

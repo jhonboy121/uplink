@@ -666,16 +666,16 @@ impl Platform {
 
     /// Runs the foreground service that lets a call keep the camera and microphone while the app
     /// is in the background. `peer` is who the call's notification names.
-    pub fn set_call_service(&self, running: bool, peer: &str) -> Result<(), Error> {
+    pub fn set_call_service(&self, running: bool, peer: &str, camera: bool) -> Result<(), Error> {
         self.with_context(|env, context| {
             let peer = env.new_string(peer)?;
             env.call_method(
                 context,
                 jni_str!("setCall"),
-                jni_sig!("(ZLjava/lang/String;)V"),
-                &[JValue::Bool(running), JValue::Object(&peer)],
+                jni_sig!("(ZLjava/lang/String;Z)V"),
+                &[JValue::Bool(running), JValue::Object(&peer), JValue::Bool(camera)],
             )?;
-            tracing::debug!(running, "call service");
+            tracing::debug!(running, camera, "call service");
             Ok(())
         })?;
         // The window's half: arming the shrink, and dismissing it when there is nothing to watch.

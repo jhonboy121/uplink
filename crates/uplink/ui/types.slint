@@ -6,7 +6,9 @@
 
 export enum Screen { people, calls, connect, settings }
 
-export enum CallState { idle, dialing, ringing, incoming, connected }
+// `lost`: the call is over because the network did not come back, and the screen stays a moment
+// to say so.
+export enum CallState { idle, dialing, ringing, incoming, connected, lost }
 
 // How the call's media is travelling, once there is a path to speak of.
 export enum Route { unknown, direct, relayed }
@@ -42,7 +44,7 @@ export struct DayAgo {
 }
 
 // How a call ended. Which of the two declined is the direction arrow's to say.
-export enum Ending { answered, missed, declined, cancelled, no-answer, unreachable, needs-update, failed }
+export enum Ending { answered, missed, declined, cancelled, no-answer, unreachable, needs-update, lost, failed }
 
 // The heading a group of contacts opens with.
 export enum Group { favourites, others }
@@ -82,6 +84,8 @@ export struct CallItem {
     tint: int,
     ending: Ending,
     incoming: bool,
+    // Placed as voice; ringing back from the row uses the same kind.
+    voice: bool,
     // "4:12", for an answered call whose length was kept.
     duration: [string],
     // Time of day; the day is the group's.
@@ -142,9 +146,15 @@ export struct CallDetail {
     fingerprint: [string],
     ending: Ending,
     incoming: bool,
+    // Placed as voice; `voice` below is its voice figures.
+    voice-call: bool,
     day: DayAgo,
     time: string,
     duration: [string],
+    // How far into a voice call both agreed to switch to video, when they did.
+    video-from: [string],
+    // Times the network dropped and the call came back.
+    rejoins: int,
     traffic: [Traffic],
     // How it went, grouped as the page shows it; each empty for a call too short to sample, or
     // one logged before any of this was kept.

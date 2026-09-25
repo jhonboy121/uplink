@@ -37,7 +37,7 @@ use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
 use uplink_core::media::MediaStats;
 use uplink_core::quality::{Quality, VideoTarget};
-use uplink_core::node::{Behind, Command, EndReason, Event, Network, Node, NodeHandle};
+use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node, NodeHandle};
 use uplink_core::relays::Relays;
 use uplink_core::settings::{self, Settings};
 use uplink_core::{EndpointId, SecretKey, identity};
@@ -85,7 +85,7 @@ const EVENT_QUEUE: usize = 16;
 #[derive(Default)]
 struct Inbox {
     window: Option<mpsc::Sender<Event>>,
-    ringing: Option<EndpointId>,
+    ringing: Option<(EndpointId, Mode)>,
 }
 
 /// Rings for an incoming call, plays ringback for an outgoing one, and stops either when the call
@@ -115,7 +115,7 @@ impl Ringer {
             self.update_needed(peer, *behind, theirs);
         }
         let outcome = match event {
-            Event::Incoming { peer } => self.context.ring(&self.name_of(peer)),
+            Event::Incoming { peer, .. } => self.context.ring(&self.name_of(peer)),
             // From the moment we dial, not only once their phone rings: someone offline never
             // rings, and silence until the dial times out reads as the app having hung. Starting
             // it again on Ringing does nothing.
@@ -159,10 +159,19 @@ impl Ringer {
 struct Pending {
     peer: EndpointId,
     incoming: bool,
+    mode: Mode,
     at: SystemTime,
     connected: Option<Instant>,
+    /// How far into the call it switched to video, for one placed as voice.
+    video_from: Option<std::time::Duration>,
     /// The call's own counters, from the moment it connects; read once more when it ends.
     stats: Option<Arc<MediaStats>>,
+}
+
+impl Pending {
+    fn new(peer: EndpointId, incoming: bool, mode: Mode) -> Self {
+        Self { peer, incoming, mode, at: SystemTime::now(), connected: None, video_from: None, stats: None }
+    }
 }
 
 /// Writes every call to the log as it ends, window or no window. A call that rang with nobody
@@ -184,10 +193,15 @@ impl Ledger {
     /// The record written, when this event ended a call.
     fn follow(&mut self, event: &Event) -> Option<CallRecord> {
         match event {
-            Event::Dialing { peer } | Event::Incoming { peer } => {
+            Event::Dialing { peer, mode } | Event::Incoming { peer, mode } => {
                 let incoming = matches!(event, Event::Incoming { .. });
-                self.pending =
-                    Some(Pending { peer: *peer, incoming, at: SystemTime::now(), connected: None, stats: None });
+                self.pending = Some(Pending::new(*peer, incoming, *mode));
+                None
+            }
+            Event::VideoOn => {
+                if let Some(call) = self.pending.as_mut() {
+                    call.video_from = call.connected.map(|since| since.elapsed());
+                }
                 None
             }
             Event::Connected { media, .. } => {
@@ -209,17 +223,17 @@ impl Ledger {
                 // for it; it is still a call someone tried to make.
                 let call = match (self.pending.take(), reason, peer) {
                     (Some(call), ..) => call,
-                    (None, EndReason::Incompatible { .. }, Some(peer)) => {
-                        Pending { peer: *peer, incoming: true, at: SystemTime::now(), connected: None, stats: None }
-                    }
+                    (None, EndReason::Incompatible { .. }, Some(peer)) => Pending::new(*peer, true, Mode::Video),
                     (None, ..) => return None,
                 };
                 let record = CallRecord {
                     peer: call.peer,
                     incoming: call.incoming,
                     outcome: calls::Outcome::of(reason, call.incoming, call.connected.is_some()),
+                    mode: call.mode,
                     at: call.at,
                     duration: call.connected.map(|since| since.elapsed()),
+                    video_from: call.video_from,
                     traffic: call.stats.as_ref().map(|stats| calls::Traffic {
                         sent: stats.bytes_sent.load(Ordering::Relaxed),
                         received: stats.bytes_received.load(Ordering::Relaxed),
@@ -241,7 +255,7 @@ impl Ledger {
         }
         // A contact's second line is the same fact, kept beside it so the list does not have to
         // query the log per row.
-        if record.outcome != calls::Outcome::Answered {
+        if !record.outcome.answered() {
             return;
         }
         match Contacts::open(self.db.clone()) {
@@ -286,7 +300,7 @@ async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ri
         let window = {
             let mut inbox = inbox.lock();
             match &event {
-                Event::Incoming { peer } => inbox.ringing = Some(*peer),
+                Event::Incoming { peer, mode } => inbox.ringing = Some((*peer, *mode)),
                 Event::Connected { .. } | Event::Ended { .. } => inbox.ringing = None,
                 _ => {}
             }
@@ -309,7 +323,7 @@ async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ri
 /// and a window opened from it is sent the call when it attaches.
 fn unattended(event: &Event) {
     match event {
-        Event::Incoming { peer } => tracing::info!(peer = %peer.fmt_short(), "ringing with no window"),
+        Event::Incoming { peer, .. } => tracing::info!(peer = %peer.fmt_short(), "ringing with no window"),
         event => tracing::debug!(?event, "event with no window"),
     }
 }
@@ -435,9 +449,9 @@ impl Core {
     pub fn attach(&self) -> mpsc::Receiver<Event> {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
         let mut inbox = self.inbox.lock();
-        if let Some(peer) = inbox.ringing {
+        if let Some((peer, mode)) = inbox.ringing {
             // A new channel with room in it; there is no way for this to fail.
-            drop(sender.try_send(Event::Incoming { peer }));
+            drop(sender.try_send(Event::Incoming { peer, mode }));
         }
         inbox.window = Some(sender);
         events

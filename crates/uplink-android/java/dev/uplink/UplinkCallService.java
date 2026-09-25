@@ -33,6 +33,10 @@ public class UplinkCallService extends Service {
     /** Who is on the other end, and what the mic is doing, so the buttons offer the right move. */
     static final String EXTRA_PEER = "peer";
     static final String EXTRA_MIC_ON = "mic";
+    /** Whether the call uses the camera; a voice call asks for the microphone alone. */
+    static final String EXTRA_CAMERA = "camera";
+    /** Already in the foreground, so a refused change of types can keep the ones it has. */
+    private boolean foreground;
     /**
      * The ground an ongoing call is painted on. Android colorizes a call notification with the
      * builder's colour and works out readable text from it — but only if it is given one. Left
@@ -50,20 +54,28 @@ public class UplinkCallService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String peer = intent != null ? intent.getStringExtra(EXTRA_PEER) : null;
         boolean micOn = intent == null || intent.getBooleanExtra(EXTRA_MIC_ON, true);
+        boolean camera = intent == null || intent.getBooleanExtra(EXTRA_CAMERA, true);
         Notification notification = notification(this, peer != null ? peer : "", micOn);
+        int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                | (camera ? ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA : 0);
         try {
-            startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            UplinkActivity.log(Log.INFO, "call service started");
+            startForeground(NOTIFICATION_ID, notification, types);
+            foreground = true;
+            UplinkActivity.log(Log.INFO, "call service started, camera " + camera);
         } catch (RuntimeException e) {
-            // Refused because the app was not in front. The service still has to go foreground —
-            // a started foreground service that never does is its own crash — so it takes the
-            // one type that is allowed from here. The call carries on; the camera and microphone
-            // go quiet until the app comes back.
-            UplinkActivity.log(Log.WARN, "call service without camera and microphone: " + e);
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            if (foreground) {
+                // A voice call switching to video from the background: the camera is refused, and
+                // the microphone the call already holds stays.
+                UplinkActivity.log(Log.WARN, "call service kept its types: " + e);
+            } else {
+                // Refused because the app was not in front. The service still has to go
+                // foreground — a started foreground service that never does is its own crash — so
+                // it takes the one type that is allowed from here. The call carries on; the camera
+                // and microphone go quiet until the app comes back.
+                UplinkActivity.log(Log.WARN, "call service without camera and microphone: " + e);
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                foreground = true;
+            }
         }
         // The activity stops it when the call ends; no restart if Android kills us.
         return START_NOT_STICKY;

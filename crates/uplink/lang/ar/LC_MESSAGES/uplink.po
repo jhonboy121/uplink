@@ -96,10 +96,6 @@ msgid "Add to contacts"
 msgstr "إضافة إلى جهات الاتصال"
 
 msgctxt "CallPage"
-msgid "Call back"
-msgstr "معاودة الاتصال"
-
-msgctxt "CallPage"
 msgid "Done"
 msgstr "تم"
 
@@ -116,20 +112,12 @@ msgid "IPv6"
 msgstr "IPv6"
 
 msgctxt "CallPage"
-msgid "Incoming call"
-msgstr "مكالمة واردة"
-
-msgctxt "CallPage"
 msgid "NETWORK"
 msgstr "الشبكة"
 
 msgctxt "CallPage"
 msgid "Only this call; nobody else's log changes"
 msgstr "هذه المكالمة فقط، ولا يتغير سجل أي أحد آخر"
-
-msgctxt "CallPage"
-msgid "Outgoing call"
-msgstr "مكالمة صادرة"
 
 msgctxt "CallPage"
 msgid "Path"
@@ -494,10 +482,6 @@ msgid "Share my identity"
 msgstr "مشاركة هويتي"
 
 msgctxt "ContactPage"
-msgid "Call"
-msgstr "اتصال"
-
-msgctxt "ContactPage"
 msgid "Cancel"
 msgstr "إلغاء"
 
@@ -766,10 +750,6 @@ msgstr "مفعّل"
 msgctxt "PermissionsPage"
 msgid "uplink can't call yet"
 msgstr "لا يمكن لـ uplink الاتصال بعد"
-
-msgctxt "PersonRow"
-msgid "Call"
-msgstr "اتصال"
 
 msgctxt "RelayRow"
 msgid "Added by you"
@@ -1050,3 +1030,148 @@ msgstr "⁨{}⁩ موجود في جهات اتصالك"
 msgctxt "ToastCard"
 msgid "{} is not a relay address"
 msgstr "⁨{}⁩ ليس عنوان خادم وسيط"
+
+
+msgctxt "CallPage"
+msgid "Both agreed"
+msgstr "وافق الطرفان"
+
+msgctxt "CallPage"
+msgid "Reconnected"
+msgstr "أُعيد الاتصال"
+
+msgctxt "CallPage"
+msgid "Switched to video"
+msgstr "التحويل إلى الفيديو"
+
+msgctxt "CallPage"
+msgid "Times the network dropped and came back"
+msgstr "عدد مرات انقطاع الشبكة وعودتها"
+
+msgctxt "CallPage"
+msgid "at {}"
+msgstr "عند ⁨{}⁩"
+
+msgctxt "CallPair"
+msgid "Video call"
+msgstr "مكالمة فيديو"
+
+msgctxt "CallPair"
+msgid "Voice call"
+msgstr "مكالمة صوتية"
+
+msgctxt "CallScreen"
+msgid "Asking to switch to video"
+msgstr "جارٍ طلب التحويل إلى الفيديو"
+
+msgctxt "CallScreen"
+msgid "Asking {} to switch to video…"
+msgstr "جارٍ سؤال ⁨{}⁩ عن التحويل إلى الفيديو…"
+
+msgctxt "CallScreen"
+msgid "Call again"
+msgstr "الاتصال مجددًا"
+
+msgctxt "CallScreen"
+msgid "Camera off"
+msgstr "الكاميرا مطفأة"
+
+msgctxt "CallScreen"
+msgid "Cancel"
+msgstr "إلغاء"
+
+msgctxt "CallScreen"
+msgid "Close"
+msgstr "إغلاق"
+
+msgctxt "CallScreen"
+msgid "Connection lost"
+msgstr "انقطع الاتصال"
+
+msgctxt "CallScreen"
+msgid "Incoming voice call"
+msgstr "مكالمة صوتية واردة"
+
+msgctxt "CallScreen"
+msgid "Muted"
+msgstr "مكتوم"
+
+msgctxt "CallScreen"
+msgid "Reconnecting…"
+msgstr "جارٍ إعادة الاتصال…"
+
+msgctxt "CallScreen"
+msgid "Switch to video"
+msgstr "التحويل إلى الفيديو"
+
+msgctxt "CallScreen"
+msgid "The call carries on when the network is back."
+msgstr "تستمر المكالمة عند عودة الشبكة."
+
+msgctxt "CallScreen"
+msgid "Turn camera off"
+msgstr "إطفاء الكاميرا"
+
+msgctxt "CallScreen"
+msgid "Turn camera on"
+msgstr "تشغيل الكاميرا"
+
+msgctxt "CallScreen"
+msgid "You"
+msgstr "أنت"
+
+msgctxt "CallScreen"
+msgid "{} kept it voice"
+msgstr "أبقى ⁨{}⁩ المكالمة صوتية"
+
+msgctxt "CallWords"
+msgid "Connection lost"
+msgstr "انقطع الاتصال"
+
+msgctxt "CallWords"
+msgid "Incoming video call"
+msgstr "مكالمة فيديو واردة"
+
+msgctxt "CallWords"
+msgid "Incoming voice call"
+msgstr "مكالمة صوتية واردة"
+
+msgctxt "CallWords"
+msgid "Outgoing video call"
+msgstr "مكالمة فيديو صادرة"
+
+msgctxt "CallWords"
+msgid "Outgoing voice call"
+msgstr "مكالمة صوتية صادرة"
+
+msgctxt "CallsPage"
+msgid "Video"
+msgstr "فيديو"
+
+msgctxt "CallsPage"
+msgid "Voice"
+msgstr "صوت"
+
+msgctxt "PersonRow"
+msgid "Video call"
+msgstr "مكالمة فيديو"
+
+msgctxt "PersonRow"
+msgid "Voice call"
+msgstr "مكالمة صوتية"
+
+msgctxt "VideoAskSheet"
+msgid "Keep voice"
+msgstr "إبقاء المكالمة صوتية"
+
+msgctxt "VideoAskSheet"
+msgid "Switch to video"
+msgstr "التحويل إلى الفيديو"
+
+msgctxt "VideoAskSheet"
+msgid "Your camera turns on only if you agree. You can turn it off again at any time."
+msgstr "لن تعمل كاميرتك إلا إذا وافقت. ويمكنك إطفاؤها مجددًا في أي وقت."
+
+msgctxt "VideoAskSheet"
+msgid "{} wants to switch to video"
+msgstr "يريد ⁨{}⁩ التحويل إلى الفيديو"
