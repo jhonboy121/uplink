@@ -1009,3 +1009,8 @@ default); keep disk usage lean. Avoid build scripts.
     in the start corner just above the keys, where the Asking banner goes (and hidden while that
     shows). At the top end it overlapped the self view. The locked call mockup's frame 16 caption
     records the change; the older frames still draw it at the top.
+  - **RTT counts toward "ours"**, and the voice call has its pill (both 2026-09-25). Telemetry publishes the
+    selected path's smoothed RTT into `MediaStats::rtt_ms` every 5 s. `health` flags ours when it reaches
+    twice the best seen on the current route and 150 ms over it, or 1.5 s outright; the best starts over
+    when the route changes, since 618 ms relayed is not a climb from 113 ms direct. On a voice call their
+    pill is centred under the timer; ours is in the corner above the keys, as in video.

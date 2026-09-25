@@ -2,13 +2,13 @@
 //! screen. Judged from this phone's own counters only; nothing is asked of the other one.
 //!
 //! Ours: what we send backs up, so frames are dropped before sending or reset after missing their
-//! deadline, or audio does not fit the send buffer. Theirs: what arrives is late or has gaps while
-//! our own sending is fine. A call that has stopped altogether is the reconnecting overlay's, not
-//! this.
+//! deadline, or audio does not fit the send buffer; or the round trip climbs, which is a queue
+//! filling somewhere before any of that shows. Theirs: what arrives is late or has gaps while our
+//! own sending is fine. A call that has stopped altogether is the reconnecting overlay's, not this.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::media::MediaStats;
+use crate::media::{MediaStats, Route};
 
 /// Bad samples in a row before the pill shows: one late frame is not a weak connection.
 const SHOW_AFTER: u32 = 2;
@@ -17,6 +17,12 @@ const CLEAR_AFTER: u32 = 5;
 /// Audio packets per sample that may arrive late or be concealed before it counts: a few in fifty
 /// are inaudible.
 const AUDIO_TOLERANCE: u64 = 2;
+/// How far over the path's best the round trip may go: twice it, and at least this much more, so a
+/// 30 ms direct path wobbling to 70 ms does not count.
+const RTT_CLIMB: u64 = 2;
+const RTT_MARGIN_MS: u64 = 150;
+/// A round trip past this is weak however the call started: talk turns into taking turns.
+const RTT_CEILING_MS: u64 = 1500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weak {
@@ -34,6 +40,9 @@ struct Counts {
     received_dropped: u64,
     audio_late: u64,
     audio_concealed: u64,
+    /// Gauges, not counters: read as they are.
+    rtt_ms: u64,
+    route: Route,
 }
 
 impl Counts {
@@ -46,6 +55,8 @@ impl Counts {
             received_dropped: get(&stats.frames_dropped_received),
             audio_late: get(&stats.audio_late),
             audio_concealed: get(&stats.audio_concealed),
+            rtt_ms: get(&stats.rtt_ms),
+            route: stats.route(),
         }
     }
 
@@ -59,6 +70,31 @@ impl Counts {
         self.received_dropped > before.received_dropped
             || self.audio_late - before.audio_late + self.audio_concealed - before.audio_concealed
                 > AUDIO_TOLERANCE
+    }
+}
+
+/// The best round trip seen on the path the call is on. A new path, relayed after direct or the
+/// other way round, starts over: 600 ms relayed is not a climb from 110 ms direct.
+#[derive(Default)]
+struct Baseline {
+    route: Route,
+    lowest: u64,
+}
+
+impl Baseline {
+    fn climbed(&mut self, route: Route, rtt_ms: u64) -> bool {
+        // Nothing measured yet.
+        if rtt_ms == 0 {
+            return false;
+        }
+        if self.lowest == 0 || self.route != route {
+            self.route = route;
+            self.lowest = rtt_ms;
+        } else if rtt_ms < self.lowest {
+            self.lowest = rtt_ms;
+        }
+        rtt_ms >= RTT_CEILING_MS
+            || (rtt_ms >= self.lowest * RTT_CLIMB && rtt_ms - self.lowest >= RTT_MARGIN_MS)
     }
 }
 
@@ -86,6 +122,7 @@ impl Streak {
 #[derive(Default)]
 pub struct Health {
     last: Option<Counts>,
+    baseline: Baseline,
     ours: Streak,
     theirs: Streak,
 }
@@ -96,9 +133,10 @@ impl Health {
         self.next(Counts::read(stats))
     }
 
-    const fn next(&mut self, now: Counts) -> Weak {
+    fn next(&mut self, now: Counts) -> Weak {
+        let climbed = self.baseline.climbed(now.route, now.rtt_ms);
         if let Some(before) = self.last.replace(now) {
-            let ours = now.ours_bad(&before);
+            let ours = now.ours_bad(&before) || climbed;
             self.ours.sample(ours);
             // Theirs only while ours is healthy: a phone that cannot send cannot judge the other.
             self.theirs.sample(!ours && !self.ours.shown && now.theirs_bad(&before));
@@ -155,6 +193,43 @@ mod tests {
         let mut health = Health::default();
         run(&mut health, &mut counts, 1, |_| {});
         assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, |c| c.received_dropped += 1), Weak::Theirs);
+    }
+
+    const DIRECT_MS: u64 = 113;
+    const RELAYED_MS: u64 = 618;
+
+    fn on(route: Route, rtt_ms: u64) -> impl Fn(&mut Counts) {
+        move |c: &mut Counts| {
+            c.route = route;
+            c.rtt_ms = rtt_ms;
+        }
+    }
+
+    #[test]
+    fn a_climbing_round_trip_is_ours() {
+        let (mut health, mut counts) = (Health::default(), Counts::default());
+        assert_eq!(run(&mut health, &mut counts, 3, on(Route::Direct, DIRECT_MS)), Weak::None);
+        let climbed = DIRECT_MS * RTT_CLIMB + RTT_MARGIN_MS;
+        assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, on(Route::Direct, climbed)), Weak::Ours);
+        assert_eq!(run(&mut health, &mut counts, CLEAR_AFTER, on(Route::Direct, DIRECT_MS)), Weak::None);
+    }
+
+    #[test]
+    fn a_new_route_is_a_new_baseline() {
+        let (mut health, mut counts) = (Health::default(), Counts::default());
+        run(&mut health, &mut counts, 3, on(Route::Direct, DIRECT_MS));
+        assert_eq!(run(&mut health, &mut counts, 10, on(Route::Relay, RELAYED_MS)), Weak::None);
+    }
+
+    #[test]
+    fn small_wobbles_and_the_ceiling() {
+        let (mut health, mut counts) = (Health::default(), Counts::default());
+        let fast = 30;
+        run(&mut health, &mut counts, 3, on(Route::Direct, fast));
+        // Over twice as long, but not by the margin.
+        assert_eq!(run(&mut health, &mut counts, 10, on(Route::Direct, fast * 3)), Weak::None);
+        let mut health = Health::default();
+        assert_eq!(run(&mut health, &mut counts, SHOW_AFTER + 1, on(Route::Relay, RTT_CEILING_MS)), Weak::Ours);
     }
 
     #[test]

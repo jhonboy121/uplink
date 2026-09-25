@@ -46,6 +46,9 @@ export component PeoplePage inherits Rectangle {
             // Reachability, not diagnostics: whether someone could call you right now.
             if !root.selecting : VerticalLayout {
                 alignment: center;
+                // Apart from the mark after it; the row mirrors in Arabic, so the side does too.
+                padding-right: Theme.rtl ? 0px : Theme.chip-mark-gap;
+                padding-left: Theme.rtl ? Theme.chip-mark-gap : 0px;
                 Rectangle {
                     height: Theme.pill-height;
                     width: reach.preferred-width + Theme.pill-pad * 2;

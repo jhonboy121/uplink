@@ -95,6 +95,9 @@ pub struct MediaStats {
     /// Nothing has arrived from the peer for [`STALL_AFTER`]: what "Reconnecting…" is shown from,
     /// well before the connection itself would be given up on.
     stalled: AtomicBool,
+    /// The selected path's smoothed round trip in milliseconds, as telemetry last read it; zero
+    /// before the first reading. What the weak pill watches climb.
+    pub rtt_ms: AtomicU64,
     /// Times the connection was lost mid-call, and times the call was rejoined on a new one.
     pub drops: AtomicU64,
     pub rejoins: AtomicU64,

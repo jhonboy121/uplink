@@ -300,6 +300,7 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
         path = current.or(path);
         let Some(p) = &path else { continue };
         media.set_route(if p.family == Family::Relay { Route::Relay } else { Route::Direct });
+        media.rtt_ms.store(u64::try_from(p.rtt.as_millis()).unwrap_or(u64::MAX), Ordering::Relaxed);
         let counters = Counters::sample(&connection, &media, p.congestion_events);
         let delta = counters.since(&last);
         let over = now.duration_since(last_at);

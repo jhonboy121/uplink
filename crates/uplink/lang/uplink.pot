@@ -236,22 +236,22 @@ msgctxt "CallPair"
 msgid "Voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:562
+#: crates/uplink/ui/call.slint:572
 msgctxt "CallScreen"
 msgid "Answer"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:604
+#: crates/uplink/ui/call.slint:614
 msgctxt "CallScreen"
 msgid "Asking to switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:666
+#: crates/uplink/ui/call.slint:676
 msgctxt "CallScreen"
 msgid "Asking {} to switch to video…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:573
+#: crates/uplink/ui/call.slint:583
 msgctxt "CallScreen"
 msgid "Call again"
 msgstr ""
@@ -268,12 +268,12 @@ msgctxt "CallScreen"
 msgid "Camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:674
+#: crates/uplink/ui/call.slint:684
 msgctxt "CallScreen"
 msgid "Cancel"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:568
+#: crates/uplink/ui/call.slint:578
 msgctxt "CallScreen"
 msgid "Close"
 msgstr ""
@@ -283,22 +283,22 @@ msgctxt "CallScreen"
 msgid "Connection lost"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:556
+#: crates/uplink/ui/call.slint:566
 msgctxt "CallScreen"
 msgid "Decline"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:641
+#: crates/uplink/ui/call.slint:651
 msgctxt "CallScreen"
 msgid "Direct"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:611
+#: crates/uplink/ui/call.slint:621
 msgctxt "CallScreen"
 msgid "End call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:489
+#: crates/uplink/ui/call.slint:499
 msgctxt "CallScreen"
 msgid "Fold away"
 msgstr ""
@@ -313,77 +313,77 @@ msgctxt "CallScreen"
 msgid "Incoming voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:579
+#: crates/uplink/ui/call.slint:589
 msgctxt "CallScreen"
 msgid "Mute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:529
+#: crates/uplink/ui/call.slint:539
 msgctxt "CallScreen"
 msgid "Muted"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:437
+#: crates/uplink/ui/call.slint:447
 msgctxt "CallScreen"
 msgid "Reconnecting…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:641
+#: crates/uplink/ui/call.slint:651
 msgctxt "CallScreen"
 msgid "Relayed"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:597
+#: crates/uplink/ui/call.slint:607
 msgctxt "CallScreen"
 msgid "Speaker"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:591
+#: crates/uplink/ui/call.slint:601
 msgctxt "CallScreen"
 msgid "Switch camera"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:604
+#: crates/uplink/ui/call.slint:614
 msgctxt "CallScreen"
 msgid "Switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:452
+#: crates/uplink/ui/call.slint:462
 msgctxt "CallScreen"
 msgid "The call carries on when the network is back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:450
+#: crates/uplink/ui/call.slint:460
 msgctxt "CallScreen"
 msgid "The call carries on when your network is back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:451
+#: crates/uplink/ui/call.slint:461
 msgctxt "CallScreen"
 msgid "Their connection dropped. The call carries on when they're back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:585
+#: crates/uplink/ui/call.slint:595
 msgctxt "CallScreen"
 msgid "Turn camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:585
+#: crates/uplink/ui/call.slint:595
 msgctxt "CallScreen"
 msgid "Turn camera on"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:579
+#: crates/uplink/ui/call.slint:589
 msgctxt "CallScreen"
 msgid "Unmute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:519
+#: crates/uplink/ui/call.slint:529
 msgctxt "CallScreen"
 msgid "Video isn't working on this phone — audio only"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:437
+#: crates/uplink/ui/call.slint:447
 msgctxt "CallScreen"
 msgid "Waiting for {}…"
 msgstr ""
@@ -393,22 +393,23 @@ msgctxt "CallScreen"
 msgid "You"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:436
+#: crates/uplink/ui/call.slint:446
 msgctxt "CallScreen"
 msgid "You're offline"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:634
+#: crates/uplink/ui/call.slint:644
 msgctxt "CallScreen"
 msgid "Your connection is weak"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:414
+#: crates/uplink/ui/call.slint:424
 msgctxt "CallScreen"
 msgid "{} kept it voice"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:534
+#: crates/uplink/ui/call.slint:419
+#: crates/uplink/ui/call.slint:544
 msgctxt "CallScreen"
 msgid "{}'s connection is weak"
 msgstr ""

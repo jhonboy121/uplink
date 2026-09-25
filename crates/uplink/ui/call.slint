@@ -409,6 +409,16 @@ export component CallScreen inherits Rectangle {
         }
         if root.lost : Rectangle { height: Theme.lost-timer-top; }
         if root.connected || root.lost : CallTimer { text: root.timer; }
+        // Theirs under their name, as in a video call; ours is in the corner above the keys.
+        if root.connected && root.weak == Weak.theirs : HorizontalLayout {
+            alignment: center;
+            padding-top: Theme.flags-top;
+            Flag {
+                icon: @image-url("icons/signal-weak.svg");
+                icon-size: Theme.weak-icon;
+                text: @tr("{}'s connection is weak", root.peer-name);
+            }
+        }
         if root.connected && root.kept-voice : Rectangle { height: Theme.kept-voice-top; }
         if root.connected && root.kept-voice : Text {
             text: @tr("{} kept it voice", root.peer-name);

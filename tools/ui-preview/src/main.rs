@@ -19,7 +19,7 @@ mod ui;
 
 use ui::{
     Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
-    Language, Permission, PermissionItem, Region, RelayItem, RelayUse, Route, Screen, Theme, Unit,
+    Language, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Screen, Stall, Theme, Unit, Weak,
 };
 
 /// Logical pixels.
@@ -92,7 +92,8 @@ fn main() -> Result<()> {
     shoot(&window, &app, canvas, "permissions-blocked")?;
     app.set_gate(false);
 
-    // Idle screens.
+    // Idle screens, reachable: the chip's other answers have shots of their own below.
+    app.set_reach(Reach::Online);
     app.set_call_state(CallState::Idle);
     for (screen, name) in [
         (Screen::People, "people"),
@@ -187,7 +188,19 @@ fn main() -> Result<()> {
     app.set_peer_camera_off(false);
     app.set_call_reconnecting(true);
     shoot(&window, &app, canvas, "reconnecting-video")?;
+    // Network feedback, named as the design's frames 13 to 16 are.
+    app.set_call_stall(Stall::Offline);
+    shoot(&window, &app, canvas, "youre-offline")?;
+    app.set_call_stall(Stall::Waiting);
+    shoot(&window, &app, canvas, "waiting-for-noor")?;
+    app.set_call_stall(Stall::Reconnecting);
     app.set_call_reconnecting(false);
+    app.set_call_weak(Weak::Theirs);
+    shoot(&window, &app, canvas, "their-connection-is-weak")?;
+    app.set_call_route(Route::Direct);
+    app.set_call_weak(Weak::Ours);
+    shoot(&window, &app, canvas, "your-connection-is-weak")?;
+    app.set_call_weak(Weak::None);
     app.set_call_route(Route::Direct);
     app.set_call_voice(true);
     for (state, name) in [
@@ -198,6 +211,9 @@ fn main() -> Result<()> {
         app.set_call_state(state);
         shoot(&window, &app, canvas, name)?;
     }
+    app.set_call_weak(Weak::Theirs);
+    shoot(&window, &app, canvas, "voice-their-connection-is-weak")?;
+    app.set_call_weak(Weak::None);
     app.set_video_asked(true);
     shoot(&window, &app, canvas, "asked-to-switch")?;
     app.set_video_asked(false);
@@ -234,6 +250,17 @@ fn main() -> Result<()> {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
+    // The chip's four answers, in light as the shell design draws them.
+    app.set_screen(Screen::People);
+    for (reach, name) in [
+        (Reach::Connecting, "reach-connecting"),
+        (Reach::NoNetwork, "reach-no-network"),
+        (Reach::Offline, "reach-offline"),
+    ] {
+        app.set_reach(reach);
+        shoot(&window, &app, canvas, name)?;
+    }
+    app.set_reach(Reach::Online);
     app.global::<Theme>().set_appearance(Appearance::Dark);
 
     // Arabic: every screen mirrored, and the words from the bundled translation.
