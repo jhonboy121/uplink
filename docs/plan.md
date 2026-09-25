@@ -1024,3 +1024,25 @@ default); keep disk usage lean. Avoid build scripts.
   - **Their camera off, swapped:** the card held their last frame. It now shows the same camera-off
     cover as ours. Not in the mockup, which only draws their camera off full screen (avatar, name,
     pill); the card uses the mockup's own camera-off look. Device-tested on the S24.
+- **2026-09-25**: **calls go through Telecom (a self-managed `ConnectionService`)** — decided; the open
+  question from 2026-09-23. Not started.
+  - **Telecom's no is final.** `isOutgoingCallPermitted` / `isIncomingCallPermitted` false, or
+    `onCreate…ConnectionFailed`, ends the call with a reason (an outgoing one never dials, an incoming
+    one is answered `Busy` and never rings). No fallback: the manual `MODE_IN_COMMUNICATION` and
+    `setSpeakerphoneOn` paths (`Platform::set_in_call`, `set_speaker`) go. Telecom sets the mode.
+  - **Placing:** `placeCall(uplink:<key>)` on our `PhoneAccount` → `onCreateOutgoingConnection` → the
+    core dials; `setDialing`, then `setActive` on Connected. **Receiving:** the core's `Incoming` →
+    `addNewIncomingCall` → `onShowIncomingCallUi` rings (our ringtone and full-screen notification, as
+    today, but started by Telecom, not by the core event); `onSilence` stops the sound. `onAnswer`,
+    `onReject`, `onDisconnect` and the mute state come back as the same commands the UI sends, so a
+    headset button and the screen mean one thing.
+  - **Hold, both ways.** `CAPABILITY_HOLD | CAPABILITY_SUPPORT_HOLD`: a cellular call answered over
+    ours puts it on hold (`onHold`), which stops our mic, camera and playout and tells the peer, and
+    `onUnhold` brings them back (camera with a keyframe). Wire: `MediaState` gains `3 held: bool`.
+    No compatibility: both phones run the same build.
+  - **Routes:** earpiece, speaker, Bluetooth and wired come from Telecom (`CallEndpoint` from API 34,
+    `CallAudioState` + `setAudioRoute` on 30–33). The speaker key becomes a **route picker**, to be
+    designed and locked in the call-UI mockup first, together with the held states (ours: "On hold";
+    theirs: "{name} is on hold").
+  - The call foreground service and its notification stay. New: `MANAGE_OWN_CALLS`, the service bound
+    by `BIND_TELECOM_CONNECTION_SERVICE`, and the `PhoneAccount` registered once per process.
