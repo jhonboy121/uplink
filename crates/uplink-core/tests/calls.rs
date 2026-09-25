@@ -105,6 +105,30 @@ async fn declined_call_is_rejected_for_the_caller() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_ringing_call_the_platform_refuses_is_busy_for_the_caller() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    ring(&mut alice, &mut bob).await?;
+
+    bob.node.send(Command::Refused).await?;
+    assert!(matches!(alice.ended().await?, EndReason::Busy));
+    assert!(matches!(bob.ended().await?, EndReason::Refused));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_placed_call_the_platform_refuses_stops_ringing_them() -> Result<()> {
+    let lookup = MemoryLookup::new();
+    let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
+    ring(&mut alice, &mut bob).await?;
+
+    alice.node.send(Command::Refused).await?;
+    assert!(matches!(alice.ended().await?, EndReason::Refused));
+    assert!(matches!(bob.ended().await?, EndReason::RemoteHangup));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn caller_can_cancel_while_ringing() -> Result<()> {
     let lookup = MemoryLookup::new();
     let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
@@ -195,7 +219,7 @@ async fn the_other_side_hears_when_the_mic_or_camera_changes() -> Result<()> {
     let lookup = MemoryLookup::new();
     let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
     connect(&mut alice, &mut bob).await?;
-    let state = MediaState { mic_off: true, camera_off: true };
+    let state = MediaState { mic_off: true, camera_off: true, held: true };
     alice.node.send(Command::Media(state)).await?;
     let heard = bob.expect("their media", |e| matches!(e, Event::PeerMedia(_))).await?;
     assert!(matches!(heard, Event::PeerMedia(theirs) if theirs == state));

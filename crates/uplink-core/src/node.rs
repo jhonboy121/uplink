@@ -74,6 +74,9 @@ pub enum Mode {
 pub enum Command {
     Call(EndpointId, Mode),
     Answer(bool),
+    /// The platform will not have this call (an emergency call is up, say): one ringing here is
+    /// turned away as busy, which is not the user saying no, and any other is hung up.
+    Refused,
     Hangup,
     /// Our mic or camera changed; the other side is told.
     Media(MediaState),
@@ -137,11 +140,14 @@ pub enum EndReason {
     Incompatible { behind: Behind, theirs: String },
     /// Connected, then the network went and did not come back in time.
     ConnectionLost,
+    /// The platform would not have the call, as [`Command::Refused`] said.
+    Refused,
     Failed(String),
 }
 
 enum Control {
     Answer(bool),
+    Refused,
     Hangup,
     Media(MediaState),
     AskVideo(bool),
@@ -517,6 +523,7 @@ impl Engine {
                 tracing::warn!(peer = %peer.fmt_short(), "refused a call while one is up");
             }
             (Command::Answer(accept), Some(call)) => forward(call, Control::Answer(accept)).await,
+            (Command::Refused, Some(call)) => forward(call, Control::Refused).await,
             (Command::Hangup, Some(call)) => forward(call, Control::Hangup).await,
             (Command::Media(state), Some(call)) => forward(call, Control::Media(state)).await,
             (Command::AskVideo(ask), Some(call)) => forward(call, Control::AskVideo(ask)).await,
@@ -654,6 +661,7 @@ async fn dial(
             },
             command = control.recv() => match command {
                 Some(Control::Hangup) | None => return Ok(EndReason::LocalHangup),
+                Some(Control::Refused) => return Ok(EndReason::Refused),
                 Some(Control::Media(state)) => ours = state,
                 Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
                 Some(Control::Answer(_) | Control::AskVideo(_) | Control::AnswerVideo(_)) => {}
@@ -712,6 +720,10 @@ async fn dial(
                 Some(Control::Hangup) | None => {
                     finish(&connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
                     return Ok(EndReason::LocalHangup);
+                }
+                Some(Control::Refused) => {
+                    finish(&connection, &mut send, Signal::Hangup, CLOSE_HANGUP).await?;
+                    return Ok(EndReason::Refused);
                 }
                 Some(Control::Media(state)) => ours = state,
                 Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
@@ -798,6 +810,10 @@ async fn ring(
                 Some(Control::Answer(false) | Control::Hangup) | None => {
                     finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
                     return Ok(Some(EndReason::Declined));
+                }
+                Some(Control::Refused) => {
+                    finish(&connection, &mut send, Signal::Busy, CLOSE_BUSY).await?;
+                    return Ok(Some(EndReason::Refused));
                 }
                 Some(Control::Media(state)) => ours = state,
                 Some(Control::Rejoin(rejoin)) => refuse(*rejoin, Signal::Busy, CLOSE_BUSY).await,
@@ -973,15 +989,18 @@ impl Live<'_> {
         Ok(None)
     }
 
+    /// Said if it can be; a hang-up is a hang-up whether or not the network carries it.
+    async fn hang_up(&mut self, reason: EndReason) -> Turn {
+        if let Err(e) = finish(&self.link.connection, &mut self.link.send, Signal::Hangup, CLOSE_HANGUP).await {
+            tracing::debug!("hanging up: {e}");
+        }
+        Turn::Over(reason)
+    }
+
     async fn command(&mut self, command: Option<Control>) -> Option<Turn> {
         match command {
-            Some(Control::Hangup) | None => {
-                // Said if it can be; a hang-up is a hang-up whether or not the network carries it.
-                if let Err(e) = finish(&self.link.connection, &mut self.link.send, Signal::Hangup, CLOSE_HANGUP).await {
-                    tracing::debug!("hanging up: {e}");
-                }
-                return Some(Turn::Over(EndReason::LocalHangup));
-            }
+            Some(Control::Hangup) | None => return Some(self.hang_up(EndReason::LocalHangup).await),
+            Some(Control::Refused) => return Some(self.hang_up(EndReason::Refused).await),
             Some(Control::Answer(_)) => tracing::debug!("answer ignored during call"),
             Some(Control::Media(state)) => {
                 self.ours = state;
@@ -1082,6 +1101,7 @@ impl Live<'_> {
                 command = self.control.recv() => match command {
                     // Nothing to tell them over; their own grace runs out instead.
                     Some(Control::Hangup) | None => return Some(EndReason::LocalHangup),
+                    Some(Control::Refused) => return Some(EndReason::Refused),
                     Some(Control::Media(state)) => self.ours = state,
                     Some(Control::Rejoin(rejoin)) => {
                         if self.accept_rejoin(*rejoin).await {

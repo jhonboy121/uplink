@@ -50,7 +50,7 @@ impl Outcome {
             };
         }
         match reason {
-            EndReason::Busy | EndReason::Failed(_) | EndReason::ConnectionLost => Self::Failed,
+            EndReason::Busy | EndReason::Failed(_) | EndReason::ConnectionLost | EndReason::Refused => Self::Failed,
             EndReason::Incompatible { .. } => Self::Incompatible,
             EndReason::DialTimeout => Self::Unreachable,
             EndReason::NoAnswer => Self::NoAnswer,

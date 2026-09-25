@@ -136,14 +136,18 @@ pub fn behind(ours: &Hello, theirs: &Hello) -> Option<Behind> {
 #[derive(Clone, Copy, PartialEq, Message)]
 pub struct Empty {}
 
-/// Whether each side's mic and camera are on, sent whenever either changes. The defaults are what
-/// a build that never sends it has: both on.
+/// Whether each side's mic and camera are on, and whether its phone has put the call on hold,
+/// sent whenever any changes. The defaults are what a build that never sends it has: both on,
+/// not held.
 #[derive(Clone, Copy, PartialEq, Eq, Message)]
 pub struct MediaState {
     #[prost(bool, tag = "1")]
     pub mic_off: bool,
     #[prost(bool, tag = "2")]
     pub camera_off: bool,
+    /// A phone call was answered over this one: nothing is sent or played until it ends.
+    #[prost(bool, tag = "3")]
+    pub held: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Message)]
@@ -386,7 +390,8 @@ mod tests {
             Signal::KeyframeRequest,
             Signal::Incompatible(hello()),
             Signal::Offer(hello().offer(Setup { call: 7, voice: true, resume: false })),
-            Signal::Media(MediaState { mic_off: true, camera_off: false }),
+            Signal::Media(MediaState { mic_off: true, camera_off: false, held: false }),
+            Signal::Media(MediaState { mic_off: false, camera_off: false, held: true }),
             Signal::AskVideo,
             Signal::WithdrawVideo,
             Signal::AnswerVideo(true),
@@ -445,6 +450,26 @@ mod tests {
         assert_eq!((now.sequence, now.keyframe, now.turns), (7, true, 1));
         let (back, _) = split_message::<FrameHeaderLater>(&encode(&now))?;
         assert_eq!(back.layer, 0);
+        Ok(())
+    }
+
+    /// Media state as it was before hold, which a build without it still sends and reads.
+    #[derive(Clone, Copy, PartialEq, Message)]
+    struct MediaStateBeforeHold {
+        #[prost(bool, tag = "1")]
+        mic_off: bool,
+        #[prost(bool, tag = "2")]
+        camera_off: bool,
+    }
+
+    #[test]
+    fn hold_reads_as_not_held_where_it_is_not_known() -> Result<(), Error> {
+        let before = MediaStateBeforeHold { mic_off: true, camera_off: true };
+        let (now, _) = split_message::<MediaState>(&encode(&before))?;
+        assert_eq!(now, MediaState { mic_off: true, camera_off: true, held: false });
+        let held = MediaState { mic_off: false, camera_off: false, held: true };
+        let (back, _) = split_message::<MediaStateBeforeHold>(&encode(&held))?;
+        assert_eq!(back, MediaStateBeforeHold { mic_off: false, camera_off: false });
         Ok(())
     }
 

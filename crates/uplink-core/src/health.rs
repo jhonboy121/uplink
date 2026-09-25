@@ -17,6 +17,9 @@ const CLEAR_AFTER: u32 = 5;
 /// Audio packets per sample that may arrive late or be concealed before it counts: a few in fifty
 /// are inaudible.
 const AUDIO_TOLERANCE: u64 = 2;
+/// Samples their side goes unjudged after our own audio restarts. A switch of output reopens the
+/// voice streams about 0.7 s later, and the gap it leaves lands in the sample after that.
+const EXCUSED_SAMPLES: u32 = 3;
 /// How far over the path's best the round trip may go: twice it, and at least this much more, so a
 /// 30 ms direct path wobbling to 70 ms does not count.
 const RTT_CLIMB: u64 = 2;
@@ -125,6 +128,8 @@ pub struct Health {
     baseline: Baseline,
     ours: Streak,
     theirs: Streak,
+    /// Samples left in which their side is not judged, after our own playout restarted.
+    excused: u32,
 }
 
 impl Health {
@@ -133,13 +138,27 @@ impl Health {
         self.next(Counts::read(stats))
     }
 
+    /// Our own audio restarted: a new output, a hold, a reopened stream. Playout pauses while it
+    /// does, and what arrives meanwhile reads as late and concealed — our gap, not theirs — so
+    /// their side goes unjudged for a few samples, and a streak building against them starts over.
+    pub const fn ours_restarted(&mut self) {
+        self.excused = EXCUSED_SAMPLES;
+        if !self.theirs.shown {
+            self.theirs.run = 0;
+        }
+    }
+
     fn next(&mut self, now: Counts) -> Weak {
         let climbed = self.baseline.climbed(now.route, now.rtt_ms);
         if let Some(before) = self.last.replace(now) {
             let ours = now.ours_bad(&before) || climbed;
             self.ours.sample(ours);
-            // Theirs only while ours is healthy: a phone that cannot send cannot judge the other.
-            self.theirs.sample(!ours && !self.ours.shown && now.theirs_bad(&before));
+            if self.excused > 0 {
+                self.excused -= 1;
+            } else {
+                // Theirs only while ours is healthy: a phone that cannot send cannot judge the other.
+                self.theirs.sample(!ours && !self.ours.shown && now.theirs_bad(&before));
+            }
         }
         if self.ours.shown {
             Weak::Ours
@@ -238,5 +257,19 @@ mod tests {
         run(&mut health, &mut counts, 1, |_| {});
         assert_eq!(run(&mut health, &mut counts, 10, |c| c.audio_concealed += AUDIO_TOLERANCE), Weak::None);
         assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, |c| c.audio_late += AUDIO_TOLERANCE + 1), Weak::Theirs);
+    }
+
+    #[test]
+    fn our_own_audio_restarting_is_not_their_weak_link() {
+        let (mut health, mut counts) = (Health::default(), Counts::default());
+        run(&mut health, &mut counts, 1, |_| {});
+        let gap = |c: &mut Counts| {
+            c.audio_late += AUDIO_TOLERANCE * 4;
+            c.audio_concealed += AUDIO_TOLERANCE * 4;
+        };
+        health.ours_restarted();
+        assert_eq!(run(&mut health, &mut counts, EXCUSED_SAMPLES, gap), Weak::None);
+        // Past the excuse, the same gaps are theirs again.
+        assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, gap), Weak::Theirs);
     }
 }

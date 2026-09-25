@@ -31,7 +31,7 @@ Hello                          1 protocol: uint32  2 app: string
                                3 supports: repeated Capability  4 requires: repeated Capability
                                5 setup: Setup (offers only)
 Setup                          1 call: uint64  2 voice: bool  3 resume: bool
-MediaState                     1 mic_off: bool  2 camera_off: bool
+MediaState                     1 mic_off: bool  2 camera_off: bool  3 held: bool
 VideoAsk                       1 withdrawn: bool
 VideoAnswer                    1 accepted: bool
 StreamHeader (oneof kind)      1 Video(FrameHeader)
