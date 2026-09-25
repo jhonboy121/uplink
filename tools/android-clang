@@ -1,5 +1,5 @@
 #!/bin/sh
-# Alpine clang targeting Android with the NDK sysroot: C compiler and rustc linker.
+# System clang targeting Android with the NDK sysroot: C compiler and rustc linker.
 # -nodefaultlibs: the extracted NDK lacks compiler-rt builtins; rustc names every
 # lib it needs and Rust's compiler_builtins provides the helpers.
 NDK=${ANDROID_NDK_HOME:-$HOME/android/ndk}

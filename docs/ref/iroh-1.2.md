@@ -85,5 +85,5 @@ iroh spawns its own tokio tasks, so a scoped `Dispatch` must be installed on eve
 
 Binding several endpoints concurrently under proot intermittently fails with `Failed to bind sockets: Not supported (os error 95)`.
 noq-udp sets `IP_PKTINFO` with a hard `?` (other options tolerate `EOPNOTSUPP`), and proot's ptrace-emulated `setsockopt` fails under
-concurrency. Measured: 8/10 parallel test runs failed, 0/10 serial. Not a device issue. `just test`/`just coverage` use
-`RUST_TEST_THREADS=1` (overridable).
+concurrency. Measured: 8/10 parallel test runs failed, 0/10 serial. Not a device issue. Development moved off proot, so
+`just test`/`just coverage` run in parallel again; set `RUST_TEST_THREADS=1` if you are ever back under proot.

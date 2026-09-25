@@ -317,8 +317,9 @@ mod tests {
     #[test]
     fn an_arabic_caption_is_shaped() -> Result<(), Error> {
         const ARABIC: &str = "امسح للتواصل";
-        assert!(std::ptr::eq(face_for(ARABIC), ARABIC_FONT));
-        assert!(std::ptr::eq(face_for(CAPTION), FONT));
+        // By content: a `const` has no one address, and each codegen unit may hold its own copy.
+        assert!(face_for(ARABIC) == ARABIC_FONT);
+        assert!(face_for(CAPTION) == FONT);
         let (joined, _) = shape(ARABIC_FONT, ARABIC)?;
         assert!(joined.iter().all(|glyph| glyph.id != GlyphId(0)));
         let isolated: Vec<GlyphId> = ARABIC

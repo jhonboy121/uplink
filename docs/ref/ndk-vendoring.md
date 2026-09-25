@@ -17,13 +17,11 @@ https://github.com/jhonboy121/ndk, the submodule at `external/ndk/`. At that com
   It uses upstream's exact flags (blocklist, 40 newtype enums, `--rust-target 1.60`) and reads
   headers from the local NDK sysroot (`$ANDROID_NDK_HOME` or `~/android/ndk`) instead of a Google CI artifact.
   Run: `just bindgen`. It also generates our `sys/ndk-gl-sys` (EGL/GLES3, edition 2024).
-  (needs Alpine `clang22-libclang` + `clang22-headers`).
+  (needs `libclang-dev`).
   bindgen 0.71 gotcha: `RustTarget::stable(60, 0)` returns `Result<_, InvalidRustTarget>` without `Debug`,
   so use `.ok().expect(..)`.
-  **musl host gotcha:** Rust's musl binaries are fully static, and `dlopen` fails with "Dynamic loading not supported".
-  So bindgen runs with `default-features = false, features = ["logging", "prettyplease"]` (no `runtime`), which
-  makes clang-sys link `libclang.so` at build time. The workspace `.cargo/config.toml` sets
-  `-C target-feature=-crt-static` for `aarch64-unknown-linux-musl` plus `LIBCLANG_PATH=/usr/lib/llvm22/lib`.
+  bindgen runs with `default-features = false, features = ["logging", "prettyplease"]` (no `runtime`), so
+  clang-sys links `libclang.so` at build time (a leftover from a static musl host, where `dlopen` failed; harmless on glibc).
 - **libclang 22 gotcha:** bindgen 0.71.1 (upstream's version) with libclang 22 made `ANativeActivityCallbacks` opaque
   (`_address: u8`, all 16 fields gone), which breaks android-activity. LLVM 22 removed `ElaboratedType`, and bindgen
   0.72.1 fixed the interaction (rust-bindgen#3278). So the generator pins `=0.72.1`, the smallest bump with the fix
@@ -99,7 +97,7 @@ Notable additions relevant to uplink: `AImage_getTransform`, `AImageReader_setDe
   (clippy doesn't lint them). `[patch.crates-io]` points `ndk`/`ndk-sys` at `external/ndk/`, and
   `ndk-context` and `netwatch` at theirs (sections below).
 - `sys/ndk-gl-sys` keeps bindgen's naming-lint allows (`non_upper_case_globals` etc.); the C names can't be renamed.
-- Env (NDK/SDK/JAVA/LIBCLANG/SKIA cache) comes from the `justfile` exports, so run cargo through `just`.
+- Env (NDK/SDK/JAVA) comes from the `justfile` exports, so run cargo through `just`.
 - `ndk/src/media/media_codec.rs`, `media_format.rs`: imports (`abort_on_panic`, `c_char`, `c_void`, `Pin`, `Result`)
   and the `async_notify_callback` field are gated with the same `api-level-28`/`29` cfg as the code that uses them.
   Upstream leaves them ungated, which warns with `media` + `api-level-26`. Worth sending upstream.

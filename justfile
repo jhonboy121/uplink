@@ -24,23 +24,15 @@ coverage_dir := "target/coverage"
 # The design's frame in dp: 360 wide at the mockup's 9/19.3, which is what `just ui-diff` renders.
 design_size := "360x772"
 cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
-# proot emulates setsockopt via ptrace and returns EOPNOTSUPP under concurrent UDP binds (iroh/noq
-# IP_PKTINFO); run tests serially here. Raise on real Linux/CI.
-test_threads := env("RUST_TEST_THREADS", "1")
 java_release := "8"
-
-# rustc mmaps its incremental cache; under proot that faults (SIGBUS) when linking the app.
-# It also keeps the target dir smaller. Override with CARGO_INCREMENTAL=1 if it ever behaves.
-export CARGO_INCREMENTAL := env("CARGO_INCREMENTAL", "0")
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
 export ANDROID_NDK := ANDROID_NDK_HOME
 export ANDROID_HOME := env("ANDROID_HOME", home_directory() / "android/sdk")
 export ANDROID_SDK_ROOT := ANDROID_HOME
 export ANDROID_API := min_sdk
-export JAVA_HOME := env("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk")
-export LIBCLANG_PATH := env("LIBCLANG_PATH", "/usr/lib/llvm22/lib")
-export SKIA_BINARIES_URL := "file://" + home_directory() / "android/cache/skia-binaries-{key}.tar.gz"
+# Debian's openjdk-17 directory; Slint's build script runs javac + d8 from it.
+export JAVA_HOME := env("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-" + if arch() == "aarch64" { "arm64" } else { "amd64" })
 export UPLINK_LOG := log
 
 cargo_profile := if profile == "release" { "release" } else { "dev" }
@@ -111,7 +103,7 @@ dex:
 
 [doc('''
 Build, strip, compile the Java shim, write the manifest, zip and sign the APK into out_dir.
-Install from Termux with the printed termux-open command.
+Install with `just install` (adb).
 ''')]
 apk: build dex
     #!/bin/sh
@@ -120,7 +112,7 @@ apk: build dex
     unsigned="$stage.apk"
     trap 'rm -rf "$stage" "$unsigned"' EXIT
     mkdir -p "$stage/lib/arm64-v8a" "{{out_dir}}"
-    strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
+    llvm-strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
     cp "{{dex_dir}}/classes.dex" "$stage/"
     cargo run -q -p android-res -- compile --out "$stage" \
         --define package={{app_id}} --define lib={{lib}} --define activity={{activity}} \
@@ -134,7 +126,6 @@ apk: build dex
     java -jar "{{apksigner}}" sign --v4-signing-enabled false --ks "{{keystore}}" --ks-pass "pass:{{keystore_pass}}" \
         --out "{{apk}}" "$unsigned"
     echo "{{apk}} ($(du -h "{{apk}}" | cut -f1))"
-    echo "install (Termux): termux-open {{replace(apk, home_directory(), '~/alpine-data')}}"
 
 [doc("Disk usage of target/ per profile")]
 size:
@@ -249,12 +240,12 @@ ui-diff name="people" screen="People": (design-shot screen)
 
 [doc("Unit + integration tests for uplink-core (host, loopback only)")]
 test *args:
-    RUST_TEST_THREADS={{test_threads}} nice cargo test -p uplink-core {{args}}
+    nice cargo test -p uplink-core {{args}}
 
 [doc('''
 Code coverage for uplink-core with cargo-llvm-cov, using the system LLVM tools (same major as rustc's).
 HTML report in coverage_dir; `cargo llvm-cov clean --workspace` frees its instrumented build.
 ''')]
 coverage:
-    RUST_TEST_THREADS={{test_threads}} LLVM_COV="{{llvm_cov}}" LLVM_PROFDATA="{{llvm_profdata}}" nice cargo llvm-cov -p uplink-core --html --output-dir "{{coverage_dir}}"
+    LLVM_COV="{{llvm_cov}}" LLVM_PROFDATA="{{llvm_profdata}}" nice cargo llvm-cov -p uplink-core --html --output-dir "{{coverage_dir}}"
     LLVM_COV="{{llvm_cov}}" LLVM_PROFDATA="{{llvm_profdata}}" cargo llvm-cov report -p uplink-core --summary-only

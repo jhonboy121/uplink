@@ -18,13 +18,13 @@ jni = "0.22"          # same version Slint's backend uses (see jni-0.22.md)
   `renderer-femtovg` has no effect there. The `unstable-wgpu-29/30` features switch Skia to a wgpu
   backend (`SkiaRenderer::default_wgpu_30`).
 
-## Build requirements (on-phone setup)
+## Build requirements
 
 - **skia-bindings 0.153.3** downloads prebuilt
   `skia-binaries-b7f043e0b1e2a850e702-aarch64-linux-android-ganesh-gl-jpegd-jpege-pdf-vulkan.tar.gz`
-  (7.1 MB → `libskia.a` 23.5 MB). It's cached at `~/android/cache/`. Point
-  `SKIA_BINARIES_URL = "file:///path/to/skia-binaries-{key}.tar.gz"` at it (`file://` supported).
-  Needs `ANDROID_NDK` set, and hardcodes the `linux-x86_64` prebuilt dir name (our NDK extraction matches).
+  (7.1 MB → `libskia.a` 23.5 MB) from GitHub. Offline, point
+  `SKIA_BINARIES_URL = "file:///path/to/skia-binaries-{key}.tar.gz"` at a local copy (`file://` supported).
+  Needs `ANDROID_NDK` set, and hardcodes the `linux-x86_64` prebuilt dir name (the NDK zip has it on every host).
   Links `c++_static` + `c++abi` from the NDK sysroot.
 - **Java helper:** the backend's build.rs compiles `java/SlintAndroidJavaHelper.java` with `javac` (source/target 8),
   then `d8`, via the `android_build` crate. Needs `JAVA_HOME` (JDK 17 OK; 21 fails with old build-tools) and

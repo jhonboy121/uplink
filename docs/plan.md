@@ -79,7 +79,9 @@ This is the source of truth for decisions. Changes go in as dated entries in [Re
 - APK: `axml` (our manifest writer, replaces x86-only aapt2) + `jar` + `apksigner.jar`. The Java shim adds `javac` +
   `d8.jar` → `classes.dex`.
 - **No Gradle, no xbuild** (unmaintained; its Java path is Gradle). A Rust APK signer can replace `jar`/`apksigner` later.
-- Development happens on-device (Termux + proot Alpine, arm64 musl). No adb: apps log to logcat + a data-dir file,
+- Development happens on Debian/Ubuntu (arm64 or x86-64, glibc): apt `clang lld llvm cmake openjdk-17-jdk-headless`
+  (+ `libclang-dev` for `just bindgen`, `libfontconfig-dev pkg-config` for `just preview`), and NDK r30,
+  build-tools 37.0.0 and platform android-37.0 unpacked under `~/android/{ndk,sdk}`. Apps log to logcat + a data-dir file,
   and show the previous run's log and exit reasons (ApplicationExitInfo) in-app. iOS builds will need macOS CI.
 
 ## Engineering rules
@@ -126,7 +128,7 @@ default); keep disk usage lean. Avoid build scripts.
   **must** negotiate hybrid `X25519MLKEM768`; anything else is refused before signalling (`CLOSE_NOT_POST_QUANTUM`). X25519
   stays in the provider only for relay/HTTPS. aws-lc builds for Android via our clang wrapper without system CMake.
   `Node::start(secret, Network::{N0, Local(MemoryLookup)})`; Local = loopback + in-memory lookup for tests. Tests: unit +
-  loopback integration (`just test`), coverage with `cargo-llvm-cov` + system LLVM 22 tools (`just coverage`); tests use
+  loopback integration (`just test`), coverage with `cargo-llvm-cov` + system LLVM tools (`just coverage`); tests use
   `anyhow::Result` + `?` (no unwrap/expect, no clippy test exceptions).
 - **2026-09-22**: roadmap step 3 done: the app runs uplink-core over n0 and calls/answers the CLI in both directions on
   the S24. `NodeHandle` holds a `WeakSender` (non-owning; only `Node` controls the node's lifetime, `shutdown` = drop the
