@@ -1,6 +1,6 @@
 // Who you can call, and one of them opened.
 
-import { LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ContactDetail, ContactItem, Group, Reach, Unit } from "types.slint";
 import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
@@ -79,7 +79,7 @@ export component PeoplePage inherits Rectangle {
                 }
             }
         }
-        if root.contacts.length > 0 : ScrollView {
+        if root.contacts.length > 0 : ListView {
             vertical-stretch: 1;
             // A finger drags the list itself; without this only the scrollbar moves it.
             mouse-drag-pan-enabled: true;
@@ -100,58 +100,55 @@ export component PeoplePage inherits Rectangle {
             changed reveal => { self.show-revealed(); }
             changed content-height => { self.show-revealed(); }
             changed visible-height => { self.show-revealed(); }
-            VerticalLayout {
-                alignment: start;
-                // A flat list: rows are divided by a hairline, never boxed. The hairline is
-                // part of the stack, as the design's border-top is, so the pitch includes it.
-                for contact[index] in root.contacts : VerticalLayout {
-                    for group in contact.heading : SectionHead {
-                        text: group == Group.favourites ? @tr("FAVOURITES") : @tr("ALL");
-                    }
-                    // A hairline divides rows within a group; a heading already divides groups.
-                    // Rust counts this too, to know where a row sits.
-                    if index > 0 && contact.heading.length == 0 : Rectangle {
-                        height: Theme.hairline-width;
-                        background: Theme.hairline;
-                    }
-                    // Holding a row starts selecting with it, which is the only way in.
-                    PersonRow {
-                        name: contact.name;
-                        initial: contact.initial;
-                        tint: index;
-                        selecting: root.selecting;
-                        selected: contact.selected;
-                        fresh: contact.fresh;
-                        tapped => {
-                            if (root.selecting) {
-                                root.select(contact.id);
-                            } else {
-                                root.open(contact.id);
-                            }
-                        }
-                        held => {
-                            root.long-pressed();
-                            if (!root.selecting) {
-                                root.start-selecting();
-                            }
+            // A flat list: rows are divided by a hairline, never boxed. The hairline is
+            // part of the stack, as the design's border-top is, so the pitch includes it.
+            for contact[index] in root.contacts : VerticalLayout {
+                for group in contact.heading : SectionHead {
+                    text: group == Group.favourites ? @tr("FAVOURITES") : @tr("ALL");
+                }
+                // A hairline divides rows within a group; a heading already divides groups.
+                // Rust counts this too, to know where a row sits.
+                if index > 0 && contact.heading.length == 0 : Rectangle {
+                    height: Theme.hairline-width;
+                    background: Theme.hairline;
+                }
+                // Holding a row starts selecting with it, which is the only way in.
+                PersonRow {
+                    name: contact.name;
+                    initial: contact.initial;
+                    tint: index;
+                    selecting: root.selecting;
+                    selected: contact.selected;
+                    fresh: contact.fresh;
+                    tapped => {
+                        if (root.selecting) {
                             root.select(contact.id);
+                        } else {
+                            root.open(contact.id);
                         }
-                        both: true;
-                        call(voice) => { root.call(contact.id, voice); }
-                        RowName { text: contact.name; }
-                        // When they were last called is prose, not a code, so it takes the body
-                        // face rather than the monospace one.
-                        RowDetail {
-                            text: contact.last-called.length == 0 ? @tr("Never called")
-                                : contact.last-called[0].unit == Unit.now ? @tr("Called just now")
-                                : contact.last-called[0].unit == Unit.minutes
-                                    ? @tr("Called {n} minute ago" | "Called {n} minutes ago" % contact.last-called[0].count)
-                                : contact.last-called[0].unit == Unit.hours
-                                    ? @tr("Called {n} hour ago" | "Called {n} hours ago" % contact.last-called[0].count)
-                                : contact.last-called[0].unit == Unit.days
-                                    ? @tr("Called {n} day ago" | "Called {n} days ago" % contact.last-called[0].count)
-                                : @tr("Called {n} week ago" | "Called {n} weeks ago" % contact.last-called[0].count);
+                    }
+                    held => {
+                        root.long-pressed();
+                        if (!root.selecting) {
+                            root.start-selecting();
                         }
+                        root.select(contact.id);
+                    }
+                    both: true;
+                    call(voice) => { root.call(contact.id, voice); }
+                    RowName { text: contact.name; }
+                    // When they were last called is prose, not a code, so it takes the body
+                    // face rather than the monospace one.
+                    RowDetail {
+                        text: contact.last-called.length == 0 ? @tr("Never called")
+                            : contact.last-called[0].unit == Unit.now ? @tr("Called just now")
+                            : contact.last-called[0].unit == Unit.minutes
+                                ? @tr("Called {n} minute ago" | "Called {n} minutes ago" % contact.last-called[0].count)
+                            : contact.last-called[0].unit == Unit.hours
+                                ? @tr("Called {n} hour ago" | "Called {n} hours ago" % contact.last-called[0].count)
+                            : contact.last-called[0].unit == Unit.days
+                                ? @tr("Called {n} day ago" | "Called {n} days ago" % contact.last-called[0].count)
+                            : @tr("Called {n} week ago" | "Called {n} weeks ago" % contact.last-called[0].count);
                     }
                 }
             }

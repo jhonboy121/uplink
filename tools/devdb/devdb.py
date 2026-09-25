@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Edit uplink's database on a connected phone, for testing.
 
-    devdb.py seed 20            twenty random contacts, some favourites, some called lately
+    devdb.py seed contacts 20   twenty random contacts, some favourites, some called lately
+    devdb.py seed calls 200     two hundred calls in the log, mostly with saved contacts, some with
+                                keys nobody saved, over the last two months
     devdb.py add <key> [name]   a key saved as a contact — the one the CLI prints, say, which
                                 has no code to scan
     devdb.py sql "<statement>"  one statement, for a hand migration: prints any rows it returns
@@ -50,6 +52,29 @@ FAVOURITE_SHARE = 0.15
 CALLED_SHARE = 0.6
 CALLED_WITHIN_DAYS = 45
 SECONDS_PER_DAY = 86_400
+# Seeded calls: how far back, how many are with keys nobody saved, and which way each outcome can
+# go (as `calls::Outcome` stores it), weighted roughly as a phone's log reads.
+CALLS_WITHIN_DAYS = 60
+STRANGER_SHARE = 0.1
+VOICE_SHARE = 0.4
+OUTCOMES = [
+    # (outcome, incoming: True / False / None for either, weight)
+    ("answered", None, 50),
+    ("missed", True, 14),
+    ("declined", True, 4),
+    ("screened", True, 3),
+    ("rejected", False, 4),
+    ("cancelled", False, 8),
+    ("no-answer", False, 8),
+    ("unreachable", False, 4),
+    ("lost", None, 3),
+    ("failed", None, 2),
+]
+ANSWERED = ("answered", "lost")
+LONGEST_CALL_SECONDS = 3_600
+# Bytes a second each way for an answered call's traffic: a voice call, a video one.
+VOICE_BYTES_PER_SECOND = 6_000
+VIDEO_BYTES_PER_SECOND = 450_000
 
 
 def random_key() -> str:
@@ -80,7 +105,14 @@ class Device:
         self.shell(f"am force-stop --user {self.user} {self.package}")
 
     def pull(self, into: Path):
-        present = self.run_as(f"ls {FILES}", capture=True).decode().split()
+        listing = subprocess.run(
+            ["adb", "exec-out", f"run-as {self.package} --user {self.user} ls {FILES}"], capture_output=True
+        )
+        said = (listing.stdout + listing.stderr).decode()
+        # run-as says so on stdout and still exits 0 through exec-out.
+        if "not debuggable" in said:
+            sys.exit(f"{self.package} is a release build: install a debug one (`just apk && just install`)")
+        present = said.split()
         if DATABASE not in present:
             sys.exit(f"no {DATABASE} on the device yet: open uplink once first")
         for name in (DATABASE, *SIDECARS):
@@ -88,7 +120,8 @@ class Device:
                 (into / name).write_bytes(self.run_as(f"cat {FILES}/{name}", capture=True))
 
     def push(self, database: Path):
-        subprocess.run(["adb", "push", "-q", str(database), DEVICE_STAGING], check=True)
+        # Quiet by discarding its line: `push -q` is newer than some adb builds (Debian's 34).
+        subprocess.run(["adb", "push", str(database), DEVICE_STAGING], check=True, stdout=subprocess.DEVNULL)
         sidecars = " ".join(f"{FILES}/{name}" for name in SIDECARS)
         self.run_as(f"sh -c 'cp {DEVICE_STAGING} {FILES}/{DATABASE} && rm -f {sidecars}'")
         self.shell(f"rm -f {DEVICE_STAGING}")
@@ -111,6 +144,35 @@ def free_name(wanted: str, taken: set[str]) -> str:
     while name in taken:
         name, n = f"{wanted} {n}", n + 1
     return name
+
+
+def seed_calls(db: sqlite3.Connection, count: int):
+    saved = list(contacts(db))
+    if db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'calls'").fetchone() is None:
+        sys.exit("no calls table yet: open uplink once first")
+    now = int(time.time())
+    last_called: dict[str, int] = {}
+    weights = [weight for _, _, weight in OUTCOMES]
+    for _ in range(count):
+        peer = random_key() if not saved or random.random() < STRANGER_SHARE else random.choice(saved)
+        outcome, way, _ = random.choices(OUTCOMES, weights)[0]
+        incoming = random.random() < 0.5 if way is None else way
+        at = now - random.randrange(CALLS_WITHIN_DAYS * SECONDS_PER_DAY)
+        voice = random.random() < VOICE_SHARE
+        seconds = sent = received = None
+        if outcome in ANSWERED:
+            seconds = random.randrange(1, LONGEST_CALL_SECONDS)
+            rate = VOICE_BYTES_PER_SECOND if voice else VIDEO_BYTES_PER_SECOND
+            sent, received = (int(seconds * rate * random.uniform(0.6, 1.2)) for _ in range(2))
+        db.execute(
+            "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, voice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (peer, int(incoming), outcome, at, seconds, sent, received, int(voice)),
+        )
+        if peer in saved:
+            last_called[peer] = max(at, last_called.get(peer, 0))
+    for peer, at in last_called.items():
+        db.execute("UPDATE contacts SET last_called = max(coalesce(last_called, 0), ?) WHERE id = ?", (at, peer))
+    print(f"added {count} calls")
 
 
 def seed(db: sqlite3.Connection, count: int):
@@ -154,7 +216,8 @@ def main():
     parser.add_argument("--user", default="0", help="Android user the app is installed for")
     parser.add_argument("--launch", metavar="ACTIVITY", help="start this activity afterwards")
     commands = parser.add_subparsers(dest="command", required=True)
-    seeding = commands.add_parser("seed", help="add random contacts")
+    seeding = commands.add_parser("seed", help="add random contacts or calls")
+    seeding.add_argument("kind", choices=["contacts", "calls"])
     seeding.add_argument("count", type=int)
     adding = commands.add_parser("add", help="save a key as a contact")
     adding.add_argument("key")
@@ -170,8 +233,10 @@ def main():
         device.pull(work)
         db = sqlite3.connect(work / DATABASE)
         with db:
-            if args.command == "seed":
+            if args.command == "seed" and args.kind == "contacts":
                 seed(db, args.count)
+            elif args.command == "seed":
+                seed_calls(db, args.count)
             elif args.command == "sql":
                 run_sql(db, args.statement)
             else:

@@ -1288,3 +1288,9 @@ default); keep disk usage lean. Avoid build scripts.
   while it posts frames, so the panel runs 120 while scrolling or animating and may slow again
   when the app is still; a forced display mode would hold 120 all the time. SurfaceFlinger shows
   the layer at `frameRate: 120.00 Hz`; smooth on the S24 (device-tested, debug build).
+- **2026-09-26**: **long lists are virtualized.** Seeding 1000 contacts made People stutter and
+  the tab switch crawl: the list was a `for` in a `ScrollView`, which makes every row up front,
+  and the page sits behind `if root.screen == …`, so every switch to it made all 1000 again.
+  People and the call log are now `ListView`s (only visible rows exist); the preview's painted
+  rows are identical before and after in every variant. Device-tested with 1000 contacts and
+  300 calls: smooth. `just seed contacts N` / `just seed calls N` fill either for testing.

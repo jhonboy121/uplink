@@ -1,7 +1,7 @@
 // What happened, and with whom: the call log, and one call opened from it. A missed call is the
 // only thing here worth a colour.
 
-import { ScrollView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { CallDetail, CallItem, Day, DayAgo, Ending, Ipv6, Measure, Path, PathKind, Stat } from "types.slint";
 import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, Line, PageTitle, Row, RowDetail, RowName, SectionHead, StatRow, Wide } from "controls.slint";
@@ -145,83 +145,80 @@ export component CallsPage inherits Rectangle {
             title: @tr("No calls yet");
             body: @tr("Calls you make and calls you miss both end up here.");
         }
-        if root.calls.length > 0 : ScrollView {
+        if root.calls.length > 0 : ListView {
             vertical-stretch: 1;
             mouse-drag-pan-enabled: true;
-            VerticalLayout {
-                alignment: start;
-                for entry[index] in root.calls : VerticalLayout {
-                    for day in entry.day : SectionHead { text: CallWords.heading(day); }
-                    if index > 0 && entry.day.length == 0 : Rectangle {
-                        height: Theme.hairline-width;
-                        background: Theme.hairline;
-                    }
-                    // A tap opens the call, or ticks it while selecting; the pill calls.
-                    PersonRow {
-                        name: entry.name;
-                        initial: entry.initial;
-                        tint: entry.tint;
-                        selecting: root.selecting;
-                        selected: entry.selected;
-                        tapped => {
-                            if (root.selecting) {
-                                root.select(entry.entry);
-                            } else {
-                                root.open(entry.entry);
-                            }
-                        }
-                        held => {
-                            root.long-pressed();
-                            if (!root.selecting) {
-                                root.start-selecting();
-                            }
+            for entry[index] in root.calls : VerticalLayout {
+                for day in entry.day : SectionHead { text: CallWords.heading(day); }
+                if index > 0 && entry.day.length == 0 : Rectangle {
+                    height: Theme.hairline-width;
+                    background: Theme.hairline;
+                }
+                // A tap opens the call, or ticks it while selecting; the pill calls.
+                PersonRow {
+                    name: entry.name;
+                    initial: entry.initial;
+                    tint: entry.tint;
+                    selecting: root.selecting;
+                    selected: entry.selected;
+                    tapped => {
+                        if (root.selecting) {
                             root.select(entry.entry);
+                        } else {
+                            root.open(entry.entry);
                         }
-                        voice: entry.voice;
-                        // Rings back the kind it was.
-                        call(voice) => { root.call(entry.id, voice); }
-                        RowName {
-                            text: entry.name;
-                            color: entry.ending == Ending.missed ? Theme.end-call : Theme.text;
+                    }
+                    held => {
+                        root.long-pressed();
+                        if (!root.selecting) {
+                            root.start-selecting();
                         }
-                        // The arrow carries direction by its tilt and the ending by its colour;
-                        // the words say the ending too, so colour is never the only telling of it.
-                        // After it, a phone or a camera: which kind of call it was.
-                        Row {
-                            spacing: Theme.call-arrow-gap;
-                            VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    source: entry.incoming
-                                        ? @image-url("icons/call-in.svg")
-                                        : @image-url("icons/call-out.svg");
-                                    width: Theme.call-arrow;
-                                    height: self.width;
-                                    colorize: CallWords.answered(entry.ending) ? Theme.beacon : Theme.end-call;
-                                    accessible-role: image;
-                                    accessible-label: entry.incoming ? @tr("Incoming") : @tr("Outgoing");
-                                }
+                        root.select(entry.entry);
+                    }
+                    voice: entry.voice;
+                    // Rings back the kind it was.
+                    call(voice) => { root.call(entry.id, voice); }
+                    RowName {
+                        text: entry.name;
+                        color: entry.ending == Ending.missed ? Theme.end-call : Theme.text;
+                    }
+                    // The arrow carries direction by its tilt and the ending by its colour;
+                    // the words say the ending too, so colour is never the only telling of it.
+                    // After it, a phone or a camera: which kind of call it was.
+                    Row {
+                        spacing: Theme.call-arrow-gap;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: entry.incoming
+                                    ? @image-url("icons/call-in.svg")
+                                    : @image-url("icons/call-out.svg");
+                                width: Theme.call-arrow;
+                                height: self.width;
+                                colorize: CallWords.answered(entry.ending) ? Theme.beacon : Theme.end-call;
+                                accessible-role: image;
+                                accessible-label: entry.incoming ? @tr("Incoming") : @tr("Outgoing");
                             }
-                            VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    source: entry.voice ? @image-url("icons/call.svg") : @image-url("icons/video-key.svg");
-                                    width: Theme.call-arrow;
-                                    height: self.width;
-                                    colorize: Theme.muted;
-                                    accessible-role: image;
-                                    accessible-label: entry.voice ? @tr("Voice") : @tr("Video");
-                                }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: entry.voice ? @image-url("icons/call.svg") : @image-url("icons/video-key.svg");
+                                width: Theme.call-arrow;
+                                height: self.width;
+                                colorize: Theme.muted;
+                                accessible-role: image;
+                                accessible-label: entry.voice ? @tr("Voice") : @tr("Video");
                             }
-                            // "Missed · 21:04", "4:12 · 21:04" for one that was answered, and
-                            // "9:14 · Connection lost · 23:10" for one the network ended.
-                            RowDetail {
-                                text: Theme.direction-mark
-                                    + (entry.duration.length > 0 ? entry.duration[0] : CallWords.ending(entry.ending))
-                                    + (entry.duration.length > 0 && entry.ending == Ending.lost ? " · " + CallWords.ending(entry.ending) : "")
-                                    + " · " + entry.time;
-                                horizontal-stretch: 1;
-                            }
+                        }
+                        // "Missed · 21:04", "4:12 · 21:04" for one that was answered, and
+                        // "9:14 · Connection lost · 23:10" for one the network ended.
+                        RowDetail {
+                            text: Theme.direction-mark
+                                + (entry.duration.length > 0 ? entry.duration[0] : CallWords.ending(entry.ending))
+                                + (entry.duration.length > 0 && entry.ending == Ending.lost ? " · " + CallWords.ending(entry.ending) : "")
+                                + " · " + entry.time;
+                            horizontal-stretch: 1;
                         }
                     }
                 }

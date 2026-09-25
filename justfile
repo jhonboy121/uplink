@@ -175,9 +175,12 @@ install:
 logcat:
     adb logcat -v time -s uplink:V AndroidRuntime:E DEBUG:F
 
-[doc("Add COUNT random contacts to the app on the device over adb (debug build; restarts the app)")]
-seed count="20":
-    python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} seed {{count}}
+[doc('''
+Add COUNT random contacts or calls to the app on the device over adb (debug build; restarts the
+app): `just seed contacts 1000`, `just seed calls 500`.
+''')]
+seed kind count="20":
+    python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} seed {{kind}} {{count}}
 
 [doc("Run one SQL STATEMENT against the app's database on the device, for a hand migration (debug build; restarts the app)")]
 db-sql statement:
