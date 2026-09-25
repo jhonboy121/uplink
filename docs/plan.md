@@ -1014,3 +1014,10 @@ default); keep disk usage lean. Avoid build scripts.
     twice the best seen on the current route and 150 ms over it, or 1.5 s outright; the best starts over
     when the route changes, since 618 ms relayed is not a climb from 113 ms direct. On a voice call their
     pill is centred under the timer; ours is in the corner above the keys, as in video.
+- **2026-09-25**: **the call's corner card drags** (the user's call; the locked mockup still draws it
+  fixed in the top end corner, which stays its resting place until it is moved). It moves between the
+  top bar and the keys, follows the finger with its slide animation off, and keeps its place across a
+  fold and restore; a tap still swaps. The drag is `DragTap`, shared with the folded call. Also fixed:
+  with the camera off and our own picture filling the screen, it held the last frame; the camera-off
+  cover now fills the screen too, as the mockup's self view does when it grows. Both device-tested on
+  the S24.
