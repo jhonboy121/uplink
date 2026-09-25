@@ -61,10 +61,12 @@ use crate::video::{CallVideo, VideoParts};
 use crate::view::{maybe, none, one, toast};
 
 const LOG_TAG: &CStr = c"uplink";
-/// Baked in at build time (`just log=debug apk`).
+/// Baked in at build time (`just log=debug apk`). iroh's path events (opened, selected,
+/// abandoned) and the selector's RTTs say why a call ran over the path it did; they only fire when
+/// paths change, so they are always on.
 const LOG_FILTER: &str = match option_env!("UPLINK_LOG") {
     Some(filter) => filter,
-    None => "info",
+    None => "info,iroh::_events::path=debug,iroh::socket::biased_rtt_path_selector=trace",
 };
 const FALLBACK_DATA_DIR: &str = "/data/local/tmp";
 /// Stats ticks per line written to the log. The counters are read every second either way.

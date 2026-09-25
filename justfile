@@ -2,7 +2,8 @@ set shell := ["sh", "-eu", "-c"]
 
 # ---- overridable: `just profile=release log=debug apk` ----
 profile := "debug"
-log := "info"
+# iroh's path events always: they say why a call ran over the path it did, and only fire on changes.
+log := "info,iroh::_events::path=debug,iroh::socket::biased_rtt_path_selector=trace"
 android_target := "aarch64-linux-android"
 # Only what the manifest shares with the build; the rest of the app's identity (label, versions,
 # targetSdk, its other components) is written in android/AndroidManifest.xml.

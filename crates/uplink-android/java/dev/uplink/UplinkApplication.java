@@ -781,6 +781,8 @@ public class UplinkApplication extends Application {
     private final ConnectivityManager.NetworkCallback network = new ConnectivityManager.NetworkCallback() {
         /** The default network's interface and DNS servers as last told, so repeats are skipped. */
         private String last = "";
+        /** The network last seen validated, so its many later capability updates are not news. */
+        private Network validated;
 
         @Override
         public void onAvailable(Network network) {
@@ -796,8 +798,24 @@ public class UplinkApplication extends Application {
         @Override
         public void onLost(Network network) {
             last = "";
+            validated = null;
             log(Log.INFO, "network: lost");
             tellNetwork(false);
+        }
+
+        /**
+         * Told again once Android has validated the network: its link properties arrive before the
+         * route through it works, and a direct path iroh tries then can fail and not be retried for
+         * a while (seen: 30 s on a router hairpin after Wi-Fi came back). This is when it works.
+         */
+        @Override
+        public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+            if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) || network.equals(validated)) {
+                return;
+            }
+            validated = network;
+            log(Log.INFO, "network: validated");
+            tellNetwork(true);
         }
 
         @Override

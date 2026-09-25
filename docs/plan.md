@@ -1138,3 +1138,13 @@ default); keep disk usage lean. Avoid build scripts.
   - Open: two camera streams at 60 fps (the self-view and the encoder) may be more than some
     phones' cameras run together even where each alone passes the check; watch the log for a camera
     that fails to open on Highest.
+- **2026-09-25**: **network switches, measured with iroh's path events.** The app and the CLI now log
+  `iroh::_events::path` (open, selected, abandoned) and the path selector's RTTs by default: they
+  only fire when paths change, and they say why a call ran over the path it did.
+  - **Wi-Fi back** took ~30 s before: the direct path opened and was abandoned within milliseconds
+    twice, and the call sat on a router hairpin at 10–17% loss. iroh is now told again when Android
+    **validates** the network (`onCapabilitiesChanged`), not only on its link properties: the direct
+    path settles within a second and the video never drops (device-tested).
+  - **Wi-Fi to mobile** still takes ~19 s: iroh keeps the dead Wi-Fi path ~6 s after being told
+    (abandoned only at `UnusableAfterNetworkChange`), then the relay round trip climbed to 4 s
+    because the CLI, on the same phone and the same mobile uplink, pushed its clip at ~5 Mbps.

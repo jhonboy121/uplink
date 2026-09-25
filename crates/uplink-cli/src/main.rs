@@ -21,7 +21,9 @@ use uplink_core::settings::Settings;
 use uplink_core::{EndpointId, identity, runtime};
 
 // mp4_atom warns about every vendor box in a phone recording (`smta`, `cami`, …); not our problem.
-const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info,mp4_atom=error";
+/// iroh's path events and the selector's RTTs too: why a call ran over the path it did.
+const DEFAULT_LOG: &str = "warn,uplink=info,uplink_core=info,mp4_atom=error,\
+    iroh::_events::path=debug,iroh::socket::biased_rtt_path_selector=trace";
 const DEFAULT_DIR: &str = ".local/share/uplink";
 /// What this build tells the other side of a call it is, for either side's "update" notice.
 const APP: &str = concat!("cli ", env!("CARGO_PKG_VERSION"));
