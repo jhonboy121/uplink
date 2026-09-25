@@ -1,6 +1,9 @@
 [submodule "external/ndk"]
 	path = external/ndk
 	url = https://github.com/jhonboy121/ndk.git
+[submodule "external/net-tools"]
+	path = external/net-tools
+	url = https://github.com/jhonboy121/net-tools.git
 [submodule "external/ndk-context"]
 	path = external/ndk-context
 	url = https://github.com/jhonboy121/ndk-context.git

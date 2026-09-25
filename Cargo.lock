@@ -4083,19 +4083,19 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.19.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39da9cad5f23aa43401f09497d3b280e51b5feba115d9ffbf38ca35d6ff95e96"
 dependencies = [
  "atomic-waker",
  "bytes",
  "cfg_aliases",
  "derive_more",
  "ipnet",
+ "jni 0.22.4",
  "js-sys",
  "libc",
  "n0-error",
  "n0-future",
  "n0-watcher",
+ "ndk-context",
  "netdev 0.45.1",
  "netdev 0.46.3",
  "netlink-packet-core 0.8.2",

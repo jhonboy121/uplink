@@ -113,6 +113,9 @@ ndk-sys = { path = "external/ndk/ndk-sys" }
 # First caller wins instead of panicking, so the app can set it before android-activity does.
 # See docs/ref/ndk-vendoring.md.
 ndk-context = { path = "external/ndk-context/ndk-context" }
+# Android's default route from ConnectivityManager: apps may no longer read it the ways netwatch
+# tries, and iroh then holds every network change back for 5 s. See docs/ref/ndk-vendoring.md.
+netwatch = { path = "external/net-tools/netwatch" }
 
 [profile.dev]
 debug = "line-tables-only"

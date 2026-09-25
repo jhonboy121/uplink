@@ -1148,3 +1148,12 @@ default); keep disk usage lean. Avoid build scripts.
   - **Wi-Fi to mobile** still takes ~19 s: iroh keeps the dead Wi-Fi path ~6 s after being told
     (abandoned only at `UnusableAfterNetworkChange`), then the relay round trip climbed to 4 s
     because the CLI, on the same phone and the same mobile uplink, pushed its clip at ~5 Mbps.
+- **2026-09-25**: **no 5 s wait on a network change.** The ~6 s above was iroh waiting its full 5 s
+  for a default route that netwatch can't find on Android: apps may not read `/proc/net/route`, and
+  `ip route` can't bind its netlink socket. netwatch is vendored and asks ConnectivityManager over
+  JNI first, keeping `ip` as the fallback (`docs/ref/ndk-vendoring.md`). Switches both ways now
+  settle fast (device-tested). The CLI saturating the same phone's uplink is a test artifact, left as is.
+  - Open: once in a while playout sounds about half as loud after a network change, with the volume
+    at full. Our code applies no gain. In the one capture, SystemUI played an in-call sound
+    (usage VOICE_COMMUNICATION, on the `voip_rx` output) as Wi-Fi came back, and playback ran
+    ~7% short for 4 s. Not yet shown to be the cause: pull logcat right after it happens.

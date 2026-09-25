@@ -96,7 +96,8 @@ Notable additions relevant to uplink: `AImage_getTransform`, `AImageReader_setDe
 ## Workspace wiring
 
 - Root `Cargo.toml`: `exclude = ["vendor", "sys"]`, so they're built as path deps but are not workspace members
-  (clippy doesn't lint them). `[patch.crates-io]` points `ndk`/`ndk-sys` at `external/ndk/`.
+  (clippy doesn't lint them). `[patch.crates-io]` points `ndk`/`ndk-sys` at `external/ndk/`, and
+  `ndk-context` and `netwatch` at theirs (sections below).
 - `sys/ndk-gl-sys` keeps bindgen's naming-lint allows (`non_upper_case_globals` etc.); the C names can't be renamed.
 - Env (NDK/SDK/JAVA/LIBCLANG/SKIA cache) comes from the `justfile` exports, so run cargo through `just`.
 - `ndk/src/media/media_codec.rs`, `media_format.rs`: imports (`abort_on_panic`, `c_char`, `c_void`, `Pin`, `Result`)
@@ -137,3 +138,30 @@ closed without merging) and #4 (`is_initialized`, open) only add ways to read it
 declined the getter in #5 in favour of `android-context`, which is an empty 0.0.0 placeholder on
 crates.io. android-activity `main` has had no changes since 0.6.1. **Drop this patch once
 `android-context` ships and our dependencies move to it.** Related: hickory-dns#3625.
+
+One addition beyond that: `try_android_context() -> Option<AndroidContext>`, for our netwatch fork
+(below), which has the `ip` command to fall back on when no context is set.
+
+## Patched `netwatch` (default route from ConnectivityManager)
+
+netwatch 0.19.3 (the latest, 2026-09-25). Our change is one commit on its release commit `0030e57`,
+branch `uplink` of the fork https://github.com/jhonboy121/net-tools, the submodule at
+`external/net-tools/`, patched in through `[patch.crates-io]`.
+
+**Why:** iroh tells QUIC about a network change only once `has_usable_network()` holds: a default
+route and an address. Otherwise it polls with backoff up to its 5 s `MAX_WAIT`. On Android, netwatch
+finds the default route by reading `/proc/net/route` (permission denied to apps) and then running
+`ip route show table 0`. That prints nothing ("Cannot bind netlink socket: Permission denied" on
+stderr), and netwatch accepts the empty output as "no default route". So every network change waited
+the full 5 s, and a dead Wi-Fi path stayed in use that long. Checked with
+`adb shell run-as dev.uplink ip route show table 0`. iroh has no way to be told the route.
+
+**The patch** (in `src/interfaces/linux.rs`, marked `uplink patch`): `android::default_route()` first
+asks ConnectivityManager over JNI, `getActiveNetwork()` → `getLinkProperties()` →
+`getInterfaceName()`, through `ndk_context::try_android_context()`. A null at any step, no context, or
+a Java exception (cleared, and logged at debug) falls through to the upstream `ip` code, which is
+unchanged. It adds Android-only `jni` 0.22 and `ndk-context` 0.1 dependencies to its `Cargo.toml`.
+Wi-Fi to mobile and back now switch without the wait (device-tested).
+
+**Upstream:** worth an issue on n0-computer/net-tools. Drop the patch once netwatch asks the platform
+itself.
