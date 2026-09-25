@@ -941,8 +941,9 @@ default); keep disk usage lean. Avoid build scripts.
 - **2026-09-25**: **Rust has an Android context from the moment the process starts.** Last night's log
   showed iroh's DNS failing on mobile data from 02:31 to 12:42 IST. The relay dropped at 02:52 and never
   came back, and the endpoint sent ~33k unanswered packets an hour (about 73 bytes each, 86 mAh of mobile
-  radio). The cause of the DNS failure is **still unknown**: that process had an activity, so it had a
-  context. The fix below closes the related hole, not necessarily this one.
+  radio). That process had an activity, so it had a context: the context fix below closes a related
+  hole, not this one. **The cause was found later the same day** (see "iroh never heard that the network
+  changed" below): the resolver kept querying the wifi router's DNS after wifi went away.
   - **The hole:** a core started with no activity (boot, update, a restarted service) had no
     `ndk_context`. `n0-dns-resolver` then uses public nameservers in debug builds and **panics in
     release**, and `netdev` gives up on its JNI path for the life of the process. We could not set the
@@ -956,9 +957,8 @@ default); keep disk usage lean. Avoid build scripts.
     came up. A running headless core that moved from wifi to mobile re-resolved in about 1.5 s. The shell
     cannot send `BOOT_COMPLETED` on Android 16 (it's a protected broadcast), and a force-stopped app gets
     no broadcasts until one is sent to it explicitly, so a reinstall is the way to test this.
-    Still unproven: which nameservers were used (needs the trace below).
-  - **Still to do:** log the nameservers iroh actually uses (`n0_dns_resolver` at trace, or our own
-    line on each network change), then a night on mobile data.
+  - **Still to do:** a night on mobile data. The nameservers are now logged (the network callback logs
+    the DNS servers; `n0_dns_resolver=debug` shows the lookups).
   - **The beat's `elapsed_s` measures sleep now.** It was an `Instant` (`CLOCK_MONOTONIC`), which stops
     in suspend just like the tokio timer, so it always read 300. It's the wall clock now:
     `CLOCK_BOOTTIME` would mean `libc`, `unsafe` and a per-OS `cfg` in a platform-neutral crate. A
