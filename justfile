@@ -148,8 +148,11 @@ size:
 clean:
     cargo clean
 
+[doc("Build and install the APK and launch it over adb (needs a connected device)")]
+run: apk install
+
 [doc("Install the APK and launch it over adb (needs a connected device)")]
-run: apk
+install:
     adb install --user {{adb_user}} -r "{{apk}}"
     adb shell am start --user {{adb_user}} -n "{{app_id}}/{{activity}}"
 
