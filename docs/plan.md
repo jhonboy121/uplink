@@ -1021,3 +1021,6 @@ default); keep disk usage lean. Avoid build scripts.
   with the camera off and our own picture filling the screen, it held the last frame; the camera-off
   cover now fills the screen too, as the mockup's self view does when it grows. Both device-tested on
   the S24.
+  - **Their camera off, swapped:** the card held their last frame. It now shows the same camera-off
+    cover as ours. Not in the mockup, which only draws their camera off full screen (avatar, name,
+    pill); the card uses the mockup's own camera-off look. Device-tested on the S24.
