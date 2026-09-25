@@ -2306,6 +2306,91 @@ pub const STYLES: &[(&str, u32)] = &[
     ("Widget_WebView", 0x01030033),
 ];
 
+/// The words an attribute's value may be written in, and the number each stands for, from
+/// the SDK's own constants: `configChanges="keyboard|orientation"` rather than `0x90`.
+pub struct NamedValues {
+    pub attr: &'static str,
+    /// Flags combine with `|`; an enum is one word.
+    pub flags: bool,
+    pub words: &'static [(&'static str, u32)],
+}
+
+pub const VALUE_NAMES: &[NamedValues] = &[
+    NamedValues {
+        attr: "configChanges",
+        flags: true,
+        words: &[
+            ("colorMode", 0x4000),
+            ("density", 0x1000),
+            ("fontScale", 0x40000000),
+            ("fontWeightAdjustment", 0x10000000),
+            ("grammaticalGender", 0x8000),
+            ("keyboard", 0x10),
+            ("keyboardHidden", 0x20),
+            ("layoutDirection", 0x2000),
+            ("locale", 0x4),
+            ("mcc", 0x1),
+            ("mnc", 0x2),
+            ("navigation", 0x40),
+            ("orientation", 0x80),
+            ("resourcesUnused", 0x8000000),
+            ("screenLayout", 0x100),
+            ("screenSize", 0x400),
+            ("smallestScreenSize", 0x800),
+            ("touchscreen", 0x8),
+            ("uiMode", 0x200),
+        ],
+    },
+    NamedValues {
+        attr: "launchMode",
+        flags: false,
+        words: &[
+            ("singleInstance", 0x3),
+            ("singleInstancePerTask", 0x4),
+            ("singleTask", 0x2),
+            ("singleTop", 0x1),
+            ("standard", 0x0),
+        ],
+    },
+    NamedValues {
+        attr: "foregroundServiceType",
+        flags: true,
+        words: &[
+            ("camera", 0x40),
+            ("connectedDevice", 0x10),
+            ("dataSync", 0x1),
+            ("health", 0x100),
+            ("location", 0x8),
+            ("mediaPlayback", 0x2),
+            ("mediaProcessing", 0x2000),
+            ("mediaProjection", 0x20),
+            ("microphone", 0x80),
+            ("none", 0x0),
+            ("phoneCall", 0x4),
+            ("remoteMessaging", 0x200),
+            ("shortService", 0x800),
+            ("specialUse", 0x40000000),
+            ("systemExempted", 0x400),
+        ],
+    },
+    NamedValues {
+        attr: "windowSoftInputMode",
+        flags: true,
+        words: &[
+            ("adjustNothing", 0x30),
+            ("adjustPan", 0x20),
+            ("adjustResize", 0x10),
+            ("adjustUnspecified", 0x0),
+            ("stateAlwaysHidden", 0x3),
+            ("stateAlwaysVisible", 0x5),
+            ("stateHidden", 0x2),
+            ("stateUnchanged", 0x1),
+            ("stateUnspecified", 0x0),
+            ("stateVisible", 0x4),
+        ],
+    },
+];
+
 pub fn lookup(table: &[(&str, u32)], name: &str) -> Option<u32> {
     table.binary_search_by(|(n, _)| (*n).cmp(name)).ok().map(|i| table[i].1)
 }

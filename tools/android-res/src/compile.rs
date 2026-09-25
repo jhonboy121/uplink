@@ -123,6 +123,27 @@ fn typed(name: &str, text: &str) -> Result<Option<Value>> {
             .with_context(|| format!("android:{name}={text}: only whole dp is supported"))?;
         return Ok(Some(Value::Dimension((whole << COMPLEX_MANTISSA_SHIFT) | COMPLEX_UNIT_DIP)));
     }
+    // Words from the SDK's constants, or'd together: `phoneCall|camera|microphone`. A number is
+    // still a number, for a value no word covers.
+    if let Some(framework::NamedValues { flags, words, .. }) =
+        framework::VALUE_NAMES.iter().find(|named| named.attr == name)
+        && text.parse::<u32>().is_err()
+        && !text.starts_with("0x")
+    {
+        let mut value = 0;
+        for word in text.split('|').map(str::trim) {
+            let (_, bits) = words
+                .iter()
+                .find(|(known, _)| *known == word)
+                .with_context(|| format!("android:{name}: {word} is not one of its values"))?;
+            value |= bits;
+        }
+        if !flags && text.contains('|') {
+            bail!("android:{name}={text}: one value, not several");
+        }
+        // As aapt2 writes them: flags in hex, an enum in decimal.
+        return Ok(Some(if *flags { Value::Hex(value) } else { Value::Int(value) }));
+    }
     if let Some((_, values)) = ENUM_ATTRS.iter().find(|(attr, _)| *attr == name) {
         let (_, number) = values
             .iter()

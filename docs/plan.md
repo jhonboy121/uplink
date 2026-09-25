@@ -1110,3 +1110,9 @@ default); keep disk usage lean. Avoid build scripts.
   ui-preview reads a resource string with roxmltree instead of searching the text. Detail in
   docs/ref/android-res.md. Not yet device-tested: the launcher icon, the notification icon and the
   picture-in-picture buttons are the things to look at.
+- **2026-09-25**: **the manifest says what it means.** Values only the manifest uses are written in it
+  (label, versions, targetSdk, the components other than the activity); `--define` is left for what
+  the build uses too (package, activity, library, minSdk) and for debuggable. Flag and enum values are
+  the SDK's words (`phoneCall|camera|microphone`, `singleTop`, `adjustResize`), their numbers read
+  from `ActivityInfo`/`ServiceInfo`/`WindowManager.LayoutParams` by `just android-table`. The compiled
+  manifest and `resources.arsc` are byte-identical to before.

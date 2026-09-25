@@ -4,11 +4,10 @@ set shell := ["sh", "-eu", "-c"]
 profile := "debug"
 log := "info"
 android_target := "aarch64-linux-android"
+# Only what the manifest shares with the build; the rest of the app's identity (label, versions,
+# targetSdk, its other components) is written in android/AndroidManifest.xml.
 min_sdk := "30"
-target_sdk := "37"
 app_id := "dev.uplink"
-app_label := "uplink"
-version_code := "1"
 out_dir := home_directory() / "android/out"
 keystore := home_directory() / "android/debug.keystore"
 keystore_pass := "android"
@@ -16,12 +15,6 @@ keystore_validity_days := "10000"
 build_tools_version := "37.0.0"
 android_platform := "android-37.0"
 activity := "dev.uplink.UplinkActivity"
-call_service := "dev.uplink.UplinkCallService"
-listen_service := "dev.uplink.UplinkListenService"
-connection_service := "dev.uplink.UplinkConnectionService"
-boot_receiver := "dev.uplink.UplinkBootReceiver"
-files_provider := "dev.uplink.UplinkFiles"
-application := "dev.uplink.UplinkApplication"
 adb_user := "0"
 llvm_cov := env("LLVM_COV", "/usr/bin/llvm-cov")
 llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
@@ -128,13 +121,8 @@ apk: build dex
     strip --strip-debug -o "$stage/lib/arm64-v8a/lib{{lib}}.so" "{{so}}"
     cp "{{dex_dir}}/classes.dex" "$stage/"
     cargo run -q -p android-res -- compile --out "$stage" \
-        --define package={{app_id}} --define label={{app_label}} --define lib={{lib}} \
-        --define activity={{activity}} --define service={{call_service}} \
-        --define listen_service={{listen_service}} --define boot_receiver={{boot_receiver}} \
-        --define connection_service={{connection_service}} \
-        --define provider={{files_provider}} --define application={{application}} \
-        --define minSdk={{min_sdk}} --define targetSdk={{target_sdk}} \
-        --define versionCode={{version_code}} --define versionName=0.{{version_code}} \
+        --define package={{app_id}} --define lib={{lib}} --define activity={{activity}} \
+        --define minSdk={{min_sdk}} \
         --define debuggable={{ if debuggable == "1" { "true" } else { "false" } }}
     cargo run -q -p android-res -- package --dir "$stage" --out "$unsigned"
     if [ ! -f "{{keystore}}" ]; then
@@ -217,11 +205,13 @@ tr-check:
     python3 tools/tr/tr.py check
 
 [doc('''
-Regenerate tools/android-res/src/framework.rs — every android: attribute and style id, read out
-of android.jar with javap. Run it when the compile SDK changes; the result is checked in.
+Regenerate tools/android-res/src/framework.rs — every android: attribute and style id, and the named
+values of configChanges, launchMode, foregroundServiceType and windowSoftInputMode, read out of
+android.jar with javap. Run it when the compile SDK changes; the result is checked in.
 ''')]
 android-table:
     javap -constants -cp "{{android_jar}}" 'android.R$attr' 'android.R$style' \
+        android.content.pm.ActivityInfo android.content.pm.ServiceInfo 'android.view.WindowManager$LayoutParams' \
         | cargo run -q -p android-res -- gen-table --out tools/android-res/src/framework.rs
 
 [doc('''

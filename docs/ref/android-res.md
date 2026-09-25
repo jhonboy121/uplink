@@ -16,7 +16,7 @@ sysroot as well. Writing the formats was cheaper and has no runtime dependency.
 `just apk` stages a directory, then:
 
 1. `android-res compile --out <stage> --define …` reads `android/` and writes the binary
-   `AndroidManifest.xml`, `resources.arsc`, the compiled `res/**/*.xml` and the copied `res/**/*.png`.
+   `AndroidManifest.xml`, `resources.arsc` and the compiled `res/**/*.xml`.
 2. `android-res package --dir <stage> --out <apk>` zips it.
 3. `apksigner` (a jar, so it runs here) signs it.
 
@@ -25,12 +25,20 @@ sysroot as well. Writing the formats was cheaper and has no runtime dependency.
 Real XML, not element trees in Rust — change the manifest without recompiling a tool.
 
 ```
-android/AndroidManifest.xml      ${package}, ${label}, ${minSdk}… from --define
+android/AndroidManifest.xml      the app's own values written in it; --define only for what the
+                                 build uses too (${package} ${activity} ${lib} ${minSdk}) or
+                                 what differs per build (${debuggable})
 android/res/values/values.xml    <color>, <style>, <string>, <plurals> → resources.arsc
 android/res/values-ar/values.xml Arabic <string>/<plurals>: a second, locale-tagged table
 android/res/mipmap/launcher.xml  <adaptive-icon>, compiled to binary XML
-android/res/drawable/*.png       copied, referenced by name
+android/res/drawable/*.xml       <vector>s generated from assets/icons (just drawables)
 ```
+
+Flag and enum attributes are written as the SDK's words, `foregroundServiceType="phoneCall|camera"`,
+`launchMode="singleTop"`. The words and their numbers come from `ActivityInfo`, `ServiceInfo` and
+`WindowManager.LayoutParams` through the same `just android-table` javap run as the attribute ids
+(`framework::VALUE_NAMES`); flags are written in hex and enums in decimal, as aapt2 does. A bare
+number still compiles, for a value no word covers.
 
 Names resolve two ways: `android:foo` through the **generated** framework table
 (`framework.rs`, `just android-table`, 1560 attrs + 737 styles from `android.jar` via `javap`), and

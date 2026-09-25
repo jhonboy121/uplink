@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Compiled to binary XML by `android-res compile`. ${…} comes from the build; everything else is
-  the app's own business and belongs here rather than in a command line.
+  Compiled to binary XML by `android-res compile`. ${…} is only what the build uses too (the
+  package and activity for adb, the library it builds, the minSdk d8 and the linker target) and
+  what differs per build (debuggable); everything else is the app's own and is written here.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="${package}"
-    android:versionCode="${versionCode}"
-    android:versionName="${versionName}">
+    android:versionCode="1"
+    android:versionName="0.1">
 
-    <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="${targetSdk}" />
+    <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="37" />
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -57,8 +58,8 @@
     <!-- Our own Application: it exists before any activity, service or receiver, which makes it
          the one thing the app can be driven through when nobody is looking at the screen. -->
     <application
-        android:name="${application}"
-        android:label="${label}"
+        android:name="dev.uplink.UplinkApplication"
+        android:label="uplink"
         android:icon="@mipmap/launcher"
         android:roundIcon="@mipmap/launcher"
         android:theme="@style/Theme.Uplink"
@@ -67,19 +68,18 @@
         android:hardwareAccelerated="true">
 
         <!-- configChanges: the native side handles these rather than being restarted.
-             0x1ff0 = keyboard | keyboardHidden | orientation | screenLayout | uiMode |
-                      screenSize | smallestScreenSize | density.
-             windowSoftInputMode 0x10 = adjustResize. Under the enforced edge-to-edge of recent
-             target levels the window is not actually resized; the keyboard arrives as an inset,
-             which the UI reads as `virtual-keyboard-size`. The flag stays for the levels and
-             display modes where Android still honours it. -->
+             windowSoftInputMode adjustResize: under the enforced edge-to-edge of recent target
+             levels the window is not actually resized; the keyboard arrives as an inset, which
+             the UI reads as `virtual-keyboard-size`. The flag stays for the levels and display
+             modes where Android still honours it. The words are the SDK's own constants
+             (`just android-table`). -->
         <activity
             android:name="${activity}"
             android:exported="true"
-            android:configChanges="0x1ff0"
-            android:launchMode="1"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|density"
+            android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
-            android:windowSoftInputMode="0x10">
+            android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="${lib}" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -90,17 +90,17 @@
         <!-- Serves the one cache directory a shared picture is written to. Not exported: a target
              the user picked from the chooser reads the URI it was granted, and nothing else. -->
         <provider
-            android:name="${provider}"
+            android:name="dev.uplink.UplinkFiles"
             android:authorities="${package}.files"
             android:exported="false"
             android:grantUriPermissions="true" />
 
-        <!-- foregroundServiceType 0x40000000 = specialUse. The property says what the special use
-             is, which is what the type asks of anyone who declares it. -->
+        <!-- The property says what the special use is, which is what the type asks of anyone who
+             declares it. -->
         <service
-            android:name="${listen_service}"
+            android:name="dev.uplink.UplinkListenService"
             android:exported="false"
-            android:foregroundServiceType="0x40000000">
+            android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Holds the peer-to-peer endpoint open so incoming calls can arrive" />
@@ -109,7 +109,7 @@
         <!-- Telecom binds this for every call, placed or received. Exported, but only the system
              holds BIND_TELECOM_CONNECTION_SERVICE. -->
         <service
-            android:name="${connection_service}"
+            android:name="dev.uplink.UplinkConnectionService"
             android:exported="true"
             android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
             <intent-filter>
@@ -120,7 +120,7 @@
         <!-- Exported because the system sends BOOT_COMPLETED; MY_PACKAGE_REPLACED only ever
              reaches the package that was replaced. -->
         <receiver
-            android:name="${boot_receiver}"
+            android:name="dev.uplink.UplinkBootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -128,12 +128,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- foregroundServiceType 0xc4 = phoneCall | camera | microphone. phoneCall is the Telecom
-             call itself, and the fallback when Android refuses the other two because the app was
-             not in front, which keeps the call up rather than crashing it. -->
+        <!-- phoneCall is the Telecom call itself, and the fallback when Android refuses the other
+             two because the app was not in front, which keeps the call up rather than crashing it. -->
         <service
-            android:name="${service}"
+            android:name="dev.uplink.UplinkCallService"
             android:exported="false"
-            android:foregroundServiceType="0xc4" />
+            android:foregroundServiceType="phoneCall|camera|microphone" />
     </application>
 </manifest>
