@@ -958,8 +958,11 @@ default); keep disk usage lean. Avoid build scripts.
     no broadcasts until one is sent to it explicitly, so a reinstall is the way to test this.
     Still unproven: which nameservers were used (needs the trace below).
   - **Still to do:** log the nameservers iroh actually uses (`n0_dns_resolver` at trace, or our own
-    line on each network change), then a night on mobile data. The beat's `elapsed_s` uses a clock
-    that stops in deep sleep, so it always reads 300. It needs a boot-time or wall clock.
+    line on each network change), then a night on mobile data.
+  - **The beat's `elapsed_s` measures sleep now.** It was an `Instant` (`CLOCK_MONOTONIC`), which stops
+    in suspend just like the tokio timer, so it always read 300. It's the wall clock now:
+    `CLOCK_BOOTTIME` would mean `libc`, `unsafe` and a per-OS `cfg` in a platform-neutral crate. A
+    clock correction shows up as an outlier, and a backwards jump reads 0.
   - **The Online chip lied after a headless start.** The core only forwards events while a window is
     attached. A relay that answers before the window opens (24 ms to `relay-in`, while a boot or the
     listening service starts the core long before any window) sent Online to nobody, and the chip

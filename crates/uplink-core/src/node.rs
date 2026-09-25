@@ -373,19 +373,21 @@ impl Counters {
 /// and splits the bytes by path, so an idle app that is nonetheless busy on the wire shows up
 /// here rather than only as a battery figure the next morning.
 ///
-/// `elapsed` is reported because it is not `BEAT`. A tokio timer waits on a clock that does not
-/// wake a suspended CPU, so a beat that took much longer than it asked for is the measure of how
-/// long the device was actually asleep — the one thing Doze otherwise hides.
+/// `elapsed` is reported because it is not `BEAT`. The tokio timer counts only time the CPU was
+/// awake, so it always waits `BEAT` of that; the wall clock keeps running through suspend, so a
+/// beat that took much longer than it asked for is how long the device was actually asleep — the
+/// one thing Doze otherwise hides. It was an `Instant`, which stops in suspend too, so it always
+/// read 300. A wall clock set backwards reads as 0.
 async fn heartbeat(endpoint: Endpoint) {
     let mut last = Counters::read(&endpoint);
-    let mut at = std::time::Instant::now();
+    let mut at = SystemTime::now();
     loop {
         tokio::time::sleep(BEAT).await;
-        let (now, counters) = (std::time::Instant::now(), Counters::read(&endpoint));
+        let (now, counters) = (SystemTime::now(), Counters::read(&endpoint));
         let beat = counters.since(last);
         let home = endpoint.home_relay_status().get().into_iter().find(|relay| relay.is_connected());
         tracing::info!(
-            elapsed_s = now.duration_since(at).as_secs(),
+            elapsed_s = now.duration_since(at).unwrap_or_default().as_secs(),
             relay = home.is_some(),
             home = home.as_ref().map_or_else(String::new, |relay| relay.url().to_string()),
             relay_up = beat.relay_up,
