@@ -38,7 +38,9 @@ use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{CallId, CallLog};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
+use uplink_core::health::{Health, Weak};
 use uplink_core::logs;
+use uplink_core::reach::Reach as CoreReach;
 use uplink_core::settings::{self, Settings};
 use uplink_core::qr;
 use uplink_core::relays::{self, Choice, Ranking, Source};
@@ -92,6 +94,9 @@ const VIDEO: VideoConfig = VideoConfig {
     keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
 };
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
+/// How long after our own network changes a stalled call is put down to us rather than them: a
+/// switch between wifi and mobile data takes about a second, and the relay a moment more.
+const UNSETTLED: Duration = Duration::from_secs(5);
 const SECONDS_PER_MINUTE: u64 = 60;
 /// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
 const FRESH_FOR: Duration = Duration::from_millis(3200);
@@ -152,6 +157,12 @@ struct State {
     reconnecting: bool,
     /// The call's counters, voice or video: a voice call has no codecs to hold them.
     media: Option<Arc<MediaStats>>,
+    /// The chip's answer, which also says whose side a stalled call is on.
+    reach: CoreReach,
+    /// When the platform last reported a network change: a call that stalls soon after is ours.
+    network_moved: Option<Instant>,
+    /// Judges the weak pill, afresh for each call.
+    health: Health,
     /// This phone's own key, which is never anyone to call or save.
     me: EndpointId,
     /// The contact just added, shimmering in the People list until [`FRESH_FOR`] has passed.
@@ -1125,6 +1136,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         camera_on: true,
         reconnecting: false,
         media: None,
+        reach: CoreReach::Connecting,
+        network_moved: None,
+        health: Health::default(),
         me: identity,
         fresh: None,
         clock: LocalClock::new(platform.context()),
@@ -1862,6 +1876,12 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             // From the call's own counters, which a voice call has too.
             let route = state.media.as_ref().map_or(Route::Unknown, |media| media.route());
             let stalled = state.media.as_ref().is_some_and(|media| media.stalled());
+            // A call that has stopped is the overlay's to say; the pill is for one that still works.
+            let weak = match &state.media {
+                Some(media) if !stalled && !state.reconnecting => state.health.sample(media),
+                _ => Weak::None,
+            };
+            let moved = state.network_moved.is_some_and(|at| at.elapsed() < UNSETTLED);
             if let Some(ui) = state.ui.upgrade() {
                 // Only while it runs: a lost call's screen keeps the length it ended at.
                 if state.connected_at.is_some() {
@@ -1869,6 +1889,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 }
                 ui.set_call_route(view::route(route));
                 ui.set_call_reconnecting(state.reconnecting || stalled);
+                ui.set_call_stall(view::stall(state.reach, moved));
+                ui.set_call_weak(view::weak(weak));
             }
         });
     });
@@ -2012,8 +2034,8 @@ fn start_call_video(state: &Rc<RefCell<State>>, platform: &Rc<Platform>, parts: 
 const fn call_state(event: &Event) -> Option<CallState> {
     match event {
         Event::Ready { .. }
-        | Event::Online
-        | Event::Offline
+        | Event::Reach(_)
+        | Event::Network(_)
         | Event::PeerMedia(_)
         | Event::VideoAsked(_)
         | Event::VideoOn
@@ -2032,8 +2054,8 @@ const fn call_state(event: &Event) -> Option<CallState> {
 fn describe(event: &Event) -> String {
     match event {
         Event::Ready { id } => format!("ready as {}", id.fmt_short()),
-        Event::Online => "reachable".to_owned(),
-        Event::Offline => "not reachable".to_owned(),
+        Event::Reach(reach) => format!("reach: {reach:?}"),
+        Event::Network(up) => format!("network {}", if *up { "up" } else { "gone" }),
         Event::Dialing { peer, mode } => format!("dialing {} ({mode:?})", peer.fmt_short()),
         Event::Ringing { peer } => format!("ringing {}", peer.fmt_short()),
         Event::Incoming { peer, mode } => format!("incoming {mode:?} call from {}", peer.fmt_short()),
@@ -2142,12 +2164,16 @@ async fn handle_node_events(
             _ => {}
         }
         match event {
-            Event::Online => ui.set_online(true),
-            Event::Offline => ui.set_online(false),
+            Event::Reach(reach) => {
+                with_state(&state, |s| s.reach = reach);
+                ui.set_reach(view::reach(reach));
+            }
+            Event::Network(_) => with_state(&state, |s| s.network_moved = Some(Instant::now())),
             Event::Connected { media, mode, .. } => {
                 with_state(&state, |s| {
                     s.connected_at = Some(Instant::now());
                     s.mode = mode;
+                    s.health = Health::default();
                 });
                 let MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats } = *media;
                 with_state(&state, |s| s.media = Some(Arc::clone(&stats)));

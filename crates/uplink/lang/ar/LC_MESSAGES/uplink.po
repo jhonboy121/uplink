@@ -686,6 +686,14 @@ msgid "Never called"
 msgstr "لم تجرِ مكالمة بعد"
 
 msgctxt "PeoplePage"
+msgid "Connecting…"
+msgstr "جارٍ الاتصال…"
+
+msgctxt "PeoplePage"
+msgid "No network"
+msgstr "لا توجد شبكة"
+
+msgctxt "PeoplePage"
 msgid "No one here yet"
 msgstr "لا أحد هنا بعد"
 
@@ -1207,6 +1215,30 @@ msgstr "التحويل إلى الفيديو"
 msgctxt "CallScreen"
 msgid "The call carries on when the network is back."
 msgstr "تستمر المكالمة عند عودة الشبكة."
+
+msgctxt "CallScreen"
+msgid "The call carries on when your network is back."
+msgstr "تستمر المكالمة عند عودة شبكتك."
+
+msgctxt "CallScreen"
+msgid "Their connection dropped. The call carries on when they're back."
+msgstr "انقطع اتصالهم. تستمر المكالمة عند عودتهم."
+
+msgctxt "CallScreen"
+msgid "Waiting for {}…"
+msgstr "بانتظار {}…"
+
+msgctxt "CallScreen"
+msgid "You're offline"
+msgstr "أنت غير متصل"
+
+msgctxt "CallScreen"
+msgid "Your connection is weak"
+msgstr "اتصالك ضعيف"
+
+msgctxt "CallScreen"
+msgid "{}'s connection is weak"
+msgstr "اتصال {} ضعيف"
 
 msgctxt "CallScreen"
 msgid "Turn camera off"

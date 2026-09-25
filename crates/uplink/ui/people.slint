@@ -2,7 +2,7 @@
 
 import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ContactDetail, ContactItem, Group, Unit } from "types.slint";
+import { ContactDetail, ContactItem, Group, Reach, Unit } from "types.slint";
 import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
 import { PersonRow } from "list.slint";
 
@@ -11,7 +11,7 @@ export component PeoplePage inherits Rectangle {
     // Offset of a row to bring into view, from the top of the list; negative for none.
     in property <length> reveal: -1px;
     in property <length> top-inset;
-    in property <bool> online;
+    in property <Reach> reach;
     in property <bool> selecting;
     in property <int> selected-count;
     // Whether as voice.
@@ -23,6 +23,9 @@ export component PeoplePage inherits Rectangle {
     callback long-pressed();
     callback start-selecting();
     callback remove-selected();
+    // Grey while it is only trying; amber once nobody can call and waiting has not helped.
+    property <color> reach-color: root.reach == Reach.online ? Theme.answer
+        : root.reach == Reach.connecting ? Theme.muted : Theme.warn;
     background: Theme.ground;
 
     VerticalLayout {
@@ -49,10 +52,12 @@ export component PeoplePage inherits Rectangle {
                     border-radius: self.height / 2;
                     background: transparent;
                     border-width: 1px;
-                    border-color: root.online ? Theme.answer.with-alpha(0.45) : Theme.muted.with-alpha(0.45);
+                    border-color: root.reach-color.with-alpha(0.45);
                     reach := Text {
-                        text: root.online ? @tr("Online") : @tr("Offline");
-                        color: root.online ? Theme.answer : Theme.muted;
+                        text: root.reach == Reach.online ? @tr("Online")
+                            : root.reach == Reach.connecting ? @tr("Connecting…")
+                            : root.reach == Reach.no-network ? @tr("No network") : @tr("Offline");
+                        color: root.reach-color;
                         font-size: 0.8125rem;
                     }
                 }

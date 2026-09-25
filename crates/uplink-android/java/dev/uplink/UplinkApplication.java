@@ -153,7 +153,7 @@ public class UplinkApplication extends Application {
 
     private static native void nativeRingAction(long core, int action);
 
-    private static native void nativeNetworkChanged(long core);
+    private static native void nativeNetwork(long core, boolean up);
 
     @Override
     public void onCreate() {
@@ -195,6 +195,10 @@ public class UplinkApplication extends Application {
     synchronized long ensureCore() {
         if (core == 0) {
             core = nativeStart(getFilesDir().getPath());
+            // The core assumes a network. With none, no callback is coming to say otherwise.
+            if (getSystemService(ConnectivityManager.class).getActiveNetwork() == null) {
+                tellNetwork(false);
+            }
         }
         return core;
     }
@@ -674,14 +678,16 @@ public class UplinkApplication extends Application {
         }
 
         /**
-         * Only logged. Told now, iroh re-reads DNS while there is no default network, keeps just the
-         * public fallbacks, and then counts the next network appearing as a minor change that does
-         * not re-read it again. The next network's link properties are the moment to tell it.
+         * For the chip only: the core does not pass this on to iroh. Told now, iroh would re-read
+         * DNS while there is no default network, keep just the public fallbacks, and then count the
+         * next network appearing as a minor change that does not re-read it. The next network's
+         * link properties are the moment to tell it.
          */
         @Override
         public void onLost(Network network) {
             last = "";
             log(Log.INFO, "network: lost");
+            tellNetwork(false);
         }
 
         @Override
@@ -692,7 +698,7 @@ public class UplinkApplication extends Application {
             }
             last = now;
             log(Log.INFO, "network: " + now);
-            networkChanged();
+            tellNetwork(true);
         }
     };
 
@@ -710,11 +716,11 @@ public class UplinkApplication extends Application {
         return "other";
     }
 
-    /** Before the core is up there is nothing to tell: it binds to whatever network is current. */
-    private static void networkChanged() {
+    /** Before the core is up there is nothing to tell: {@link #ensureCore} says what is current. */
+    private static void tellNetwork(boolean up) {
         long handle = core;
         if (handle != 0) {
-            nativeNetworkChanged(handle);
+            nativeNetwork(handle, up);
         }
     }
 

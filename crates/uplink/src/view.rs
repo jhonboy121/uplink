@@ -12,13 +12,16 @@ use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
 use uplink_core::media::Route as MediaRoute;
 use uplink_core::node::{Mode, RelayView};
+use uplink_core::health::Weak as CoreWeak;
 use uplink_core::quality::{Quality, Spread};
+use uplink_core::reach::Reach as CoreReach;
 use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
 
 use crate::clock::LocalClock;
 use crate::ui::{
     Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Path,
-    PathKind, Permission, Region, RelayItem, RelayUse, Route, Say, Stat, Theme, Toast, Traffic, Unit,
+    PathKind, Permission, Reach, Region, RelayItem, RelayUse, Route, Say, Stall, Stat, Theme, Toast, Traffic,
+    Unit, Weak,
 };
 
 /// Groups of four, the way the key is read aloud, over two even lines.
@@ -359,6 +362,34 @@ fn ipv6(q: &Quality) -> Ipv6 {
         (true, false, _) => Ipv6::TheyHadNone,
         (false, true, _) => Ipv6::YouHadNone,
         (false, false, _) => Ipv6::Neither,
+    }
+}
+
+pub const fn reach(reach: CoreReach) -> Reach {
+    match reach {
+        CoreReach::Online => Reach::Online,
+        CoreReach::Connecting => Reach::Connecting,
+        CoreReach::NoNetwork => Reach::NoNetwork,
+        CoreReach::Offline => Reach::Offline,
+    }
+}
+
+/// Whose side a stalled call is on, as far as this phone can tell: no network is a fact; our own
+/// network just moved, or our relay being gone, means it could be either of us; otherwise it is
+/// most likely them.
+pub const fn stall(reach: CoreReach, moved: bool) -> Stall {
+    match reach {
+        CoreReach::NoNetwork => Stall::Offline,
+        CoreReach::Online if !moved => Stall::Waiting,
+        CoreReach::Online | CoreReach::Connecting | CoreReach::Offline => Stall::Reconnecting,
+    }
+}
+
+pub const fn weak(weak: CoreWeak) -> Weak {
+    match weak {
+        CoreWeak::None => Weak::None,
+        CoreWeak::Ours => Weak::Ours,
+        CoreWeak::Theirs => Weak::Theirs,
     }
 }
 

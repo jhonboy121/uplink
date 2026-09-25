@@ -305,6 +305,19 @@
   .drow small { display: block; color: #6B7C8F; font-size: 9px; font-weight: 400; font-family: "Public Sans", sans-serif; }
   .drow .val { color: #6B7C8F; font-size: 10px; text-align: end; white-space: nowrap; }
   .drow .val.lost { color: #C62B2B; font-weight: 600; }
+
+  /* ---- reachability chip (locked 2026-09-25) ----
+     The build's chip, scaled 360dp → 248px: 28dp tall (19.29px), 14dp padding (9.64px), 13dp text
+     (8.96px), the 26dp mark (17.91px) after it. */
+  .appbar .end { display: flex; align-items: center; gap: 8px; }
+  .reach {
+    display: inline-flex; align-items: center; height: 19.29px; padding: 0 9.64px; border-radius: 999px;
+    border: 1px solid; font-size: 8.96px; white-space: nowrap;
+  }
+  .reach.on { color: #32C97A; border-color: rgba(50,201,122,.45); }
+  .reach.wait { color: #6B7C8F; border-color: rgba(107,124,143,.45); }
+  .reach.warn { color: #B4761B; border-color: rgba(180,118,27,.45); }
+  .appbar .brand { width: 17.91px; height: 17.91px; }
 </style>
 
 <div class="wrap">
@@ -1040,6 +1053,103 @@
       <div class="note"><span class="mark-i">○</span><div><b>The row pill rings back the same kind</b><p>On Calls, the pill carries the icon of the call it would place: a camera after a video call, a phone after a voice call. On People there is no pill: each row carries a voice and a video button, so either kind is one tap from the list.</p></div></div>
       <div class="note"><span class="mark-i">○</span><div><b>Where the call's ending shows</b><p>An answered call's row has always shown its length. A call that ended as Connection lost shows its length and the outcome, since both are true: <i>09:14 · Connection lost · 23:10</i>. It is not coloured as missed, because someone did answer.</p></div></div>
       <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Voice call · Video call · Outgoing voice call · Incoming voice call · Outgoing video call · Incoming video call · Connection lost · Switched to video · Both agreed · at {time} · Reconnected · Times the network dropped and came back · Voice · Video</p></div></div>
+    </div>
+  </section>
+
+  <section id="reach">
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">network</span><span class="pill-ok">Locked 2026-09-25</span></div>
+      <h2>Can someone call you right now</h2>
+      <p>
+        The chip at the top of People answers one question: could a call reach this phone at this
+        moment. It had two answers, Online and Offline, and Offline covered three different
+        situations. Now it has four, and each one tells you whether there is anything to do.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach on">Online</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div><span></span></div>
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Reach · online</b>Connected to a relay: anyone with your key can ring you. Unchanged from the build.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach wait">Connecting…</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div><span></span></div>
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Reach · connecting</b>There is a network and no relay yet: starting up, or a relay that has been gone for 2 s. Grey, because it usually sorts itself out.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>✈ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach warn">No network</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div><span></span></div>
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Reach · no network</b>Android reports no network at all: wifi and mobile data off, or airplane mode. Amber, because the fix is on this phone.</figcaption>
+      </figure>
+
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach warn">Offline</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div><span></span></div>
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Reach · offline</b>There is a network, and still no relay after 30 s: a network that blocks us, or a relay that is down. Amber, because nobody can call you and waiting has not helped.</figcaption>
+      </figure>
+    </div>
+    <div class="scroller" style="margin-top: 18px;">
+      <table>
+        <thead><tr><th>Chip</th><th>When</th><th>Colour</th></tr></thead>
+        <tbody>
+          <tr><td><b>Online</b></td><td>A relay is connected. A relay that drops keeps the chip at Online for 2 s; it usually comes back in a fifth of that.</td><td>Answer green, as now</td></tr>
+          <tr><td><b>Connecting…</b></td><td>At start-up until the first relay answers. After a network change or a relay drop, once 2 s have passed without one.</td><td>Muted</td></tr>
+          <tr><td><b>No network</b></td><td>Android has had no default network for 1 s. A switch between wifi and mobile data leaves a gap of about half a second, so a switch never shows this.</td><td>Amber</td></tr>
+          <tr><td><b>Offline</b></td><td>A network, and no relay for 30 s. It starts counting again whenever a network comes back.</td><td>Amber</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note"><span class="mark-i">○</span><div><b>Why wait before showing a change</b><p>The relay connection drops and comes back within a fifth of a second several times an hour, and moving from wifi to mobile data loses the network for half a second. Without the waits the chip would flicker between answers that are not true for long enough to matter.</p></div></div>
+      <div class="note risk"><span class="mark-i">▲</span><div><b>Offline is a real failure, not a slow start</b><p>One night the relay could not be reached for ten hours while the phone had a network. Connecting… for ten hours would have hidden that. After 30 s the chip stops saying it is trying and says it is not reachable.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Connecting… (جارٍ الاتصال…) · No network (لا توجد شبكة). Online (متصل) and Offline (غير متصل) are already translated.</p></div></div>
     </div>
   </section>
 

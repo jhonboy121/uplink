@@ -2,7 +2,7 @@
 // app can be used.
 
 import { Theme } from "theme.slint";
-import { CallState, Route } from "types.slint";
+import { CallState, Route, Stall, Weak } from "types.slint";
 import { BigAvatar, Key, Line, Row, Tap } from "controls.slint";
 
 // A label on the call's scrim: how the call is set up.
@@ -131,6 +131,7 @@ export component MiniCall inherits Rectangle {
 component Flag inherits Rectangle {
     in property <image> icon;
     in property <string> text;
+    in property <length> icon-size: Theme.flag-icon;
     height: Theme.flag-height;
     width: row.preferred-width;
     border-radius: self.height / 2;
@@ -144,8 +145,8 @@ component Flag inherits Rectangle {
         cross-axis-alignment: center;
         Image {
             source: root.icon;
-            width: Theme.flag-icon;
-            height: Theme.flag-icon;
+            width: root.icon-size;
+            height: root.icon-size;
             colorize: Theme.on-video;
         }
         Text {
@@ -228,6 +229,10 @@ export component CallScreen inherits Rectangle {
     in property <bool> peer-camera-off;
     // Nothing is arriving, or the connection is being got back.
     in property <bool> reconnecting;
+    // Whose side that is on, as far as this phone can tell.
+    in property <Stall> stall;
+    // Still working, but struggling: whose side.
+    in property <Weak> weak;
     // We asked to switch to video and have no answer yet.
     in property <bool> asking;
     // They answered our ask by keeping it voice; said until we ask again.
@@ -428,7 +433,8 @@ export component CallScreen inherits Rectangle {
             padding-bottom: root.bottom-inset + Theme.peer-off-lift;
             Dots { padding-bottom: Theme.dots-under; }
             Text {
-                text: @tr("Reconnecting…");
+                text: root.stall == Stall.offline ? @tr("You're offline")
+                    : root.stall == Stall.waiting ? @tr("Waiting for {}…", root.peer-name) : @tr("Reconnecting…");
                 color: Theme.on-video;
                 font-family: Theme.display;
                 font-size: 1.25rem;
@@ -441,7 +447,9 @@ export component CallScreen inherits Rectangle {
                 alignment: center;
                 Text {
                     width: min(Theme.reconnect-text, root.width - Theme.reconnect-edge * 2);
-                    text: @tr("The call carries on when the network is back.");
+                    text: root.stall == Stall.offline ? @tr("The call carries on when your network is back.")
+                        : root.stall == Stall.waiting ? @tr("Their connection dropped. The call carries on when they're back.")
+                        : @tr("The call carries on when the network is back.");
                     color: Theme.on-video-muted;
                     font-size: 0.875rem;
                     wrap: word-wrap;
@@ -513,25 +521,19 @@ export component CallScreen inherits Rectangle {
                             font-size: 0.8125rem;
                             overflow: elide;
                         }
-                        if root.peer-mic-off : Row {
+                        if root.peer-mic-off || (root.weak == Weak.theirs && !root.reconnecting) : Row {
                             padding-top: Theme.flags-top - 3px;
-                            Flag {
+                            spacing: Theme.flags-gap;
+                            if root.peer-mic-off : Flag {
                                 icon: @image-url("icons/mic-off.svg");
                                 text: @tr("Muted");
                             }
+                            if root.weak == Weak.theirs && !root.reconnecting : Flag {
+                                icon: @image-url("icons/signal-weak.svg");
+                                icon-size: Theme.weak-icon;
+                                text: @tr("{}'s connection is weak", root.peer-name);
+                            }
                         }
-                    }
-                }
-                // The route, because a relayed call explains a bad one. The encryption is not
-                // said: it is always the same. Nothing while there is no path to speak of. In the
-                // accent the encryption chip had, which reads over any picture; a pale one did not.
-                if !root.reconnecting && root.route != Route.unknown : VerticalLayout {
-                    alignment: start;
-                    Chip {
-                        text: root.route == Route.direct ? @tr("Direct") : @tr("Relayed");
-                        fill: #58B6FF29;
-                        edge: #58B6FF4C;
-                        ink: Theme.on-video-accent;
                     }
                 }
             }
@@ -610,6 +612,36 @@ export component CallScreen inherits Rectangle {
                     danger: true;
                     clicked => { root.hangup(); }
                 }
+            }
+        }
+    }
+
+    // How the call travels, in the start corner just above the keys: the top end is the self
+    // view's. The route, because a relayed call explains a bad one; the encryption is not said,
+    // being always the same. Our own weak pill over it, on our side of the screen, so it is never
+    // read as theirs. The open question to switch to video takes this spot while it shows.
+    if root.connected && !root.reconnecting && !root.asking && (root.route != Route.unknown || root.weak == Weak.ours) : VerticalLayout {
+        x: Theme.rtl ? parent.width - self.width - Theme.self-view-edge : Theme.self-view-edge;
+        y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        spacing: Theme.flags-gap;
+        if root.weak == Weak.ours : HorizontalLayout {
+            alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            Flag {
+                icon: @image-url("icons/signal-weak.svg");
+                icon-size: Theme.weak-icon;
+                text: @tr("Your connection is weak");
+            }
+        }
+        if root.route != Route.unknown : HorizontalLayout {
+            alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            Chip {
+                // In the accent the encryption chip had, which reads over any picture.
+                text: root.route == Route.direct ? @tr("Direct") : @tr("Relayed");
+                fill: #58B6FF29;
+                edge: #58B6FF4C;
+                ink: Theme.on-video-accent;
             }
         }
     }

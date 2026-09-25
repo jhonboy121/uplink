@@ -457,6 +457,10 @@
   .sheet .wide.primary { background: #0A6FC2; color: #fff; border-color: transparent; }
   .key.muted-out { opacity: .4; }
 
+  /* ---------- network feedback (locked 2026-09-25) ---------- */
+  .callbar .end { display: grid; gap: 4px; justify-items: end; }
+  .flag.weak svg { width: 10px; height: 10px; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
@@ -477,6 +481,7 @@
     <ul>
       <li><a href="#screens">Screens</a></li>
       <li><a href="#modes">Call modes</a></li>
+      <li><a href="#network">Network feedback</a></li>
       <li><a href="#color">Color</a></li>
       <li><a href="#type">Type</a></li>
       <li><a href="#motion">Motion</a></li>
@@ -1190,6 +1195,250 @@
       Motion added: the three reconnecting dots, 1.2 s loop, staggered 200 ms. Reduced motion shows them still.
       Changing from voice to video uses the existing answer transition: the self-view grows in from full frame
       and folds into its corner.
+    </p>
+  </section>
+
+  <section id="network">
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">Roadmap 7f</span><span class="pill ok">Locked 2026-09-25</span></div>
+      <h2>Network feedback</h2>
+      <p>
+        "Reconnecting…" says the call stalled but not why. The phone knows when it has no network at all,
+        and when its own network is fine but nothing is coming from the other side. These frames say which
+        side the trouble is on, and add a quiet warning for a call that still works but is struggling.
+        Frames 10 to 12 above are unchanged.
+      </p>
+    </div>
+
+    <div class="screens">
+      <!-- 13 · you're offline -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:11</span><span>▚ 82%</span></div>
+            <div class="stage">
+              <div class="video frozen"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="reconnect" role="status">
+                <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <b>You're offline</b>
+                <span>The call carries on when your network is back.</span>
+              </div>
+              <div class="callbar" style="z-index: 4;">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">11:02</span></div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>You're offline</b>Android says this phone has no network: wifi and mobile data are both gone. Shown about 1 s after that, without waiting for media to stop. Same scrim, dots and frozen frame as Reconnecting; only the words change. The voice call uses the same words in frame 11's layout.</figcaption>
+      </figure>
+
+      <!-- 14 · waiting for them -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:12</span><span>LTE ▚ 82%</span></div>
+            <div class="stage">
+              <div class="video frozen"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="reconnect" role="status">
+                <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <b>Waiting for Noor…</b>
+                <span>Their connection dropped. The call carries on when they're back.</span>
+              </div>
+              <div class="callbar" style="z-index: 4;">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">12:20</span></div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Waiting for Noor</b>This phone's network is fine and has not just changed, but nothing has come from Noor for about 2 s. The trouble is most likely on their side. Right after this phone switches between wifi and mobile data, frame 10's "Reconnecting…" is shown instead, because the side can't be told.</figcaption>
+      </figure>
+
+      <!-- 15 · their connection is weak -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:13</span><span>5G ▚ 82%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer">
+                    <span class="name">Noor</span><span class="timer">13:05</span>
+                    <div class="flags">
+                      <span class="flag weak">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 19v-3"/><path d="M10 19v-7" opacity=".35"/><path d="M15 19V9" opacity=".35"/><path d="M20 19V5" opacity=".35"/></svg>
+                        Noor's connection is weak
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div class="chips"><span class="chip route">relayed</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Their connection is weak</b>The call still works, but what Noor sends arrives late or not at all. A pill in the same slot as Muted, with a one-bar signal icon, on the same dark glass. No scrim and nothing blocks the picture. It goes by itself once things recover.</figcaption>
+      </figure>
+
+      <!-- 16 · your connection is weak -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:14</span><span>LTE ▚ 82%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">14:31</span></div>
+                </div>
+                <div class="end">
+                  <div class="chips"><span class="chip route">direct</span></div>
+                  <span class="flag weak">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 19v-3"/><path d="M10 19v-7" opacity=".35"/><path d="M15 19V9" opacity=".35"/><path d="M20 19V5" opacity=".35"/></svg>
+                    Your connection is weak
+                  </span>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Your connection is weak</b>What this phone sends is backing up: the round trip climbs, or the encoder is told to slow down. The pill sits over the route chip, so it is never read as being about Noor. <b>Changed 2026-09-25:</b> the route chip and this pill sit in the start corner just above the keys, not at the top end as drawn here, because on the phone they overlapped your own view in that corner. The Asking banner takes the same spot while it shows.</figcaption>
+      </figure>
+    </div>
+
+    <div class="cards" style="margin-top: 26px;">
+      <div class="card">
+        <h3>Whose side, in time</h3>
+        <ul>
+          <li><b>~1 s</b> with no network on this phone: "You're offline"</li>
+          <li><b>~2 s</b> with no media while this phone's network is up: "Waiting for {name}…"</li>
+          <li><b>Just after this phone switches network</b>: "Reconnecting…" (frame 10), because the side can't be told</li>
+          <li><b>Media flowing, but late or dropped</b>: the weak pill, for whichever side it is</li>
+          <li><b>30 s passed</b>: "Connection lost", unchanged</li>
+        </ul>
+        <p>This replaces "Reconnecting, in time" above.</p>
+      </div>
+      <div class="card">
+        <h3>How a side is told</h3>
+        <ul>
+          <li><b>Offline</b>: Android's network callback reports no default network. It is a fact, not a guess.</li>
+          <li><b>Their side</b>: our network is up and unchanged for the last few seconds, and our relay is connected</li>
+          <li><b>Weak, yours</b>: our send queue backs up, or the round trip climbs, as QUIC measures it on this phone</li>
+          <li><b>Weak, theirs</b>: frames from them arrive late or with gaps, and our own sending is healthy</li>
+          <li>None of it is sent to the other phone; each side judges from what it sees</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>New strings</h3>
+        <ul>
+          <li>You're offline · The call carries on when your network is back.</li>
+          <li>Waiting for {name}… · Their connection dropped. The call carries on when they're back.</li>
+          <li>Your connection is weak · {name}'s connection is weak</li>
+        </ul>
+      </div>
+    </div>
+    <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
+      No new motion: the offline and waiting frames reuse the reconnecting dots. The weak pill appears and goes without animation, and it is held for a few seconds so it does not flicker on a single late frame.
     </p>
   </section>
 

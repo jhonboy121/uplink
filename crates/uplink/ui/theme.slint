@@ -42,6 +42,8 @@ export global Theme {
     out property <color> text: dark ? #E9F0F7 : #0E151E;
     out property <color> muted: dark ? #93A3B5 : #6B7C8F;
     out property <color> beacon: dark ? #58B6FF : #0A6FC2;
+    // Something to fix on this phone, not an error: the shell mockup's risk colour.
+    out property <color> warn: dark ? #E0A34A : #B4761B;
     // Rows are separated by a hairline, not by gaps between cards.
     out property <color> hairline: dark ? #2631408C : #E7ECF2;
     out property <length> hairline-width: 1px;
@@ -99,6 +101,10 @@ export global Theme {
     out property <length> flag-pad-end: 9px;
     out property <length> flag-gap: 4px;
     out property <length> flags-top: 7px;
+    // Between two flags, and between the route chip and the pill under it: 4px in the design.
+    out property <length> flags-gap: 5.8px;
+    // The one-bar signal draws a little larger than the other flags' icons: 10px in the design.
+    out property <length> weak-icon: 14.5px;
     out property <length> self-label-height: 26px;
     out property <length> self-label-pad: 7px;
     out property <length> camera-off-icon: 23px;

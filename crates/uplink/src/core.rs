@@ -22,7 +22,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jint, jlong};
+use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jboolean, jint, jlong};
 use jni::{EnvUnowned, JavaVM, NativeMethod, Outcome, jni_str};
 use parking_lot::Mutex;
 use tracing::{Dispatch, Level};
@@ -37,6 +37,7 @@ use uplink_core::db::Db;
 use uplink_core::media::MediaStats;
 use uplink_core::quality::{Quality, VideoTarget};
 use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node, NodeHandle, RelayView};
+use uplink_core::reach::Reach;
 use uplink_core::settings::{self, Settings};
 use uplink_core::{EndpointId, identity};
 
@@ -83,7 +84,7 @@ struct Inbox {
     relays: Option<RelayView>,
     /// Reachability as last reported. A relay can answer before the window exists, and nothing
     /// says it again until the connection changes.
-    online: bool,
+    reach: Option<Reach>,
 }
 
 /// Rings for an incoming call, plays ringback for an outgoing one, and stops either when the call
@@ -301,8 +302,7 @@ async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ri
                 Event::Incoming { peer, mode } => inbox.ringing = Some((*peer, *mode)),
                 Event::Connected { .. } | Event::Ended { .. } => inbox.ringing = None,
                 Event::Relays(view) => inbox.relays = Some(view.clone()),
-                Event::Online => inbox.online = true,
-                Event::Offline => inbox.online = false,
+                Event::Reach(reach) => inbox.reach = Some(*reach),
                 _ => {}
             }
             inbox.window.clone()
@@ -411,7 +411,9 @@ impl Core {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
         let mut inbox = self.inbox.lock();
         // A new channel with room in it for all three; there is no way for these to fail.
-        drop(sender.try_send(if inbox.online { Event::Online } else { Event::Offline }));
+        if let Some(reach) = inbox.reach {
+            drop(sender.try_send(Event::Reach(reach)));
+        }
         if let Some(view) = inbox.relays.clone() {
             drop(sender.try_send(Event::Relays(view)));
         }
@@ -502,9 +504,9 @@ fn natives() -> [NativeMethod<'static>; 5] {
                 native_ring_action as *mut c_void,
             ),
             NativeMethod::from_raw_parts(
-                jni_str!("nativeNetworkChanged"),
-                jni_str!("(J)V"),
-                native_network_changed as *mut c_void,
+                jni_str!("nativeNetwork"),
+                jni_str!("(JZ)V"),
+                native_network as *mut c_void,
             ),
         ]
     }
@@ -597,11 +599,16 @@ extern "system" fn native_ring_action<'local>(
     }
 }
 
-/// Android's default network changed. Java says what to; iroh only needs telling.
-extern "system" fn native_network_changed<'local>(_env: EnvUnowned<'local>, _class: JClass<'local>, handle: jlong) {
+/// Android's default network: a new or changed one (`up`), or none. Java logs what it is.
+extern "system" fn native_network<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    up: jboolean,
+) {
     let Some(core) = Core::from_java(handle) else { return };
     let _log = tracing::dispatcher::set_default(&core.dispatch());
-    if let Err(e) = core.calls().try_send(Command::NetworkChanged) {
-        tracing::error!("telling the endpoint the network changed: {e}");
+    if let Err(e) = core.calls().try_send(Command::Network(up)) {
+        tracing::error!("telling the endpoint about the network: {e}");
     }
 }

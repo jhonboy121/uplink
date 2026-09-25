@@ -218,8 +218,8 @@ fn name(contacts: &Contacts, id: &EndpointId) -> String {
 fn describe(event: &Event, contacts: &Contacts) -> String {
     match event {
         Event::Ready { id } => format!("ready as {id}"),
-        Event::Online => "reachable".to_owned(),
-        Event::Offline => "not reachable".to_owned(),
+        Event::Reach(reach) => format!("reach: {reach:?}"),
+        Event::Network(up) => format!("network {}", if *up { "up" } else { "gone" }),
         Event::Dialing { peer, mode } => format!("dialing {} ({mode:?})", name(contacts, peer)),
         Event::Ringing { peer } => format!("ringing {}", name(contacts, peer)),
         Event::Incoming { peer, mode } => {

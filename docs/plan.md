@@ -986,3 +986,26 @@ default); keep disk usage lean. Avoid build scripts.
     the public servers and the relay was back 1 s after wifi went off, but that is luck on a network that
     blocks them. Notified from the new network's link properties, iroh sees `wlan0` gone (a major change)
     and reads the new network's DNS. Not yet device-tested in this form.
+- **2026-09-25**: **the chip and the call say whose network it is.** Designed, locked (shell mockup "Can
+  someone call you right now", call-UI mockup "Network feedback"), then built. Not yet device-tested.
+  - **Chip:** Online / Connecting… / No network / Offline. It comes from `uplink_core::reach`, a pure state
+    machine (tested) fed by the relay and by Android's network (`Command::Network(bool)`: the callback's
+    link properties report up, `onLost` reports gone, and the core is told at start if there is none).
+    It waits before showing a change: 2 s for a relay that dropped (it usually returns in 100–200 ms),
+    1 s without a network (a wifi↔mobile switch leaves a ~0.5 s gap), and 30 s before Connecting…
+    becomes Offline. It replaces `Event::Online`/`Offline` with `Event::Reach`, which is replayed to a
+    window that opens late. Amber (`Theme.warn`) for No network and Offline.
+  - **In a call:** the stall overlay says "You're offline" when the chip would say No network,
+    "Reconnecting…" within 5 s of our own network changing (`Event::Network`) or while our relay is
+    down, and "Waiting for {name}…" otherwise. The weak pill comes from `uplink_core::health` (tested):
+    ours when we drop or reset frames or cannot send audio, theirs when their frames are dropped or
+    more than 2 audio packets a second arrive late or are concealed while our side is fine. It shows
+    after 2 bad seconds and clears after 5 good ones. Theirs goes next to Muted, ours under the route
+    chip, in the same flag style with the one-bar `signal-weak.svg`.
+  - **Not done:** the weak pill on a voice call (the locked frames are video only; raise it), RTT as an
+    input to "ours" (congestion drops stand in for it), and a measured comparison of the new frames
+    (`just design-measure` / `just preview`).
+  - **The route chip moved** (the user's call, after trying it): with our weak pill over it, it now sits
+    in the start corner just above the keys, where the Asking banner goes (and hidden while that
+    shows). At the top end it overlapped the self view. The locked call mockup's frame 16 caption
+    records the change; the older frames still draw it at the top.

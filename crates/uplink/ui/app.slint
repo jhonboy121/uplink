@@ -16,7 +16,7 @@ import "fonts/IBMPlexMono-Medium.ttf";
 import { Appearance, Language, Theme } from "theme.slint";
 import {
     AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, PermissionItem,
-    RelayItem, Route, Screen, Toast, Mismatch,
+    Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch, Weak,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
@@ -32,7 +32,7 @@ export { Appearance, Language, Theme } from "theme.slint";
 export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
     DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Path, PathKind, Permission, PermissionItem,
-    Region, RelayItem, RelayUse, Route, Say, Screen, Stat, Toast, Traffic, Unit,
+    Reach, Region, RelayItem, RelayUse, Route, Say, Screen, Stall, Stat, Toast, Traffic, Unit, Weak,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -95,7 +95,7 @@ export component App inherits Window {
     in property <string> call-timer;
     in property <[ContactItem]> contacts;
     in property <[CallItem]> calls;
-    in property <bool> online: false;
+    in property <Reach> reach;
     // At most one; the markup's own timer empties it.
     in-out property <[Toast]> toast;
     in-out property <Confirm> confirming: Confirm.none;
@@ -143,6 +143,8 @@ export component App inherits Window {
     in property <bool> peer-mic-off: false;
     in property <bool> peer-camera-off: false;
     in property <bool> call-reconnecting: false;
+    in property <Stall> call-stall;
+    in property <Weak> call-weak;
     in-out property <bool> video-asking: false;
     in-out property <bool> video-asked: false;
     in property <bool> kept-voice: false;
@@ -286,7 +288,7 @@ export component App inherits Window {
                 clip: true;
                 if root.screen == Screen.people : PeoplePage {
                     top-inset: root.safe-area-insets.top;
-                    online: root.online;
+                    reach: root.reach;
                     contacts: root.contacts;
                     reveal: root.contacts-reveal;
                     selecting: root.selecting;
@@ -374,6 +376,8 @@ export component App inherits Window {
             peer-mic-off: root.peer-mic-off;
             peer-camera-off: root.peer-camera-off;
             reconnecting: root.call-reconnecting;
+            stall: root.call-stall;
+            weak: root.call-weak;
             asking: root.video-asking;
             kept-voice: root.kept-voice;
             top-inset: root.safe-area-insets.top;

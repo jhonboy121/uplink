@@ -19,6 +19,7 @@ use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, SecretKey, TransportAddr
 use rustls::NamedGroup;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 /// Part of [`EndReason::Incompatible`], so it is ours to hand out; the rest of the wire stays in.
 pub use crate::protocol::Behind;
@@ -31,6 +32,7 @@ use crate::protocol::{
 use crate::media::{self, MediaLinks, MediaSession, MediaStats};
 pub use crate::pilot::{RelayView, Steer};
 use crate::pilot::Pilot;
+use crate::reach::{Reach, Reachability};
 use crate::settings::Settings;
 use crate::{EndpointId, Error, crypto};
 
@@ -81,18 +83,19 @@ pub enum Command {
     AnswerVideo(bool),
     /// For the relay pilot; ignored on a local network, which has none.
     Relays(Steer),
-    /// The platform saw the network change. iroh cannot on Android, and until told it keeps the
-    /// old network's DNS servers.
-    NetworkChanged,
+    /// The platform's network: up (a new one, or the same one changed) or gone. iroh cannot see
+    /// this on Android, and until told keeps the old network's DNS servers.
+    Network(bool),
 }
 
 #[derive(Debug)]
 pub enum Event {
     Ready { id: EndpointId },
-    /// Connected to a home relay, so other peers can reach us. Emitted again as `Offline` when
-    /// that stops being true, which is what the reachability chip reads.
-    Online,
-    Offline,
+    /// Whether others can reach us, for the chip: see [`crate::reach`].
+    Reach(Reach),
+    /// The platform's network changed, as [`Command::Network`] said. A stalled call right after
+    /// this is our side's doing, which the chip's patience would hide.
+    Network(bool),
     Dialing { peer: EndpointId, mode: Mode },
     /// Our offer reached the peer; waiting for them to answer.
     Ringing { peer: EndpointId },
@@ -180,9 +183,10 @@ impl Node {
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
         emit(&events, Event::Ready { id: endpoint.id() }).await;
         let (in_call, in_call_rx) = watch::channel(false);
+        let (platform_network, platform_network_rx) = watch::channel(true);
         let pilot = match network {
             Network::Public(store) => {
-                drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone())));
+                drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone(), platform_network_rx)));
                 drop(tokio::spawn(heartbeat(endpoint.clone())));
                 let (steer, steer_rx) = mpsc::channel(CONTROL_QUEUE);
                 let pilot = Pilot::new(endpoint.clone(), store, events.clone());
@@ -205,6 +209,7 @@ impl Node {
             hello: Hello::ours(app),
             pilot,
             in_call,
+            platform_network,
         };
         Ok((Self { commands, engine: tokio::spawn(engine.run(commands_rx)) }, events_rx))
     }
@@ -304,20 +309,40 @@ async fn emit(events: &mpsc::Sender<Event>, event: Event) {
 
 /// Reachability, for as long as the endpoint lives. Being connected to a home relay is what makes
 /// us dialable, so it is a truer answer than whether the device has an interface up — a phone on
-/// a captive-portal wifi has a network and is not reachable.
-async fn watch_reachable(endpoint: Endpoint, events: mpsc::Sender<Event>) {
+/// a captive-portal wifi has a network and is not reachable. The platform's network only says
+/// why not, and [`Reachability`] keeps either from flickering.
+async fn watch_reachable(endpoint: Endpoint, events: mpsc::Sender<Event>, mut network: watch::Receiver<bool>) {
     let mut status = endpoint.home_relay_status();
-    let mut online = false;
+    let mut reach = Reachability::new(Instant::now());
+    let mut shown = None;
     loop {
-        let reachable = status.get().into_iter().any(|relay| relay.is_connected());
-        if reachable != online {
-            online = reachable;
+        let now = Instant::now();
+        let online = status.get().into_iter().any(|relay| relay.is_connected());
+        if online != reach.relay_up() {
             tracing::info!(online, addr = ?endpoint.addr(), "reachability");
-            emit(&events, if online { Event::Online } else { Event::Offline }).await;
+            reach.relay(online, now);
         }
-        if status.updated().await.is_err() {
-            break;
+        reach.network(*network.borrow_and_update(), now);
+        let answer = reach.shown(now);
+        if shown != Some(answer) {
+            shown = Some(answer);
+            tracing::info!(?answer, "reach");
+            emit(&events, Event::Reach(answer)).await;
         }
+        let deadline = reach.next_change(now);
+        tokio::select! {
+            updated = status.updated() => if updated.is_err() { break },
+            changed = network.changed() => if changed.is_err() { break },
+            () = until(deadline) => {}
+        }
+    }
+}
+
+/// A timer that may never fire.
+async fn until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -426,6 +451,8 @@ struct Engine {
     pilot: Option<mpsc::Sender<Steer>>,
     /// Whether a call is up, which the pilot waits on before it moves the home relay.
     in_call: watch::Sender<bool>,
+    /// Whether the platform has a network, for the reachability answer.
+    platform_network: watch::Sender<bool>,
 }
 
 impl Engine {
@@ -468,7 +495,15 @@ impl Engine {
                 }
                 None => tracing::debug!(?steer, "no relays on a local network"),
             },
-            (Command::NetworkChanged, _) => self.endpoint.network_change().await,
+            (Command::Network(up), _) => {
+                self.platform_network.send_if_modified(|was| std::mem::replace(was, up) != up);
+                emit(&self.events, Event::Network(up)).await;
+                // Only a network that is there has anything to re-read. Told while there is none,
+                // iroh keeps just the public fallbacks and then misses the next one arriving.
+                if up {
+                    self.endpoint.network_change().await;
+                }
+            }
             (Command::Call(peer, mode), None) => {
                 let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
                 let task =

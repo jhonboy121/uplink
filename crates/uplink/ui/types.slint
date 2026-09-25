@@ -17,6 +17,17 @@ export enum Route { unknown, direct, relayed }
 // Android will not ask about again, which is the only case that needs Settings.
 export enum Grant { needed, granted, blocked }
 
+// Whether someone could call you right now, as the chip on People says it. `connecting` first:
+// it is what a window shows before the core has said anything.
+export enum Reach { connecting, online, no-network, offline }
+
+// Whose side a stalled call is on, which is what the reconnecting overlay says. `reconnecting`
+// when this phone cannot tell.
+export enum Stall { reconnecting, offline, waiting }
+
+// A call that works but struggles, and on whose side: the weak pill.
+export enum Weak { none, ours, theirs }
+
 export enum Permission { camera, microphone, notifications }
 
 export struct PermissionItem {

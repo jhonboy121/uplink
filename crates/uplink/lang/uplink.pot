@@ -37,56 +37,56 @@ msgctxt "AddRelaySheet"
 msgid "e.g. Home"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:533
+#: crates/uplink/ui/app.slint:537
 msgctxt "App"
 msgid "Clear"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:521
+#: crates/uplink/ui/app.slint:525
 msgctxt "App"
 msgid "Clear the call log?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:529
+#: crates/uplink/ui/app.slint:533
 msgctxt "App"
 msgid "Every call is forgotten. It does not affect your contacts."
 msgstr ""
 
-#: crates/uplink/ui/app.slint:531
+#: crates/uplink/ui/app.slint:535
 msgctxt "App"
 msgid "It leaves the call log. It does not affect your contacts."
 msgstr ""
 
-#: crates/uplink/ui/app.slint:533
+#: crates/uplink/ui/app.slint:537
 msgctxt "App"
 msgid "Remove"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:522
+#: crates/uplink/ui/app.slint:526
 msgctxt "App"
 msgid "Remove this call?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:524
+#: crates/uplink/ui/app.slint:528
 msgctxt "App"
 msgid "Remove {n} call?"
 msgid_plural "Remove {n} calls?"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/app.slint:526
+#: crates/uplink/ui/app.slint:530
 msgctxt "App"
 msgid "Remove {n} contact?"
 msgid_plural "Remove {n} contacts?"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/app.slint:527
+#: crates/uplink/ui/app.slint:531
 msgctxt "App"
 msgid "Remove {}?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:532
+#: crates/uplink/ui/app.slint:536
 msgctxt "App"
 msgid "Their key goes with them. You would need it again to call them, and they can still call you."
 msgstr ""
@@ -236,151 +236,181 @@ msgctxt "CallPair"
 msgid "Voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:560
+#: crates/uplink/ui/call.slint:562
 msgctxt "CallScreen"
 msgid "Answer"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:602
+#: crates/uplink/ui/call.slint:604
 msgctxt "CallScreen"
 msgid "Asking to switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:634
+#: crates/uplink/ui/call.slint:666
 msgctxt "CallScreen"
 msgid "Asking {} to switch to video…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:571
+#: crates/uplink/ui/call.slint:573
 msgctxt "CallScreen"
 msgid "Call again"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:369
-#: crates/uplink/ui/call.slint:389
+#: crates/uplink/ui/call.slint:374
+#: crates/uplink/ui/call.slint:394
 msgctxt "CallScreen"
 msgid "Calling…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:292
-#: crates/uplink/ui/call.slint:338
+#: crates/uplink/ui/call.slint:297
+#: crates/uplink/ui/call.slint:343
 msgctxt "CallScreen"
 msgid "Camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:642
+#: crates/uplink/ui/call.slint:674
 msgctxt "CallScreen"
 msgid "Cancel"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:566
+#: crates/uplink/ui/call.slint:568
 msgctxt "CallScreen"
 msgid "Close"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:397
+#: crates/uplink/ui/call.slint:402
 msgctxt "CallScreen"
 msgid "Connection lost"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:554
+#: crates/uplink/ui/call.slint:556
 msgctxt "CallScreen"
 msgid "Decline"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:531
+#: crates/uplink/ui/call.slint:641
 msgctxt "CallScreen"
 msgid "Direct"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:609
+#: crates/uplink/ui/call.slint:611
 msgctxt "CallScreen"
 msgid "End call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:481
+#: crates/uplink/ui/call.slint:489
 msgctxt "CallScreen"
 msgid "Fold away"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:369
+#: crates/uplink/ui/call.slint:374
 msgctxt "CallScreen"
 msgid "Incoming video call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:389
+#: crates/uplink/ui/call.slint:394
 msgctxt "CallScreen"
 msgid "Incoming voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:577
+#: crates/uplink/ui/call.slint:579
 msgctxt "CallScreen"
 msgid "Mute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:520
+#: crates/uplink/ui/call.slint:529
 msgctxt "CallScreen"
 msgid "Muted"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:431
+#: crates/uplink/ui/call.slint:437
 msgctxt "CallScreen"
 msgid "Reconnecting…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:531
+#: crates/uplink/ui/call.slint:641
 msgctxt "CallScreen"
 msgid "Relayed"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:595
+#: crates/uplink/ui/call.slint:597
 msgctxt "CallScreen"
 msgid "Speaker"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:589
+#: crates/uplink/ui/call.slint:591
 msgctxt "CallScreen"
 msgid "Switch camera"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:602
+#: crates/uplink/ui/call.slint:604
 msgctxt "CallScreen"
 msgid "Switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:444
+#: crates/uplink/ui/call.slint:452
 msgctxt "CallScreen"
 msgid "The call carries on when the network is back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:583
+#: crates/uplink/ui/call.slint:450
+msgctxt "CallScreen"
+msgid "The call carries on when your network is back."
+msgstr ""
+
+#: crates/uplink/ui/call.slint:451
+msgctxt "CallScreen"
+msgid "Their connection dropped. The call carries on when they're back."
+msgstr ""
+
+#: crates/uplink/ui/call.slint:585
 msgctxt "CallScreen"
 msgid "Turn camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:583
+#: crates/uplink/ui/call.slint:585
 msgctxt "CallScreen"
 msgid "Turn camera on"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:577
+#: crates/uplink/ui/call.slint:579
 msgctxt "CallScreen"
 msgid "Unmute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:511
+#: crates/uplink/ui/call.slint:519
 msgctxt "CallScreen"
 msgid "Video isn't working on this phone — audio only"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:338
+#: crates/uplink/ui/call.slint:437
+msgctxt "CallScreen"
+msgid "Waiting for {}…"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:343
 msgctxt "CallScreen"
 msgid "You"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:409
+#: crates/uplink/ui/call.slint:436
+msgctxt "CallScreen"
+msgid "You're offline"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:634
+msgctxt "CallScreen"
+msgid "Your connection is weak"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:414
 msgctxt "CallScreen"
 msgid "{} kept it voice"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:534
+msgctxt "CallScreen"
+msgid "{}'s connection is weak"
 msgstr ""
 
 #: crates/uplink/ui/calls.slint:13
@@ -738,67 +768,67 @@ msgctxt "ConnectPage"
 msgid "Share my identity"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:239
+#: crates/uplink/ui/people.slint:244
 msgctxt "ContactPage"
 msgid "Cancel"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:179
+#: crates/uplink/ui/people.slint:184
 msgctxt "ContactPage"
 msgid "Done"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:239
+#: crates/uplink/ui/people.slint:244
 msgctxt "ContactPage"
 msgid "Edit"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:231
+#: crates/uplink/ui/people.slint:236
 msgctxt "ContactPage"
 msgid "Favourite"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:232
+#: crates/uplink/ui/people.slint:237
 msgctxt "ContactPage"
 msgid "Keep them at the top of People"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:232
+#: crates/uplink/ui/people.slint:237
 msgctxt "ContactPage"
 msgid "Kept at the top of People"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:246
+#: crates/uplink/ui/people.slint:251
 msgctxt "ContactPage"
 msgid "Remove"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:237
+#: crates/uplink/ui/people.slint:242
 msgctxt "ContactPage"
 msgid "Rename"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:218
+#: crates/uplink/ui/people.slint:223
 msgctxt "ContactPage"
 msgid "Save"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:247
+#: crates/uplink/ui/people.slint:252
 msgctxt "ContactPage"
 msgid "Their key goes; they can still call you"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:214
+#: crates/uplink/ui/people.slint:219
 msgctxt "ContactPage"
 msgid "Their name"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:238
+#: crates/uplink/ui/people.slint:243
 msgctxt "ContactPage"
 msgid "What you call them, only on this phone"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:200
+#: crates/uplink/ui/people.slint:205
 msgctxt "ContactPage"
 msgid "calls themselves “{}”"
 msgstr ""
@@ -884,90 +914,100 @@ msgctxt "NoticeSheet"
 msgid "{} needs to update uplink"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:101
+#: crates/uplink/ui/people.slint:106
 msgctxt "PeoplePage"
 msgid "ALL"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:138
+#: crates/uplink/ui/people.slint:143
 msgctxt "PeoplePage"
 msgid "Called just now"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:144
+#: crates/uplink/ui/people.slint:149
 msgctxt "PeoplePage"
 msgid "Called {n} day ago"
 msgid_plural "Called {n} days ago"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/people.slint:142
+#: crates/uplink/ui/people.slint:147
 msgctxt "PeoplePage"
 msgid "Called {n} hour ago"
 msgid_plural "Called {n} hours ago"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/people.slint:140
+#: crates/uplink/ui/people.slint:145
 msgctxt "PeoplePage"
 msgid "Called {n} minute ago"
 msgid_plural "Called {n} minutes ago"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/people.slint:145
+#: crates/uplink/ui/people.slint:150
 msgctxt "PeoplePage"
 msgid "Called {n} week ago"
 msgid_plural "Called {n} weeks ago"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/people.slint:69
+#: crates/uplink/ui/people.slint:74
 msgctxt "PeoplePage"
 msgid "Connect"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:101
+#: crates/uplink/ui/people.slint:58
+msgctxt "PeoplePage"
+msgid "Connecting…"
+msgstr ""
+
+#: crates/uplink/ui/people.slint:106
 msgctxt "PeoplePage"
 msgid "FAVOURITES"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:137
+#: crates/uplink/ui/people.slint:142
 msgctxt "PeoplePage"
 msgid "Never called"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:64
+#: crates/uplink/ui/people.slint:59
+msgctxt "PeoplePage"
+msgid "No network"
+msgstr ""
+
+#: crates/uplink/ui/people.slint:69
 msgctxt "PeoplePage"
 msgid "No one here yet"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:54
+#: crates/uplink/ui/people.slint:59
 msgctxt "PeoplePage"
 msgid "Offline"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:54
+#: crates/uplink/ui/people.slint:57
 msgctxt "PeoplePage"
 msgid "Online"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:65
+#: crates/uplink/ui/people.slint:70
 msgctxt "PeoplePage"
 msgid "Open Connect to scan a code, or send them yours."
 msgstr ""
 
-#: crates/uplink/ui/people.slint:34
+#: crates/uplink/ui/people.slint:37
 msgctxt "PeoplePage"
 msgid "People"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:38
+#: crates/uplink/ui/people.slint:41
 msgctxt "PeoplePage"
 msgid "Remove"
 msgstr ""
 
-#: crates/uplink/ui/people.slint:34
+#: crates/uplink/ui/people.slint:37
 msgctxt "PeoplePage"
 msgid "{n} selected"
 msgid_plural "{n} selected"
