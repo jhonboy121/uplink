@@ -53,7 +53,7 @@ impl Clip {
             Some(trak) => decode_aac(&file, trak)?,
             None => Vec::new(),
         };
-        println!(
+        tracing::info!(
             "clip: {} video samples, rotated {}°, {:.1} s of audio",
             video.samples.len(),
             u16::from(video.turns) * QUARTER_TURN_DEGREES,
@@ -228,6 +228,21 @@ fn resample(input: &[i16], from: u32, to: u32) -> Vec<i16> {
         .collect()
 }
 
+/// Length-prefixed NAL units (mp4 samples) → Annex-B, optionally led by `config`.
+pub fn annex_b(sample: &[u8], length_size: usize, config: Option<&[u8]>) -> Result<Vec<u8>> {
+    let mut out = config.map(<[u8]>::to_vec).unwrap_or_default();
+    let mut rest = sample;
+    while !rest.is_empty() {
+        let (prefix, tail) = rest.split_at_checked(length_size).context("truncated NAL length")?;
+        let length = prefix.iter().fold(0, |acc, &b| acc << u8::BITS | usize::from(b));
+        let (nal, tail) = tail.split_at_checked(length).context("truncated NAL")?;
+        out.extend_from_slice(&START_CODE);
+        out.extend_from_slice(nal);
+        rest = tail;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use mp4_atom::{Stco, Stsc, StscEntry, Stss, Stsz, Stts, SttsEntry};
@@ -235,6 +250,7 @@ mod tests {
     use super::*;
 
     const DELTA: u32 = 3000;
+    const LENGTH_SIZE: usize = 4;
 
     #[test]
     fn sample_tables_resolve_offsets_times_and_sync() -> Result<()> {
@@ -277,5 +293,21 @@ mod tests {
         assert_eq!(mono, [200, -100]);
         assert_eq!(resample(&[0, 100], 24_000, 48_000), [0, 50, 100, 100]);
         assert_eq!(resample(&[7, 8], 48_000, 48_000), [7, 8]);
+    }
+
+    #[test]
+    fn length_prefixes_become_start_codes() -> Result<()> {
+        let sample = [0, 0, 0, 2, 0x65, 0xaa, 0, 0, 0, 1, 0x06];
+        let config = [START_CODE.as_slice(), &[0x67], &START_CODE, &[0x68]].concat();
+        let frame = [START_CODE.as_slice(), &[0x65, 0xaa], &START_CODE, &[0x06]].concat();
+        assert_eq!(annex_b(&sample, LENGTH_SIZE, None)?, frame);
+        assert_eq!(annex_b(&sample, LENGTH_SIZE, Some(&config))?, [config.as_slice(), &frame].concat());
+        Ok(())
+    }
+
+    #[test]
+    fn truncated_samples_are_rejected() {
+        assert!(annex_b(&[0, 0, 0, 2, 0x65], LENGTH_SIZE, None).is_err());
+        assert!(annex_b(&[0, 0], LENGTH_SIZE, None).is_err());
     }
 }

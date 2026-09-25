@@ -23,7 +23,6 @@ llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
 # The design's frame in dp: 360 wide at the mockup's 9/19.3, which is what `just ui-diff` renders.
 design_size := "360x772"
-cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
 java_release := "8"
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
@@ -160,18 +159,13 @@ add-contact key name="CLI":
     python3 tools/devdb/devdb.py --package {{app_id}} --user {{adb_user}} --launch {{activity}} add {{key}} "{{name}}"
 
 [doc('''
-Run the host CLI (uplink-core over iroh), e.g. `just cli --dir /tmp/a listen`.
-Two instances with different --dir can call each other.
+The call TUI: a phone in the terminal (uplink-core over iroh), e.g.
+`just cli --video ~/uplink-media/clip.mp4 --record target/rec.mp4`. Two with different --dir can call
+each other; `just cli --dir /tmp/a id` / `add <name> <key>` / `contacts` manage who it can call.
+Built with the `opt` profile: it encodes live, which a debug build cannot keep up with. Its log is <dir>/uplink.log.
 ''')]
 cli *args:
-    nice cargo run -q -p uplink-cli -- {{args}}
-
-[doc('''
-Run the host CLI with its output (reports + logs) also kept in target/cli.log ($UPLINK_CLI_LOG), e.g.
-`just cli-log call phone --video ~/uplink-media/clip.mp4`.
-''')]
-cli-log *args:
-    set -o pipefail; nice cargo run -q -p uplink-cli -- {{args}} 2>&1 | tee {{cli_log}}
+    nice cargo run -q --profile opt -p uplink-cli -- {{args}}
 
 [doc('''
 Render every screen of the UI to target/ui-preview with Slint's software renderer.

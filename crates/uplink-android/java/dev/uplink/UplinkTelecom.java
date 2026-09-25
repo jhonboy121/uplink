@@ -235,7 +235,8 @@ final class UplinkTelecom {
     // ---- The connection's half --------------------------------------------------------------
 
     void showIncoming() {
-        app.ring(name);
+        boolean video = connection != null && connection.getVideoState() != VideoProfile.STATE_AUDIO_ONLY;
+        app.ring(name, video);
     }
 
     void silence() {

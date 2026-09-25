@@ -1,3 +1,6 @@
+[submodule "external/h264"]
+	path = external/h264
+	url = https://github.com/jhonboy121/h264.git
 [submodule "external/ndk"]
 	path = external/ndk
 	url = https://github.com/jhonboy121/ndk.git

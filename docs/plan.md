@@ -1183,3 +1183,23 @@ default); keep disk usage lean. Avoid build scripts.
   incoming and ongoing call notifications are always CallStyle (their plain-action fallbacks and
   the strings only they used, `decline`, `answer`, `call_in_progress`, are removed), picture in
   picture always auto-enters, and both foreground services always show their notification at once.
+- **2026-09-25**: **the CLI is a phone: a call TUI** (`uplink` with no command; ratatui). It takes
+  only `--dir`, `--video` (the clip) and `--record`; `listen`/`call` are gone.
+  - The controls the app has: mic, camera, hold (nothing sent or played, a keyframe back), asking
+    to switch a voice call to video, and Wi-Fi/mobile with each network's quality step, saved
+    the way the app saves them. A network switch sends `Command::Network(true)` and starts rate
+    control over at the new cap; the core's `Rate` is sampled each second, paused while stalled.
+  - The picture is encoded live, as MediaCodec does on the phone: the clip decoded on its own
+    thread on the clip's clock, scaled to the step and encoded at rate control's bitrate on
+    another (a slice per core), keyframes on the peer's ask. Without a clip, a test pattern.
+    The voice is read from the same clock as the picture, so the two cannot drift.
+  - The codec is the user's pure-Rust OpenH264 port, a submodule at `external/h264`, with bitrate
+    rate control (OpenH264's `RC_BITRATE_MODE`, frame-level QP), `set_bitrate` without an IDR,
+    OpenH264's downsampler and SPS helpers added (its docs/STATUS.md). Within ~5% of every
+    step's bitrate; 1080p60 about 107 fps synthetic, 59 fps on a real clip, 16 cores. The CLI
+    builds with the `opt` profile (full LTO): `just cli`.
+  - First try (decode and encode on one thread) could not hold 1080p30: the phone got 18–25 fps
+    and the picture fell behind the voice after a switch to video. Split into two threads.
+  - Logs go to `<dir>/uplink.log` and the log pane.
+  - App: the ringing notification said "Incoming video call" for voice calls too; it now follows
+    the call's video state.

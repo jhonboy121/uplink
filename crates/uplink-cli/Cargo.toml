@@ -1,6 +1,6 @@
 [package]
 name = "uplink-cli"
-description = "Host CLI for uplink-core: identity, contacts, calling another peer"
+description = "Host CLI for uplink-core: identity, contacts, and a call TUI that behaves as a phone"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -12,9 +12,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+h264.workspace = true
 mp4-atom.workspace = true
+ratatui.workspace = true
 symphonia.workspace = true
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "signal", "time"] }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uplink-core.workspace = true

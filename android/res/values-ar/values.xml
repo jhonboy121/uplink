@@ -23,6 +23,7 @@
 
     <string name="channel_ring">المكالمات الواردة</string>
     <string name="incoming_video_call">مكالمة فيديو واردة</string>
+    <string name="incoming_voice_call">مكالمة صوتية واردة</string>
 
     <string name="channel_missed">المكالمات الفائتة</string>
     <plurals name="missed_calls">

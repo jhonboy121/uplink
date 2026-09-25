@@ -253,10 +253,15 @@ impl AppContext {
 
     /// Rings for an incoming call: the user's ringtone, and a call notification whenever the
     /// app is not in front. Stopped by [`Self::stop_ringing`], not by a timer of its own.
-    pub fn ring(&self, who: &str) -> Result<(), Error> {
+    pub fn ring(&self, who: &str, video: bool) -> Result<(), Error> {
         self.with(|env, application| {
             let who = env.new_string(who)?;
-            env.call_method(application, jni_str!("ring"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&who)])?;
+            env.call_method(
+                application,
+                jni_str!("ring"),
+                jni_sig!("(Ljava/lang/String;Z)V"),
+                &[JValue::Object(&who), JValue::Bool(video)],
+            )?;
             Ok(())
         })
     }

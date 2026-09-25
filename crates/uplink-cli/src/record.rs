@@ -16,7 +16,8 @@ use mp4_atom::{
 use uplink_core::audio::{FRAME_SAMPLES, SAMPLE_RATE};
 use uplink_core::media::Frame;
 
-use crate::h264::{NAL_AUD, NAL_PPS, NAL_SPS, nal_type, nal_units, sps_size};
+use h264::nal::{AUD, PPS, SPS, nal_type};
+use h264::{nal_units, sps_dimensions};
 
 const VIDEO_TRACK: u32 = 1;
 const AUDIO_TRACK: u32 = 2;
@@ -73,7 +74,7 @@ pub struct Recorder {
 impl Recorder {
     pub fn create(path: &Path) -> Result<Self> {
         let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
-        println!("recording to {}", path.display());
+        tracing::info!("recording to {}", path.display());
         Ok(Self {
             out: BufWriter::new(file),
             started: Instant::now(),
@@ -93,14 +94,14 @@ impl Recorder {
     }
 
     pub fn video(&mut self, frame: &Frame) -> Result<()> {
-        let nals = nal_units(&frame.data);
+        let nals: Vec<&[u8]> = nal_units(&frame.data).collect();
         if self.init.is_none() {
             let find = |kind| nals.iter().find(|nal| nal_type(nal) == Some(kind)).copied();
-            let (Some(sps), Some(pps)) = (find(NAL_SPS), find(NAL_PPS)) else { return Ok(()) };
+            let (Some(sps), Some(pps)) = (find(SPS), find(PPS)) else { return Ok(()) };
             self.write_init(sps, pps, frame.turns)?;
         }
         let mut data = Vec::with_capacity(frame.data.len());
-        for nal in nals.iter().filter(|nal| !matches!(nal_type(nal), Some(NAL_SPS | NAL_PPS | NAL_AUD))) {
+        for nal in nals.iter().filter(|nal| !matches!(nal_type(nal), Some(SPS | PPS | AUD))) {
             data.extend_from_slice(&u32::try_from(nal.len())?.to_be_bytes());
             data.extend_from_slice(nal);
         }
@@ -125,9 +126,9 @@ impl Recorder {
     }
 
     fn write_init(&mut self, sps: &[u8], pps: &[u8], turns: u8) -> Result<()> {
-        let (width, height) = sps_size(sps).context("unreadable SPS")?;
+        let (width, height) = sps_dimensions(sps).context("unreadable SPS")?;
         let (width, height) = (u16::try_from(width)?, u16::try_from(height)?);
-        println!("recording {width}x{height}, rotated {turns} quarter turns");
+        tracing::info!("recording {width}x{height}, rotated {turns} quarter turns");
         let dinf = Dinf { dref: Dref { urls: vec![Url { location: String::new() }] } };
         let video = Trak {
             tkhd: Tkhd {
@@ -324,10 +325,10 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         if let Err(e) = self.flush() {
-            println!("recording: last fragment lost: {e:#}");
+            tracing::warn!("recording: last fragment lost: {e:#}");
         }
         if let Err(e) = self.write_durations() {
-            println!("recording: durations not written: {e:#}");
+            tracing::warn!("recording: durations not written: {e:#}");
         }
     }
 }
@@ -383,7 +384,7 @@ mod tests {
                     keyframe: sample.sync,
                     config: false,
                     turns: clip.video.turns,
-                    data: crate::media::annex_b(&data, clip.video.length_size, config)?,
+                    data: crate::clip::annex_b(&data, clip.video.length_size, config)?,
                 })?;
             }
         }

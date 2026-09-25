@@ -148,6 +148,8 @@ public class UplinkApplication extends Application {
     // callbacks arrive, so the two can never disagree about what is showing.
     private final Handler main = new Handler(Looper.getMainLooper());
     private String ringing;
+    /** Whether the ringing call is a video one, for the notification's words. */
+    private boolean ringingVideo;
     private boolean inFront;
     private Ringtone ringtone;
     private Vibrator vibrator;
@@ -545,12 +547,13 @@ public class UplinkApplication extends Application {
      * has none of its own — but the notification only shows while it is not, since in front the
      * call screen already says everything the notification would. Callable from any thread.
      */
-    void ring(final String who) {
+    void ring(final String who, final boolean video) {
         main.post(new Runnable() {
             @Override
             public void run() {
                 boolean already = ringing != null;
                 ringing = who;
+                ringingVideo = video;
                 if (!already) {
                     startAlerting();
                 }
@@ -680,7 +683,7 @@ public class UplinkApplication extends Application {
         Notification.Builder builder = new Notification.Builder(this, RING_CHANNEL)
                 .setSmallIcon(R.drawable.notification)
                 .setContentTitle(who)
-                .setContentText(text(R.string.incoming_video_call))
+                .setContentText(text(ringingVideo ? R.string.incoming_video_call : R.string.incoming_voice_call))
                 .setCategory(Notification.CATEGORY_CALL)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setContentIntent(show)

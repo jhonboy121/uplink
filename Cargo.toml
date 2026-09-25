@@ -16,6 +16,9 @@ uplink-android = { path = "crates/uplink-android" }
 uplink-core = { path = "crates/uplink-core" }
 ndk-gl-sys = { path = "sys/ndk-gl-sys" }
 opus-sys = { path = "sys/opus-sys" }
+# The CLI's camera: a pure-Rust OpenH264 port (submodule), decoding the clip and encoding it live
+# at rate control's bitrate, as MediaCodec does on the phone. See external/h264/docs/STATUS.md.
+h264 = { path = "external/h264", features = ["threads", "simd"] }
 
 # Glyph outlines and their rasterisation, for the line of text on the shared identity card. Two
 # small crates; a full image-processing library would be a lot of machinery for one line.
@@ -68,6 +71,8 @@ noq-proto = { version = "1.3", default-features = false }
 parking_lot = "0.12"
 qrcode = { version = "0.14", default-features = false }
 rqrr = { version = "0.9", default-features = false }
+# The CLI's call TUI; its crossterm backend is re-exported, so it is the one terminal dependency.
+ratatui = "0.30"
 rtrb = "0.4"
 # FxHashMap: std's SipHash buys resistance to an attacker choosing keys to collide, and nothing
 # here has that shape — request codes are our own counter, and contact keys are public keys,
@@ -127,3 +132,9 @@ debug = false
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# The CLI: it decodes and encodes live, at up to 1080p60.
+[profile.opt]
+inherits = "release"
+lto = true
+strip = true
