@@ -25,18 +25,18 @@ use jni::objects::{JClass, JObject, JString};
 use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jboolean, jint, jlong};
 use jni::{EnvUnowned, JavaVM, NativeMethod, Outcome, jni_str};
 use parking_lot::Mutex;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::log::{self, Logging};
 use uplink_android::platform::{AppContext, Disconnect, TelecomAction, address_from_handle, handle_from_address};
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
 // By path: `jni::Outcome` is imported above, and the two mean unrelated things.
 use uplink_core::calls::{self, CallLog, CallRecord};
 use uplink_core::contacts::Contacts;
 use uplink_core::db::Db;
 use uplink_core::media::MediaStats;
-use uplink_core::quality::{Quality, VideoTarget};
 use uplink_core::node::{Behind, Command, EndReason, Event, Mode, Network, Node, NodeHandle, RelayView};
+use uplink_core::quality::{Quality, VideoTarget};
 use uplink_core::reach::Reach;
 use uplink_core::settings::{self, Settings};
 use uplink_core::{EndpointId, identity};
@@ -537,11 +537,7 @@ fn natives() -> [NativeMethod<'static>; 6] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkApplication's natives.
     unsafe {
         [
-            NativeMethod::from_raw_parts(
-                jni_str!("nativeInit"),
-                jni_str!("()V"),
-                native_init as *mut c_void,
-            ),
+            NativeMethod::from_raw_parts(jni_str!("nativeInit"), jni_str!("()V"), native_init as *mut c_void),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeStart"),
                 jni_str!("(Ljava/lang/String;)J"),
@@ -557,16 +553,8 @@ fn natives() -> [NativeMethod<'static>; 6] {
                 jni_str!("(JI)V"),
                 native_ring_action as *mut c_void,
             ),
-            NativeMethod::from_raw_parts(
-                jni_str!("nativeNetwork"),
-                jni_str!("(JZ)V"),
-                native_network as *mut c_void,
-            ),
-            NativeMethod::from_raw_parts(
-                jni_str!("nativeTelecom"),
-                jni_str!("(JI)V"),
-                native_telecom as *mut c_void,
-            ),
+            NativeMethod::from_raw_parts(jni_str!("nativeNetwork"), jni_str!("(JZ)V"), native_network as *mut c_void),
+            NativeMethod::from_raw_parts(jni_str!("nativeTelecom"), jni_str!("(JI)V"), native_telecom as *mut c_void),
         ]
     }
 }

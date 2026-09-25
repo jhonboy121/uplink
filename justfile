@@ -24,6 +24,8 @@ coverage_dir := "target/coverage"
 # The design's frame in dp: 360 wide at the mockup's 9/19.3, which is what `just ui-diff` renders.
 design_size := "360x772"
 java_release := "8"
+# google-java-format's all-deps jar; 1.28.0 is the last that runs on JDK 17.
+google_java_format := env("GOOGLE_JAVA_FORMAT", home_directory() / ".local/share/java/google-java-format.jar")
 
 export ANDROID_NDK_HOME := env("ANDROID_NDK_HOME", home_directory() / "android/ndk")
 export ANDROID_NDK := ANDROID_NDK_HOME
@@ -73,9 +75,20 @@ clippy:
     nice cargo clippy {{android_crates}} --target {{android_target}} --profile {{cargo_profile}} -- -D warnings
     nice cargo clippy {{host_crates}} --all-targets -- -D warnings
 
-[doc("Format the workspace")]
+[doc('''
+Format Rust (cargo fmt), TOML (taplo) and Java (google-java-format), each by its default rules.
+vendor/ stays as upstream wrote it: plain `cargo fmt` formats the members, not path dependencies.
+''')]
 fmt:
-    cargo fmt --all
+    cargo fmt
+    git ls-files '*.toml' ':!vendor/' | RUST_LOG=warn xargs taplo fmt
+    git ls-files '*.java' ':!vendor/' | xargs java -jar "{{google_java_format}}" --replace
+
+[doc("Fail if anything `just fmt` would change")]
+fmt-check:
+    cargo fmt --check
+    git ls-files '*.toml' ':!vendor/' | RUST_LOG=warn xargs taplo fmt --check
+    git ls-files '*.java' ':!vendor/' | xargs java -jar "{{google_java_format}}" --dry-run --set-exit-if-changed
 
 [doc("Build the app library")]
 build:

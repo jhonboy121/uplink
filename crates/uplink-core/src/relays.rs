@@ -91,9 +91,7 @@ impl Custom {
     fn parse(line: &str) -> Option<Self> {
         let (url, name) = line.split_once(' ').unwrap_or((line, ""));
         match RelayUrl::from_str(url) {
-            Ok(parsed) => {
-                Some(Self { url: parsed, name: if name.is_empty() { url } else { name }.to_owned() })
-            }
+            Ok(parsed) => Some(Self { url: parsed, name: if name.is_empty() { url } else { name }.to_owned() }),
             // A bad row is skipped rather than fatal: this is a preference, and one unparseable
             // line should not be the reason a phone cannot be called.
             Err(e) => {
@@ -119,9 +117,12 @@ pub fn catalogue(store: &Settings) -> Vec<Relay> {
         let label = url.host_str().and_then(|host| host.split('.').next()).unwrap_or_default().to_owned();
         Relay { region: Region::of_n0(&label), name: label, source: Source::N0, url }
     });
-    let yours = custom(store)
-        .into_iter()
-        .map(|relay| Relay { url: relay.url, name: relay.name, source: Source::Yours, region: Region::Yours });
+    let yours = custom(store).into_iter().map(|relay| Relay {
+        url: relay.url,
+        name: relay.name,
+        source: Source::Yours,
+        region: Region::Yours,
+    });
     ours.into_iter().chain(n0).chain(yours).collect()
 }
 
@@ -138,7 +139,8 @@ impl Choice {
     pub fn load(store: &Settings) -> Self {
         let ticked: Vec<RelayUrl> =
             store.lines(RELAYS_TICKED).iter().filter_map(|line| RelayUrl::from_str(line).ok()).collect();
-        let ticked = if ticked.is_empty() { catalogue(store).into_iter().map(|relay| relay.url).collect() } else { ticked };
+        let ticked =
+            if ticked.is_empty() { catalogue(store).into_iter().map(|relay| relay.url).collect() } else { ticked };
         Self { auto: !store.flag(RELAYS_MANUAL), ticked }
     }
 
@@ -151,7 +153,11 @@ impl Choice {
     /// The ticked relays that still exist, in catalogue order: a tick against a removed relay of
     /// yours is not something to hand iroh.
     pub fn pool(&self, catalogue: &[Relay]) -> Vec<RelayUrl> {
-        catalogue.iter().filter(|relay| self.ticked.contains(&relay.url)).map(|relay| relay.url.clone()).collect()
+        catalogue
+            .iter()
+            .filter(|relay| self.ticked.contains(&relay.url))
+            .map(|relay| relay.url.clone())
+            .collect()
     }
 }
 
@@ -347,7 +353,8 @@ mod tests {
     #[test]
     fn a_ranking_round_trips() -> Result<(), Error> {
         let store = settings()?;
-        let ranking = Ranking { at: Some(UNIX_EPOCH + Duration::from_secs(1_000)), relays: vec![measured(UPLINK, 38)?] };
+        let ranking =
+            Ranking { at: Some(UNIX_EPOCH + Duration::from_secs(1_000)), relays: vec![measured(UPLINK, 38)?] };
         ranking.save(&store)?;
         let back = Ranking::load(&store);
         assert_eq!(back.at, ranking.at);

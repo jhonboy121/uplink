@@ -51,7 +51,13 @@ const fn padding(base: usize, align: usize) -> usize {
         return 0;
     }
     let short = (align - base % align) % align;
-    if short == 0 { 0 } else if short < EXTRA_HEADER_SIZE { short + align * EXTRA_HEADER_SIZE.div_ceil(align) } else { short }
+    if short == 0 {
+        0
+    } else if short < EXTRA_HEADER_SIZE {
+        short + align * EXTRA_HEADER_SIZE.div_ceil(align)
+    } else {
+        short
+    }
 }
 
 fn put16(out: &mut Vec<u8>, v: u16) {
@@ -78,8 +84,7 @@ pub fn write(out_path: &Path, root: &Path, files: &[PathBuf]) -> Result<()> {
         crc.update(&data);
 
         let table = name == ARSC_NAME;
-        let (method, stored) =
-            if table { (METHOD_STORED, data.clone()) } else { (METHOD_DEFLATE, deflate(&data)?) };
+        let (method, stored) = if table { (METHOD_STORED, data.clone()) } else { (METHOD_DEFLATE, deflate(&data)?) };
 
         let offset = u32::try_from(body.len())?;
         let pad = if table { padding(body.len() + LOCAL_HEADER_SIZE + name.len(), ARSC_ALIGNMENT) } else { 0 };

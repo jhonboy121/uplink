@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use mp4_atom::{
-    Audio, Avc1, Avcc, Codec, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Matrix, Mdat, Mdhd, Mdia, Mfhd,
-    Minf, Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stco, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url,
+    Audio, Avc1, Avcc, Codec, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Matrix, Mdat, Mdhd, Mdia, Mfhd, Minf,
+    Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stco, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url,
     Visual, Vmhd,
 };
 use uplink_core::audio::{FRAME_SAMPLES, SAMPLE_RATE};
@@ -234,7 +234,10 @@ impl Recorder {
         let Some(Init { offset, len, moov }) = &mut self.init else { return Ok(()) };
         let movie_timescale = moov.mvhd.timescale;
         let rescale = |ticks: u64, timescale: u32| {
-            ticks.saturating_mul(u64::from(movie_timescale)).checked_div(u64::from(timescale)).unwrap_or_default()
+            ticks
+                .saturating_mul(u64::from(movie_timescale))
+                .checked_div(u64::from(timescale))
+                .unwrap_or_default()
         };
         let sample_rate = u32::try_from(SAMPLE_RATE)?;
         moov.mvhd.duration = rescale(self.video_end, VIDEO_TIMESCALE).max(rescale(self.audio_end, sample_rate));
@@ -281,8 +284,11 @@ impl Recorder {
                     TrunEntry {
                         duration: Some(next.and_then(|d| u32::try_from(d).ok()).unwrap_or(*fallback)),
                         size: Some(u32::try_from(sample.data.len()).unwrap_or(u32::MAX)),
-                        flags: (*track_id == VIDEO_TRACK)
-                            .then_some(if sample.sync { SYNC_SAMPLE } else { NON_SYNC_SAMPLE }),
+                        flags: (*track_id == VIDEO_TRACK).then_some(if sample.sync {
+                            SYNC_SAMPLE
+                        } else {
+                            NON_SYNC_SAMPLE
+                        }),
                         cts: None,
                     }
                 })

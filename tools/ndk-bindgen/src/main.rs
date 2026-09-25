@@ -134,10 +134,7 @@ fn main() -> Result<()> {
                 // Weak mode keeps every declaration visible regardless of min SDK.
                 .clang_arg("-D__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__");
             let out = crate_dir.join(format!("src/ffi_{arch}.rs"));
-            configure(builder)?
-                .generate()
-                .with_context(|| format!("{dir} ({target})"))?
-                .write_to_file(&out)?;
+            configure(builder)?.generate().with_context(|| format!("{dir} ({target})"))?.write_to_file(&out)?;
             println!("wrote {}", out.display());
         }
     }

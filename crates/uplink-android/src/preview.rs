@@ -231,17 +231,7 @@ impl Preview {
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
             for texture in self.outputs {
                 glBindTexture(GL_TEXTURE_2D, texture.get());
-                glTexImage2D(
-                    GL_TEXTURE_2D,
-                    0,
-                    GL_RGBA8 as GLint,
-                    width,
-                    height,
-                    0,
-                    GL_RGBA,
-                    GL_UNSIGNED_BYTE,
-                    null(),
-                );
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8 as GLint, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, null());
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR as GLint);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR as GLint);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as GLint);
@@ -276,7 +266,8 @@ impl Preview {
                 return Err(Error::Egl { call: "eglGetNativeClientBufferANDROID", code: eglGetError() });
             }
             let attrs = [EGL_IMAGE_PRESERVED_KHR as EGLint, EGL_TRUE as EGLint, EGL_NONE as EGLint];
-            let image = eglCreateImageKHR(display, null_mut(), EGL_NATIVE_BUFFER_ANDROID, client_buffer, attrs.as_ptr());
+            let image =
+                eglCreateImageKHR(display, null_mut(), EGL_NATIVE_BUFFER_ANDROID, client_buffer, attrs.as_ptr());
             if image.is_null() {
                 return Err(Error::Egl { call: "eglCreateImageKHR", code: eglGetError() });
             }

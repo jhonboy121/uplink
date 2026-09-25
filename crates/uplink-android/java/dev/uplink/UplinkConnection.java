@@ -3,7 +3,6 @@ package dev.uplink;
 import android.telecom.CallAudioState;
 import android.telecom.CallEndpoint;
 import android.telecom.Connection;
-
 import java.util.List;
 
 /**
@@ -12,87 +11,89 @@ import java.util.List;
  * turns it into what the core and the window understand. Main thread, as Telecom calls it.
  */
 final class UplinkConnection extends Connection {
-    private final UplinkTelecom telecom;
-    /** Kept so either change can be published with the other half it belongs to. */
-    private List<CallEndpoint> available;
-    private CallEndpoint current;
+  private final UplinkTelecom telecom;
 
-    UplinkConnection(UplinkTelecom telecom) {
-        this.telecom = telecom;
-    }
+  /** Kept so either change can be published with the other half it belongs to. */
+  private List<CallEndpoint> available;
 
-    /** A self-managed app draws its own ringing; this is Telecom saying now is the time. */
-    @Override
-    public void onShowIncomingCallUi() {
-        telecom.showIncoming();
-    }
+  private CallEndpoint current;
 
-    /** The volume key while it rings: quiet, but still ringing. */
-    @Override
-    public void onSilence() {
-        telecom.silence();
-    }
+  UplinkConnection(UplinkTelecom telecom) {
+    this.telecom = telecom;
+  }
 
-    @Override
-    public void onAnswer() {
-        telecom.action(UplinkTelecom.ANSWER);
-    }
+  /** A self-managed app draws its own ringing; this is Telecom saying now is the time. */
+  @Override
+  public void onShowIncomingCallUi() {
+    telecom.showIncoming();
+  }
 
-    @Override
-    public void onAnswer(int videoState) {
-        telecom.action(UplinkTelecom.ANSWER);
-    }
+  /** The volume key while it rings: quiet, but still ringing. */
+  @Override
+  public void onSilence() {
+    telecom.silence();
+  }
 
-    @Override
-    public void onReject() {
-        telecom.action(UplinkTelecom.REJECT);
-    }
+  @Override
+  public void onAnswer() {
+    telecom.action(UplinkTelecom.ANSWER);
+  }
 
-    @Override
-    public void onDisconnect() {
-        telecom.action(UplinkTelecom.HANGUP);
-    }
+  @Override
+  public void onAnswer(int videoState) {
+    telecom.action(UplinkTelecom.ANSWER);
+  }
 
-    @Override
-    public void onAbort() {
-        telecom.action(UplinkTelecom.HANGUP);
-    }
+  @Override
+  public void onReject() {
+    telecom.action(UplinkTelecom.REJECT);
+  }
 
-    /** A phone call was answered over ours. */
-    @Override
-    public void onHold() {
-        telecom.hold(this, true);
-    }
+  @Override
+  public void onDisconnect() {
+    telecom.action(UplinkTelecom.HANGUP);
+  }
 
-    @Override
-    public void onUnhold() {
-        telecom.hold(this, false);
-    }
+  @Override
+  public void onAbort() {
+    telecom.action(UplinkTelecom.HANGUP);
+  }
 
-    @Override
-    public void onMuteStateChanged(boolean isMuted) {
-        telecom.mute(this, isMuted);
-    }
+  /** A phone call was answered over ours. */
+  @Override
+  public void onHold() {
+    telecom.hold(this, true);
+  }
 
-    @Override
-    public void onAvailableCallEndpointsChanged(List<CallEndpoint> endpoints) {
-        available = endpoints;
-        telecom.endpoints(this, endpoints, current);
-    }
+  @Override
+  public void onUnhold() {
+    telecom.hold(this, false);
+  }
 
-    @Override
-    public void onCallEndpointChanged(CallEndpoint endpoint) {
-        current = endpoint;
-        telecom.endpoints(this, available, endpoint);
-    }
+  @Override
+  public void onMuteStateChanged(boolean isMuted) {
+    telecom.mute(this, isMuted);
+  }
 
-    /**
-     * Before 34, one callback carries the outputs, the one in use and the mute. Deprecated from
-     * 34, where the CallEndpoint callbacks above replace it; 30–33 have only this.
-     */
-    @Override
-    @SuppressWarnings("deprecation")
-    public void onCallAudioStateChanged(CallAudioState state) {
-        telecom.audioState(this, state);
-    }
+  @Override
+  public void onAvailableCallEndpointsChanged(List<CallEndpoint> endpoints) {
+    available = endpoints;
+    telecom.endpoints(this, endpoints, current);
+  }
+
+  @Override
+  public void onCallEndpointChanged(CallEndpoint endpoint) {
+    current = endpoint;
+    telecom.endpoints(this, available, endpoint);
+  }
+
+  /**
+   * Before 34, one callback carries the outputs, the one in use and the mute. Deprecated from 34,
+   * where the CallEndpoint callbacks above replace it; 30–33 have only this.
+   */
+  @Override
+  @SuppressWarnings("deprecation")
+  public void onCallAudioStateChanged(CallAudioState state) {
+    telecom.audioState(this, state);
+  }
 }

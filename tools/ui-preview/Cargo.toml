@@ -12,9 +12,18 @@ roxmltree.workspace = true
 uplink-core.workspace = true
 # The app builds Slint for Android with Skia; here it is the software renderer and no backend,
 # so the same markup renders headless on the host.
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software", "image-default-formats"] }
+slint = { version = "=1.18.1", default-features = false, features = [
+  "std",
+  "compat-1-2",
+  "renderer-software",
+  "image-default-formats",
+] }
 # The widget style embeds its icons, and `slint` has no feature that turns that decoding on.
-i-slint-core = { version = "=1.18.1", default-features = false, features = ["image-decoders", "image-default-formats", "svg"] }
+i-slint-core = { version = "=1.18.1", default-features = false, features = [
+  "image-decoders",
+  "image-default-formats",
+  "svg",
+] }
 
 # Turns on translation bundling in the `slint!` macro; see the workspace manifest.
 [build-dependencies]

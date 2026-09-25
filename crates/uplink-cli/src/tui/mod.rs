@@ -102,7 +102,12 @@ struct Tui {
 }
 
 /// Runs until quit. `logs` is the log sink's pane end.
-pub async fn run(dir: &Path, clip: Option<PathBuf>, record: Option<PathBuf>, logs: mpsc::UnboundedReceiver<String>) -> Result<()> {
+pub async fn run(
+    dir: &Path,
+    clip: Option<PathBuf>,
+    record: Option<PathBuf>,
+    logs: mpsc::UnboundedReceiver<String>,
+) -> Result<()> {
     if let Some(path) = &clip {
         // Fail before the screen takes over, where the error can be read.
         live::check_clip(path)?;
@@ -110,7 +115,8 @@ pub async fn run(dir: &Path, clip: Option<PathBuf>, record: Option<PathBuf>, log
     let db = Db::open(dir)?;
     let contacts = Contacts::open(db.clone())?;
     let settings = Settings::open(db)?;
-    let (node, events) = Node::start(identity::load_or_create(dir).await?, Network::Public(settings.clone()), APP).await?;
+    let (node, events) =
+        Node::start(identity::load_or_create(dir).await?, Network::Public(settings.clone()), APP).await?;
     let tui = Tui {
         node,
         contacts,
@@ -261,7 +267,9 @@ impl Tui {
                     self.call = Some(Call::new(peer, mode, Phase::Incoming));
                 }
             }
-            Event::Connected { peer, key_exchange, mode, media } => self.connected(peer, format!("{key_exchange:?}"), mode, *media),
+            Event::Connected { peer, key_exchange, mode, media } => {
+                self.connected(peer, format!("{key_exchange:?}"), mode, *media)
+            }
             Event::PeerMedia(theirs) => {
                 if let Some(call) = &mut self.call {
                     call.theirs = theirs;
@@ -300,7 +308,13 @@ impl Tui {
         }
     }
 
-    fn connected(&mut self, peer: EndpointId, key_exchange: String, mode: Mode, media: uplink_core::media::MediaSession) {
+    fn connected(
+        &mut self,
+        peer: EndpointId,
+        key_exchange: String,
+        mode: Mode,
+        media: uplink_core::media::MediaSession,
+    ) {
         let clip = self.clip.as_deref().map(Clip::open).transpose().unwrap_or_else(|e| {
             tracing::warn!("clip unavailable, sending the test pattern: {e:#}");
             None
@@ -362,7 +376,10 @@ impl Tui {
     }
 
     fn tell_media(&self) {
-        if self.call.as_ref().is_some_and(|call| call.phase == Phase::Connected || call.phase == Phase::Reconnecting)
+        if self
+            .call
+            .as_ref()
+            .is_some_and(|call| call.phase == Phase::Connected || call.phase == Phase::Reconnecting)
             && let Err(e) = self.node.handle().try_send(Command::Media(self.media_state()))
         {
             tracing::warn!("telling them our media: {e:#}");

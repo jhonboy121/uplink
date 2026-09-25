@@ -71,8 +71,7 @@ impl Counts {
 
     const fn theirs_bad(&self, before: &Self) -> bool {
         self.received_dropped > before.received_dropped
-            || self.audio_late - before.audio_late + self.audio_concealed - before.audio_concealed
-                > AUDIO_TOLERANCE
+            || self.audio_late - before.audio_late + self.audio_concealed - before.audio_concealed > AUDIO_TOLERANCE
     }
 }
 
@@ -96,8 +95,7 @@ impl Baseline {
         } else if rtt_ms < self.lowest {
             self.lowest = rtt_ms;
         }
-        rtt_ms >= RTT_CEILING_MS
-            || (rtt_ms >= self.lowest * RTT_CLIMB && rtt_ms - self.lowest >= RTT_MARGIN_MS)
+        rtt_ms >= RTT_CEILING_MS || (rtt_ms >= self.lowest * RTT_CLIMB && rtt_ms - self.lowest >= RTT_MARGIN_MS)
     }
 }
 

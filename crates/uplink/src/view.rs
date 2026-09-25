@@ -10,9 +10,9 @@ use uplink_android::platform::{Permission as AndroidPermission, Route as Android
 use uplink_core::EndpointId;
 use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
+use uplink_core::health::Weak as CoreWeak;
 use uplink_core::media::Route as MediaRoute;
 use uplink_core::node::{Mode, RelayView};
-use uplink_core::health::Weak as CoreWeak;
 use uplink_core::preset::Preset as CorePreset;
 use uplink_core::quality::{Quality, Spread};
 use uplink_core::reach::Reach as CoreReach;
@@ -21,8 +21,8 @@ use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
 use crate::clock::LocalClock;
 use crate::ui::{
     Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Output,
-    OutputItem, Path, PathKind, Permission, Preset, PresetItem, Reach, Region, RelayItem, RelayUse, Route, Say,
-    Stall, Stat, Theme, Toast, Traffic, Unit, Weak,
+    OutputItem, Path, PathKind, Permission, Preset, PresetItem, Reach, Region, RelayItem, RelayUse, Route, Say, Stall,
+    Stat, Theme, Toast, Traffic, Unit, Weak,
 };
 
 /// Groups of four, the way the key is read aloud, over two even lines.
@@ -70,7 +70,11 @@ pub fn fingerprint_lines(id: &EndpointId) -> ModelRc<SharedString> {
         .collect::<Vec<_>>()
         .chunks(FINGERPRINT_GROUP * FINGERPRINT_LINE_GROUPS)
         .map(|line| {
-            line.chunks(FINGERPRINT_GROUP).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join(" ").into()
+            line.chunks(FINGERPRINT_GROUP)
+                .map(|group| group.iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into()
         })
         .collect();
     list(lines)
@@ -87,13 +91,20 @@ pub fn name_of(contacts: &Contacts, id: &EndpointId) -> String {
 
 /// Contacts for People. The store already orders favourites first, so a group starts wherever
 /// the flag changes.
-pub fn contact_items(contacts: &Contacts, selected: &FxHashSet<EndpointId>, fresh: Option<EndpointId>) -> Vec<ContactItem> {
+pub fn contact_items(
+    contacts: &Contacts,
+    selected: &FxHashSet<EndpointId>,
+    fresh: Option<EndpointId>,
+) -> Vec<ContactItem> {
     let mut previous: Option<bool> = None;
     contacts
         .iter()
         .map(|contact| {
-            let heading = (previous != Some(contact.favourite))
-                .then_some(if contact.favourite { Group::Favourites } else { Group::Others });
+            let heading = (previous != Some(contact.favourite)).then_some(if contact.favourite {
+                Group::Favourites
+            } else {
+                Group::Others
+            });
             previous = Some(contact.favourite);
             ContactItem {
                 name: contact.name.as_str().into(),
@@ -195,7 +206,12 @@ pub const fn ending(outcome: Outcome) -> Ending {
 }
 
 /// The Calls screen, newest first, grouped by day.
-pub fn call_items(records: &[Logged], contacts: &Contacts, clock: &LocalClock, selected: &FxHashSet<CallId>) -> Vec<CallItem> {
+pub fn call_items(
+    records: &[Logged],
+    contacts: &Contacts,
+    clock: &LocalClock,
+    selected: &FxHashSet<CallId>,
+) -> Vec<CallItem> {
     let mut previous: Option<i64> = None;
     records
         .iter()
@@ -303,7 +319,10 @@ fn video_stats(q: &Quality) -> Vec<Stat> {
         .chain(spread(Measure::FpsIn, &q.fps_in, 1.0, WHOLE))
         .chain([
             stat(Measure::Frames, [video.sent.to_string(), video.received.to_string()]),
-            stat(Measure::FramesLost, [video.late.to_string(), video.congested.to_string(), video.discarded.to_string()]),
+            stat(
+                Measure::FramesLost,
+                [video.late.to_string(), video.congested.to_string(), video.discarded.to_string()],
+            ),
         ])
         .collect()
 }

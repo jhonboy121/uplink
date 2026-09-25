@@ -47,14 +47,19 @@ impl Peer {
 }
 
 async fn next(events: &mut Receiver<Event>) -> Result<Event> {
-    tokio::time::timeout(EVENT_TIMEOUT, events.recv()).await.context("timed out")?.context("event channel closed")
+    tokio::time::timeout(EVENT_TIMEOUT, events.recv())
+        .await
+        .context("timed out")?
+        .context("event channel closed")
 }
 
 /// `caller` calls `callee`, who sees it ring.
 async fn ring(caller: &mut Peer, callee: &mut Peer) -> Result<()> {
     caller.node.send(Command::Call(callee.id, Mode::Video)).await?;
     let from = caller.id;
-    callee.expect("incoming call", |e| matches!(e, Event::Incoming { peer, .. } if *peer == from)).await?;
+    callee
+        .expect("incoming call", |e| matches!(e, Event::Incoming { peer, .. } if *peer == from))
+        .await?;
     caller.expect("ringing", |e| matches!(e, Event::Ringing { .. })).await?;
     Ok(())
 }
@@ -198,7 +203,9 @@ async fn handle_commands_reach_the_node_until_it_stops() -> Result<()> {
 /// Places a voice call and answers it; both sides see it connect as voice.
 async fn voice_call(caller: &mut Peer, callee: &mut Peer) -> Result<()> {
     caller.node.send(Command::Call(callee.id, Mode::Voice)).await?;
-    callee.expect("incoming voice call", |e| matches!(e, Event::Incoming { mode: Mode::Voice, .. })).await?;
+    callee
+        .expect("incoming voice call", |e| matches!(e, Event::Incoming { mode: Mode::Voice, .. }))
+        .await?;
     callee.node.send(Command::Answer(true)).await?;
     for peer in [caller, callee] {
         let connected = peer.expect("connected", |e| matches!(e, Event::Connected { .. })).await?;

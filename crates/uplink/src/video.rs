@@ -70,8 +70,7 @@ impl CallVideo {
         .context("the reader the remote picture is decoded into")?;
         remote.set_image_listener(Box::new(move |_| on_remote_frame()))?;
         let window = remote.window().context("the reader's surface")?;
-        let (decoder, decoder_events) =
-            Decoder::new(avc, video.width, video.height, &window).context("the decoder")?;
+        let (decoder, decoder_events) = Decoder::new(avc, video.width, video.height, &window).context("the decoder")?;
         let (encoder, encoder_events) = Encoder::new(avc, video).context("the encoder")?;
         let encoder_window = encoder.window().clone();
 
@@ -84,7 +83,18 @@ impl CallVideo {
         let (bitrate, bitrates) = watch::channel(video.bitrate);
         let changes = Changes { swaps, bitrates };
         tasks.spawn(encode(encoder, encoder_events, sender, asks, changes, Arc::clone(&local_turns), cancel));
-        Ok(Self { tasks, keyframe, swap, bitrate, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+        Ok(Self {
+            tasks,
+            keyframe,
+            swap,
+            bitrate,
+            shown: None,
+            remote,
+            encoder_window,
+            local_turns,
+            remote_turns,
+            stats,
+        })
     }
 
     /// Sends from here on at another size, rate or bitrate: a new encoder replaces the old one
@@ -92,7 +102,9 @@ impl CallVideo {
     pub fn reconfigure(&mut self, avc: &Avc, video: VideoConfig) -> Result<()> {
         let (encoder, events) = Encoder::new(avc, video).context("the new encoder")?;
         let window = encoder.window().clone();
-        self.swap.try_send((encoder, events)).map_err(|_| anyhow::anyhow!("the encoder task is not taking a new encoder"))?;
+        self.swap
+            .try_send((encoder, events))
+            .map_err(|_| anyhow::anyhow!("the encoder task is not taking a new encoder"))?;
         // Already the new encoder's; said again only so a change still on its way is not
         // applied on top of it.
         self.bitrate.send_replace(video.bitrate);

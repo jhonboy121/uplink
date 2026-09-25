@@ -7,8 +7,8 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use android_activity::AndroidApp;
 use arc_swap::ArcSwapOption;
@@ -308,7 +308,12 @@ impl AppContext {
     pub fn set_language(&self, code: &str) -> Result<(), Error> {
         self.with(|env, application| {
             let code = env.new_string(code)?;
-            env.call_method(application, jni_str!("setLanguage"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&code)])?;
+            env.call_method(
+                application,
+                jni_str!("setLanguage"),
+                jni_sig!("(Ljava/lang/String;)V"),
+                &[JValue::Object(&code)],
+            )?;
             Ok(())
         })
     }
@@ -318,7 +323,12 @@ impl AppContext {
         let which = text as jint;
         self.with(|env, application| {
             let words = env
-                .call_method(application, jni_str!("rustText"), jni_sig!("(I)Ljava/lang/String;"), &[JValue::Int(which)])?
+                .call_method(
+                    application,
+                    jni_str!("rustText"),
+                    jni_sig!("(I)Ljava/lang/String;"),
+                    &[JValue::Int(which)],
+                )?
                 .l()?;
             java_string(env, words)
         })
@@ -328,7 +338,12 @@ impl AppContext {
     pub fn missed_call(&self, who: &str) -> Result<(), Error> {
         self.with(|env, application| {
             let who = env.new_string(who)?;
-            env.call_method(application, jni_str!("missedCall"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&who)])?;
+            env.call_method(
+                application,
+                jni_str!("missedCall"),
+                jni_sig!("(Ljava/lang/String;)V"),
+                &[JValue::Object(&who)],
+            )?;
             Ok(())
         })
     }
@@ -348,7 +363,8 @@ impl AppContext {
                     &[],
                 )?
                 .l()?;
-            let offset = env.call_method(&zone, jni_str!("getOffset"), jni_sig!("(J)I"), &[JValue::Long(millis)])?.i()?;
+            let offset =
+                env.call_method(&zone, jni_str!("getOffset"), jni_sig!("(J)I"), &[JValue::Long(millis)])?.i()?;
             Ok(i64::from(offset) / MILLIS_PER_SECOND)
         })
     }
@@ -364,7 +380,9 @@ impl AppContext {
             JValue::Int(int(video.fps)?),
             JValue::Int(int(video.kbps * BPS_PER_KBPS)?),
         ];
-        self.with(|env, application| Ok(env.call_method(application, jni_str!("canSend"), jni_sig!("(IIII)Z"), &args)?.z()?))
+        self.with(|env, application| {
+            Ok(env.call_method(application, jni_str!("canSend"), jni_sig!("(IIII)Z"), &args)?.z()?)
+        })
     }
 
     /// Whether the phone is on Wi-Fi (or Ethernet) now, rather than mobile data or nothing.
@@ -420,8 +438,9 @@ impl AppContext {
 
     pub fn telecom_ended(&self, cause: Disconnect) -> Result<(), Error> {
         self.with(|env, application| {
-            let code =
-                env.get_static_field(jni_str!("android/telecom/DisconnectCause"), cause.field(), jni_sig!("I"))?.i()?;
+            let code = env
+                .get_static_field(jni_str!("android/telecom/DisconnectCause"), cause.field(), jni_sig!("I"))?
+                .i()?;
             env.call_method(application, jni_str!("telecomEnded"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
             Ok(())
         })
@@ -670,12 +689,7 @@ impl Platform {
     /// them, so what is behind them is the app's own ground and only the app knows its shade.
     pub fn set_light_system_bars(&self, light: bool) -> Result<(), Error> {
         self.with_activity(|env, activity| {
-            env.call_method(
-                activity,
-                jni_str!("setLightSystemBars"),
-                jni_sig!("(Z)V"),
-                &[JValue::Bool(light)],
-            )?;
+            env.call_method(activity, jni_str!("setLightSystemBars"), jni_sig!("(Z)V"), &[JValue::Bool(light)])?;
             Ok(())
         })
     }
@@ -801,7 +815,12 @@ impl Platform {
     pub fn long_press_timeout(&self) -> Result<std::time::Duration, Error> {
         self.with_context(|env, _| {
             let millis = env
-                .call_static_method(jni_str!("android/view/ViewConfiguration"), jni_str!("getLongPressTimeout"), jni_sig!("()I"), &[])?
+                .call_static_method(
+                    jni_str!("android/view/ViewConfiguration"),
+                    jni_str!("getLongPressTimeout"),
+                    jni_sig!("()I"),
+                    &[],
+                )?
                 .i()?;
             Ok(std::time::Duration::from_millis(u64::try_from(millis)?))
         })
@@ -1210,8 +1229,9 @@ fn exit_reason(env: &mut Env, name: &JNIStr) -> Result<i32, Error> {
 }
 
 fn trace_excerpt(env: &mut Env, info: &JObject) -> Result<String, Error> {
-    let stream =
-        env.call_method(info, jni_str!("getTraceInputStream"), jni_sig!("()Ljava/io/InputStream;"), &[])?.l()?;
+    let stream = env
+        .call_method(info, jni_str!("getTraceInputStream"), jni_sig!("()Ljava/io/InputStream;"), &[])?
+        .l()?;
     if stream.is_null() {
         return Ok(String::new());
     }

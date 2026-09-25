@@ -96,7 +96,8 @@ struct Style {
 
 impl Style {
     fn inherit(&self, node: roxmltree::Node) -> Self {
-        let own = |name: &str, parent: &Option<String>| node.attribute(name).map(str::to_owned).or_else(|| parent.clone());
+        let own =
+            |name: &str, parent: &Option<String>| node.attribute(name).map(str::to_owned).or_else(|| parent.clone());
         Self {
             fill: own("fill", &self.fill),
             stroke: own("stroke", &self.stroke),
@@ -182,7 +183,10 @@ fn view_box(text: &str) -> Result<Rect> {
 /// A circle as two half-circle arcs, which is how a path draws one.
 fn circle(node: roxmltree::Node) -> Result<String> {
     let get = |name: &str| -> Result<f64> {
-        node.attribute(name).with_context(|| format!("a <circle> without {name}"))?.parse().map_err(Into::into)
+        node.attribute(name)
+            .with_context(|| format!("a <circle> without {name}"))?
+            .parse()
+            .map_err(Into::into)
     };
     let (cx, cy, r) = (get("cx")?, get("cy")?, get("r")?);
     Ok(format!(

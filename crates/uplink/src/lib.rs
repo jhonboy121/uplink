@@ -40,14 +40,14 @@ use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::health::{Health, Weak};
 use uplink_core::logs;
-use uplink_core::reach::Reach as CoreReach;
-use uplink_core::settings::{self, Settings};
+use uplink_core::media::{MediaSession, MediaStats, Route};
+use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode, RelayView, Steer};
 use uplink_core::preset::{Network as PresetNetwork, Preset};
 use uplink_core::qr;
 use uplink_core::rate::{Change, Rate, Reading};
+use uplink_core::reach::Reach as CoreReach;
 use uplink_core::relays::{self, Choice, Ranking, Source};
-use uplink_core::media::{MediaSession, MediaStats, Route};
-use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode, RelayView, Steer};
+use uplink_core::settings::{self, Settings};
 use uplink_core::{EndpointId, RelayUrl};
 
 use crate::clock::LocalClock;
@@ -55,8 +55,8 @@ use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem,
-    QualitySheet, RelayItem, Say, Screen, Theme, Toast,
+    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem, QualitySheet,
+    RelayItem, Say, Screen, Theme, Toast,
 };
 use crate::video::{CallVideo, VideoParts};
 use crate::view::{maybe, none, one, toast};
@@ -953,7 +953,6 @@ fn show_language(ui: &App, language: Language) {
     }
 }
 
-
 /// Explains the battery exemption once, after the permissions the app cannot work without. Not a
 /// gate: refusing it costs reachability overnight, not the app. It is only marked as offered once
 /// the user chooses, so a launch killed with the page up shows it again.
@@ -998,12 +997,7 @@ fn request_gate(ui: &App, platform: &Rc<Platform>, settings: &Settings) {
 }
 
 /// Asks for the microphone permission (prompting if needed), then starts the voice streams.
-fn start_voice(
-    state: &Rc<RefCell<State>>,
-    platform: &Rc<Platform>,
-    sender: AudioSender,
-    receiver: AudioReceiver,
-) {
+fn start_voice(state: &Rc<RefCell<State>>, platform: &Rc<Platform>, sender: AudioSender, receiver: AudioReceiver) {
     let (state, platform) = (Rc::clone(state), Rc::clone(platform));
     let task = slint::spawn_local(async move {
         match platform.request_permission(Permission::RecordAudio).await {
@@ -1190,12 +1184,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let dispatch = core.dispatch();
     let _log = tracing::dispatcher::set_default(&dispatch);
     let _panic_hook = PanicHook::install(dispatch.clone());
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        filter = LOG_FILTER,
-        sdk = platform.sdk(),
-        "starting"
-    );
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), filter = LOG_FILTER, sdk = platform.sdk(), "starting");
     log_previous_exits(&platform);
     let avc = platform.avc()?;
     // Only once the endpoint is really up, so the notification never claims a readiness the app
@@ -1829,7 +1818,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 }
             })
             .and_then(|id| {
-                save_contact(&s, |contacts| contacts.add(name, id)).map(|()| id).map_err(|e| problem(AddError::Failed, &e))
+                save_contact(&s, |contacts| contacts.add(name, id))
+                    .map(|()| id)
+                    .map_err(|e| problem(AddError::Failed, &e))
             });
         match outcome {
             Ok(id) => {
@@ -2123,7 +2114,8 @@ fn place_call(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>, platform: &Pl
         // Optimistic: the node confirms with Dialing, or reverts via Ended.
         ui.set_call_state(CallState::Dialing);
         ui.set_call_voice(mode == Mode::Voice);
-        let name = with_contacts(state, |contacts| view::name_of(contacts, &peer)).unwrap_or_else(|| view::short(&peer));
+        let name =
+            with_contacts(state, |contacts| view::name_of(contacts, &peer)).unwrap_or_else(|| view::short(&peer));
         set_peer(&ui, &name);
         start_call_service(platform, &name, mode);
     }
@@ -2576,8 +2568,12 @@ async fn handle_node_events(
                 send_at(&state, preset);
                 let MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats } = *media;
                 with_state(&state, |s| s.media = Some(Arc::clone(&stats)));
-                let parts =
-                    VideoParts { sender: video, incoming: incoming_video, keyframe_requests, stats: Arc::clone(&stats) };
+                let parts = VideoParts {
+                    sender: video,
+                    incoming: incoming_video,
+                    keyframe_requests,
+                    stats: Arc::clone(&stats),
+                };
                 // The peer is already named on the window; the notification names them too.
                 start_call_service(&platform, &ui.get_peer_name(), mode);
                 match mode {
@@ -2645,4 +2641,3 @@ fn android_main(app: AndroidApp) {
         log::logcat(LOG_TAG, Level::ERROR, &format!("fatal: {e:#}"));
     }
 }
-

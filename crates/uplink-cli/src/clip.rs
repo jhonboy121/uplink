@@ -61,7 +61,6 @@ impl Clip {
         );
         Ok(Self { file, video, voice })
     }
-
 }
 
 /// Skips top-level atoms (notably `mdat`) until the `moov`.
@@ -109,7 +108,13 @@ fn video_track(trak: &Trak) -> Result<Option<VideoTrack>> {
 }
 
 fn aac_entry(trak: &Trak) -> Option<&mp4_atom::Mp4a> {
-    trak.mdia.minf.stbl.stsd.codecs.iter().find_map(|c| if let Codec::Mp4a(mp4a) = c { Some(mp4a) } else { None })
+    trak.mdia
+        .minf
+        .stbl
+        .stsd
+        .codecs
+        .iter()
+        .find_map(|c| if let Codec::Mp4a(mp4a) = c { Some(mp4a) } else { None })
 }
 
 /// Walks the sample tables: sizes (`stsz`), chunk layout (`stsc` + `stco`/`co64`), decode times
@@ -152,12 +157,16 @@ pub fn samples(stbl: &Stbl) -> Result<Vec<Sample>> {
         .flat_map(|e| std::iter::repeat_n(e.sample_offset, count(e.sample_count)));
     // `stss` lists 1-based sample numbers; without it every sample is a sync sample.
     let sync = |number: usize| {
-        stbl.stss.as_ref().is_none_or(|stss| u32::try_from(number).is_ok_and(|n| stss.entries.binary_search(&n).is_ok()))
+        stbl.stss
+            .as_ref()
+            .is_none_or(|stss| u32::try_from(number).is_ok_and(|n| stss.entries.binary_search(&n).is_ok()))
     };
 
     let mut decode_time = 0;
     let mut out = Vec::with_capacity(sizes.len());
-    for (index, ((&size, &offset), duration)) in sizes.iter().zip(&offsets).zip(durations.chain(std::iter::repeat(0))).enumerate() {
+    for (index, ((&size, &offset), duration)) in
+        sizes.iter().zip(&offsets).zip(durations.chain(std::iter::repeat(0))).enumerate()
+    {
         out.push(Sample {
             offset,
             size,
@@ -281,7 +290,9 @@ mod tests {
         let stbl = Stbl {
             stsz: Stsz { samples: StszSamples::Identical { count: 4, size: 8 } },
             stco: Some(Stco { entries: vec![0] }),
-            stsc: Stsc { entries: vec![StscEntry { first_chunk: 1, samples_per_chunk: 2, sample_description_index: 1 }] },
+            stsc: Stsc {
+                entries: vec![StscEntry { first_chunk: 1, samples_per_chunk: 2, sample_description_index: 1 }],
+            },
             ..Stbl::default()
         };
         assert!(samples(&stbl).is_err());

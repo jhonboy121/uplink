@@ -112,8 +112,12 @@ impl Contacts {
     }
 
     pub fn remove(&mut self, name: &str) -> Result<Contact, Error> {
-        let contact =
-            self.list.iter().find(|c| c.name == name).cloned().ok_or_else(|| Error::UnknownContact(name.to_owned()))?;
+        let contact = self
+            .list
+            .iter()
+            .find(|c| c.name == name)
+            .cloned()
+            .ok_or_else(|| Error::UnknownContact(name.to_owned()))?;
         self.remove_id(contact.id)
     }
 
@@ -190,9 +194,8 @@ impl Contacts {
 
     /// The most recent row count straight from the database, for tests and diagnostics.
     pub fn count(&self) -> Result<i64, Error> {
-        self.db.with(|db| {
-            Ok(db.query_row("SELECT COUNT(*) FROM contacts", [], |row| row.get(0)).optional()?.unwrap_or(0))
-        })
+        self.db
+            .with(|db| Ok(db.query_row("SELECT COUNT(*) FROM contacts", [], |row| row.get(0)).optional()?.unwrap_or(0)))
     }
 }
 

@@ -71,7 +71,9 @@ fn main() -> Result<()> {
         // The screen is the TUI's: logs go to a file in the data dir and the log pane.
         let (sink, pane) = tui::log::Sink::open(&dir)?;
         let dispatch = Dispatch::new(
-            tracing_subscriber::registry().with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(sink)).with(filter),
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(sink))
+                .with(filter),
         );
         let _log = tracing::dispatcher::set_default(&dispatch);
         let runtime = runtime::build(dispatch)?;
@@ -79,8 +81,11 @@ fn main() -> Result<()> {
         runtime.shutdown_background();
         return outcome;
     };
-    let dispatch =
-        Dispatch::new(tracing_subscriber::registry().with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr)).with(filter));
+    let dispatch = Dispatch::new(
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .with(filter),
+    );
     let _log = tracing::dispatcher::set_default(&dispatch);
     let runtime = runtime::build(dispatch)?;
     runtime.block_on(run(&dir, command))
@@ -154,7 +159,10 @@ fn describe(event: &Event, contacts: &Contacts) -> String {
                 })
                 .collect();
             let home = view.home.as_ref().map_or_else(|| "none".to_owned(), ToString::to_string);
-            format!("relays: home {home}; ranked {}", if ranked.is_empty() { "nothing yet".to_owned() } else { ranked.join(", ") })
+            format!(
+                "relays: home {home}; ranked {}",
+                if ranked.is_empty() { "nothing yet".to_owned() } else { ranked.join(", ") }
+            )
         }
     }
 }

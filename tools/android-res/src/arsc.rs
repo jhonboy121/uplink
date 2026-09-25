@@ -190,7 +190,8 @@ fn type_spec(index: usize, kind: &Type) -> Result<Vec<u8>> {
     w.u16(0); // res1
     w.u32(count);
     for entry in 0..kind.entries.len() {
-        let translated = kind.localized.iter().any(|localized| localized.entries.get(entry).is_some_and(Option::is_some));
+        let translated =
+            kind.localized.iter().any(|localized| localized.entries.get(entry).is_some_and(Option::is_some));
         w.u32(if translated { CONFIG_LOCALE } else { 0 });
     }
     Ok(w.0)

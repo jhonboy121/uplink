@@ -104,19 +104,20 @@ impl Codec {
         let (tx, events) = mpsc::unbounded_channel();
         // A send fails only once the driving task is gone; the codec is being torn down then.
         let (input, output, format, error) = (tx.clone(), tx.clone(), tx.clone(), tx);
-        codec.set_async_notify_callback(Some(AsyncNotifyCallback {
-            on_input_available: Some(Box::new(move |index| drop(input.send(Event::InputAvailable(index))))),
-            on_output_available: Some(Box::new(move |index, info| {
-                drop(output.send(Event::OutputAvailable(index, *info)));
-            })),
-            on_format_changed: Some(Box::new(move |f| drop(format.send(Event::FormatChanged(f.to_string()))))),
-            on_error: Some(Box::new(move |e, action, detail| {
-                let fatal = !action.is_recoverable() && !action.is_transient();
-                let detail = format!("{e}: {}", detail.to_string_lossy());
-                drop(error.send(Event::Error { detail, fatal }));
-            })),
-        }))
-        .at("AMediaCodec_setAsyncNotifyCallback")?;
+        codec
+            .set_async_notify_callback(Some(AsyncNotifyCallback {
+                on_input_available: Some(Box::new(move |index| drop(input.send(Event::InputAvailable(index))))),
+                on_output_available: Some(Box::new(move |index, info| {
+                    drop(output.send(Event::OutputAvailable(index, *info)));
+                })),
+                on_format_changed: Some(Box::new(move |f| drop(format.send(Event::FormatChanged(f.to_string()))))),
+                on_error: Some(Box::new(move |e, action, detail| {
+                    let fatal = !action.is_recoverable() && !action.is_transient();
+                    let detail = format!("{e}: {}", detail.to_string_lossy());
+                    drop(error.send(Event::Error { detail, fatal }));
+                })),
+            }))
+            .at("AMediaCodec_setAsyncNotifyCallback")?;
         Ok((Self(codec), events))
     }
 
@@ -192,7 +193,10 @@ impl Encoder {
         } else {
             Some(data.to_vec())
         };
-        self.codec.0.release_output_buffer_by_index(index, false).at("AMediaCodec_releaseOutputBuffer (encoder)")?;
+        self.codec
+            .0
+            .release_output_buffer_by_index(index, false)
+            .at("AMediaCodec_releaseOutputBuffer (encoder)")?;
         Ok(packet.map(|data| Packet { data, presentation_micros: info.presentation_time_us(), keyframe }))
     }
 }
@@ -273,6 +277,9 @@ impl Decoder {
     /// Releases the output reported by [`Event::OutputAvailable`], drawing it to the surface only
     /// if it is one.
     pub fn release(&self, index: usize, show: bool) -> Result<(), Error> {
-        self.codec.0.release_output_buffer_by_index(index, show).at("AMediaCodec_releaseOutputBuffer (decoder)")
+        self.codec
+            .0
+            .release_output_buffer_by_index(index, show)
+            .at("AMediaCodec_releaseOutputBuffer (decoder)")
     }
 }

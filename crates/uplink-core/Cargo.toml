@@ -24,7 +24,13 @@ rusqlite.workspace = true
 rustls.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = [
+  "fs",
+  "macros",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
 tracing.workspace = true
 
 [dev-dependencies]

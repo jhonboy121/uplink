@@ -23,7 +23,11 @@ impl Sink {
     pub fn open(dir: &Path) -> Result<(Self, mpsc::UnboundedReceiver<String>)> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(FILE);
-        let file = OpenOptions::new().create(true).append(true).open(&path).with_context(|| format!("opening {}", path.display()))?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
         let (lines, pane) = mpsc::unbounded_channel();
         Ok((Self { file: Arc::new(Mutex::new(file)), lines }, pane))
     }

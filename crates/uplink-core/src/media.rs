@@ -19,8 +19,8 @@ use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::time::Instant;
 
 use crate::audio::{self, AudioReceiver, AudioSender};
-use crate::quality::{AudioCounts, Quality, VideoCounts};
 use crate::protocol::{FrameHeader, StreamHeader, StreamKind};
+use crate::quality::{AudioCounts, Quality, VideoCounts};
 use crate::{Error, protocol, telemetry};
 
 /// Longest a frame may take to arrive before it is useless for live playback.
@@ -509,7 +509,11 @@ impl Sequencer {
     /// Called when [`Self::next_deadline`] passes: a frame waited for too long is lost.
     fn expire(&mut self, now: Instant) -> Vec<Output> {
         let mut out = Vec::new();
-        let gap = self.pending.values().next().is_some_and(|(arrived, _)| now.duration_since(*arrived) >= REORDER_WAIT);
+        let gap = self
+            .pending
+            .values()
+            .next()
+            .is_some_and(|(arrived, _)| now.duration_since(*arrived) >= REORDER_WAIT);
         if gap {
             let dropped = u64::try_from(self.pending.len()).unwrap_or(u64::MAX);
             self.pending.clear();

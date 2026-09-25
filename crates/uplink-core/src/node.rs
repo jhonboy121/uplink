@@ -13,25 +13,25 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
-use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, presets};
 use iroh::address_lookup::MemoryLookup;
+use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::media::{self, MediaLinks, MediaSession, MediaStats};
+use crate::pilot::Pilot;
+pub use crate::pilot::{RelayView, Steer};
 /// Part of [`EndReason::Incompatible`], so it is ours to hand out; the rest of the wire stays in.
 pub use crate::protocol::Behind;
 /// What each side says about its mic and camera; the app sends ours and is told theirs.
 pub use crate::protocol::MediaState;
 use crate::protocol::{
-    self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_INCOMPATIBLE, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL,
-    CLOSE_REJECTED, CLOSE_REJOINED, Hello, Setup, Signal,
+    self, ALPN, CLOSE_BUSY, CLOSE_HANGUP, CLOSE_INCOMPATIBLE, CLOSE_NOT_POST_QUANTUM, CLOSE_PROTOCOL, CLOSE_REJECTED,
+    CLOSE_REJOINED, Hello, Setup, Signal,
 };
-use crate::media::{self, MediaLinks, MediaSession, MediaStats};
-pub use crate::pilot::{RelayView, Steer};
-use crate::pilot::Pilot;
 use crate::reach::{Reach, Reachability};
 use crate::settings::Settings;
 use crate::{EndpointId, Error, crypto};
@@ -93,18 +93,33 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum Event {
-    Ready { id: EndpointId },
+    Ready {
+        id: EndpointId,
+    },
     /// Whether others can reach us, for the chip: see [`crate::reach`].
     Reach(Reach),
     /// The platform's network changed, as [`Command::Network`] said. A stalled call right after
     /// this is our side's doing, which the chip's patience would hide.
     Network(bool),
-    Dialing { peer: EndpointId, mode: Mode },
+    Dialing {
+        peer: EndpointId,
+        mode: Mode,
+    },
     /// Our offer reached the peer; waiting for them to answer.
-    Ringing { peer: EndpointId },
-    Incoming { peer: EndpointId, mode: Mode },
+    Ringing {
+        peer: EndpointId,
+    },
+    Incoming {
+        peer: EndpointId,
+        mode: Mode,
+    },
     /// Always post-quantum: other key exchanges are refused.
-    Connected { peer: EndpointId, key_exchange: NamedGroup, mode: Mode, media: Box<MediaSession> },
+    Connected {
+        peer: EndpointId,
+        key_exchange: NamedGroup,
+        mode: Mode,
+        media: Box<MediaSession>,
+    },
     /// Their mic or camera changed.
     PeerMedia(MediaState),
     /// They ask to switch to video, or (false) took the ask back.
@@ -117,7 +132,10 @@ pub enum Event {
     Reconnecting,
     /// Back, over a new connection; the media carries on by itself.
     Reconnected,
-    Ended { peer: Option<EndpointId>, reason: EndReason },
+    Ended {
+        peer: Option<EndpointId>,
+        reason: EndReason,
+    },
     /// The relays: the last survey, what iroh is using, and which one we are reachable through.
     Relays(RelayView),
 }
@@ -137,7 +155,10 @@ pub enum EndReason {
     NoAnswer,
     /// One side needs something the other cannot do, so the two cannot call until one updates.
     /// `theirs` is the other side's app version, for the notice that says so.
-    Incompatible { behind: Behind, theirs: String },
+    Incompatible {
+        behind: Behind,
+        theirs: String,
+    },
     /// Connected, then the network went and did not come back in time.
     ConnectionLost,
     /// The platform would not have the call, as [`Command::Refused`] said.
@@ -179,11 +200,7 @@ pub struct Node {
 impl Node {
     /// `app` is this build's version as people see it; it goes to the other side of every call, so
     /// that whichever phone is too old can say what it is next to what it should be.
-    pub async fn start(
-        secret: SecretKey,
-        network: Network,
-        app: &str,
-    ) -> Result<(Self, mpsc::Receiver<Event>), Error> {
+    pub async fn start(secret: SecretKey, network: Network, app: &str) -> Result<(Self, mpsc::Receiver<Event>), Error> {
         let endpoint = bind(secret, &network).await?;
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
         let (commands, commands_rx) = mpsc::channel(COMMAND_QUEUE);
@@ -592,7 +609,12 @@ fn spawn_reader(mut recv: iroh::endpoint::RecvStream) -> mpsc::Receiver<Result<S
 }
 
 /// Sends a final signal and gives the peer time to close before closing ourselves.
-async fn finish(connection: &Connection, send: &mut SendStream, signal: Signal, code: iroh::endpoint::VarInt) -> Result<(), Error> {
+async fn finish(
+    connection: &Connection,
+    send: &mut SendStream,
+    signal: Signal,
+    code: iroh::endpoint::VarInt,
+) -> Result<(), Error> {
     protocol::send(send, signal).await?;
     if tokio::time::timeout(CLOSE_GRACE, connection.closed()).await.is_err() {
         connection.close(code, b"");
@@ -1221,12 +1243,12 @@ mod tests {
         let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone()), "test").await?;
         let Some(Event::Ready { id }) = events.recv().await else { bail!("node not ready") };
 
-        let classical = Arc::new(CryptoProvider {
-            kx_groups: vec![aws_lc_rs::kx_group::X25519],
-            ..aws_lc_rs::default_provider()
-        });
-        let client = Endpoint::builder(presets::Minimal).crypto_provider(classical).address_lookup(lookup).bind().await?;
-        let connection = tokio::time::timeout(TIMEOUT, client.connect(id, ALPN)).await.context("connect timed out")??;
+        let classical =
+            Arc::new(CryptoProvider { kx_groups: vec![aws_lc_rs::kx_group::X25519], ..aws_lc_rs::default_provider() });
+        let client =
+            Endpoint::builder(presets::Minimal).crypto_provider(classical).address_lookup(lookup).bind().await?;
+        let connection =
+            tokio::time::timeout(TIMEOUT, client.connect(id, ALPN)).await.context("connect timed out")??;
         let closed = tokio::time::timeout(TIMEOUT, connection.closed()).await.context("not closed")?;
         assert!(
             matches!(&closed, ConnectionError::ApplicationClosed(close) if close.error_code == CLOSE_NOT_POST_QUANTUM),
@@ -1243,8 +1265,11 @@ mod tests {
     async fn by_hand(lookup: MemoryLookup) -> anyhow::Result<(Node, mpsc::Receiver<Event>, EndpointId, Endpoint)> {
         let (node, mut events) = Node::start(SecretKey::generate(), Network::Local(lookup.clone()), "test").await?;
         let Some(Event::Ready { id }) = events.recv().await else { bail!("node not ready") };
-        let client =
-            Endpoint::builder(presets::Minimal).crypto_provider(crypto::provider()).address_lookup(lookup).bind().await?;
+        let client = Endpoint::builder(presets::Minimal)
+            .crypto_provider(crypto::provider())
+            .address_lookup(lookup)
+            .bind()
+            .await?;
         Ok((node, events, id, client))
     }
 
@@ -1252,8 +1277,13 @@ mod tests {
         tokio::time::timeout(TIMEOUT, events.recv()).await.context("no event")?.context("events closed")
     }
 
-    async fn offer(client: &Endpoint, id: EndpointId, setup: Setup) -> anyhow::Result<(Connection, SendStream, iroh::endpoint::RecvStream)> {
-        let connection = tokio::time::timeout(TIMEOUT, client.connect(id, ALPN)).await.context("connect timed out")??;
+    async fn offer(
+        client: &Endpoint,
+        id: EndpointId,
+        setup: Setup,
+    ) -> anyhow::Result<(Connection, SendStream, iroh::endpoint::RecvStream)> {
+        let connection =
+            tokio::time::timeout(TIMEOUT, client.connect(id, ALPN)).await.context("connect timed out")??;
         let (mut send, recv) = connection.open_bi().await?;
         protocol::send(&mut send, Signal::Offer(Hello::ours("by hand").offer(setup))).await?;
         Ok((connection, send, recv))

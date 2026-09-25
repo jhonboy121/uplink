@@ -110,9 +110,8 @@ impl Decoder {
         let (data, len) = packet.map_or((std::ptr::null(), 0), |p| (p.as_ptr(), i32::try_from(p.len()).unwrap_or(0)));
         let frame = c_int::try_from(pcm.len()).map_err(|_| Error::Opus("frame too long".into()))?;
         // SAFETY: `data` holds `len` bytes (or is null for concealment); `pcm` holds `frame` samples.
-        let decoded = check(unsafe {
-            ffi::opus_decode(self.0.as_ptr(), data, len, pcm.as_mut_ptr(), frame, c_int::from(fec))
-        })?;
+        let decoded =
+            check(unsafe { ffi::opus_decode(self.0.as_ptr(), data, len, pcm.as_mut_ptr(), frame, c_int::from(fec)) })?;
         // A short decode (never expected for 20 ms packets) leaves stale samples otherwise.
         if let Some(rest) = pcm.get_mut(usize::try_from(decoded).unwrap_or_default()..) {
             rest.fill(0);
@@ -218,7 +217,8 @@ pub(crate) fn start(link: &Link, stats: &Arc<MediaStats>) -> Result<(AudioSender
         stats: Arc::clone(stats),
     };
     let (tx, incoming) = mpsc::channel(INCOMING_PACKET_QUEUE);
-    let receiver = AudioReceiver { incoming, buffer: JitterBuffer::default(), decoder: Decoder::new()?, stats: Arc::clone(stats) };
+    let receiver =
+        AudioReceiver { incoming, buffer: JitterBuffer::default(), decoder: Decoder::new()?, stats: Arc::clone(stats) };
     tokio::spawn(receive(link.clone(), tx, Arc::clone(stats)));
     Ok((sender, receiver))
 }

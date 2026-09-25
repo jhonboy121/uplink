@@ -17,8 +17,8 @@ use uplink_core::audio::{AudioReceiver, AudioSender, FRAME_DURATION, FRAME_SAMPL
 use uplink_core::media::{Frame, MediaSession, VideoSender};
 use uplink_core::preset::Preset;
 
-use crate::clip::{Clip, VideoTrack};
 use crate::clip::annex_b;
+use crate::clip::{Clip, VideoTrack};
 use crate::record::{FRAGMENT_INTERVAL, Recorder};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
@@ -108,9 +108,15 @@ impl ClipSource {
     /// Time between the clip's pictures.
     fn interval(&self) -> Duration {
         let samples = &self.track.samples;
-        let span = samples.last().map_or(0, |s| s.decode_time).saturating_sub(samples.first().map_or(0, |s| s.decode_time));
+        let span = samples
+            .last()
+            .map_or(0, |s| s.decode_time)
+            .saturating_sub(samples.first().map_or(0, |s| s.decode_time));
         let frames = u32::try_from(samples.len().saturating_sub(1)).unwrap_or(u32::MAX).max(1);
-        let micros = span.saturating_mul(MICROS_PER_SECOND).checked_div(u64::from(self.track.timescale)).unwrap_or_default();
+        let micros = span
+            .saturating_mul(MICROS_PER_SECOND)
+            .checked_div(u64::from(self.track.timescale))
+            .unwrap_or_default();
         Duration::from_micros(micros) / frames
     }
 
@@ -241,7 +247,12 @@ pub fn start(media: MediaSession, clip: Option<Clip>, recorder: Option<Recorder>
 
 /// Decodes the clip in real time on its own thread, each pass starting on the loop's clock, and
 /// hands on the newest picture. The picture keeps its place in the clip whatever the encoder does.
-fn decode_clip(mut clip: ClipSource, epoch: Instant, stop: &AtomicBool, pictures: &watch::Sender<Option<Arc<I420>>>) -> Result<()> {
+fn decode_clip(
+    mut clip: ClipSource,
+    epoch: Instant,
+    stop: &AtomicBool,
+    pictures: &watch::Sender<Option<Arc<I420>>>,
+) -> Result<()> {
     let (interval, length) = (clip.interval(), clip.length());
     let (mut pass, mut index) = (epoch, 0u32);
     while !stop.load(Ordering::Relaxed) {
@@ -337,7 +348,13 @@ fn send_video(
             window.keyframes += u32::from(encoded.keyframe);
             window.qp = encoded.qp;
             bytes = bytes.saturating_add(u32::try_from(encoded.data.len()).unwrap_or(u32::MAX));
-            sender.send(Frame { capture_micros, keyframe: encoded.keyframe, config: false, turns: camera.turns, data: encoded.data });
+            sender.send(Frame {
+                capture_micros,
+                keyframe: encoded.keyframe,
+                config: false,
+                turns: camera.turns,
+                data: encoded.data,
+            });
         }
         if since.elapsed() >= REPORT_INTERVAL {
             let target = now_plan.step.video();
@@ -365,7 +382,13 @@ fn send_video(
 /// The clip's audio as 20 ms Opus frames, each taken from where the loop's clock says the clip
 /// is, so it stays with the picture; silence without one, or past the end of its audio. Muted or
 /// held, the frames are skipped, as the app drains its microphone without sending.
-async fn send_voice(voice: Vec<i16>, length: Option<Duration>, epoch: Instant, mut audio: AudioSender, plan: watch::Receiver<Plan>) {
+async fn send_voice(
+    voice: Vec<i16>,
+    length: Option<Duration>,
+    epoch: Instant,
+    mut audio: AudioSender,
+    plan: watch::Receiver<Plan>,
+) {
     let silence: Pcm = [0; FRAME_SAMPLES];
     let (frames, _) = voice.as_chunks::<FRAME_SAMPLES>();
     let epoch = tokio::time::Instant::from_std(epoch);
@@ -401,7 +424,9 @@ async fn send_voice(voice: Vec<i16>, length: Option<Duration>, epoch: Instant, m
 
 /// The picture size in the SPS at the head of a keyframe.
 fn sps_size(data: &[u8]) -> Option<(u32, u32)> {
-    h264::nal_units(data).find(|nal| h264::nal::nal_type(nal) == Some(h264::nal::SPS)).and_then(h264::sps_dimensions)
+    h264::nal_units(data)
+        .find(|nal| h264::nal::nal_type(nal) == Some(h264::nal::SPS))
+        .and_then(h264::sps_dimensions)
 }
 
 /// Takes the peer's video, plays out their audio on a 20 ms clock (there is no speaker; playout

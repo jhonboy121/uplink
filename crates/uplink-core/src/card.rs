@@ -157,11 +157,7 @@ fn shape(face: &[u8], text: &str) -> Result<(Vec<Placed>, f32), Error> {
     let mut glyphs = Vec::with_capacity(shaped.glyph_infos().len());
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
         let id = u16::try_from(info.glyph_id).map_err(|_| Error::Card("glyph id out of range".into()))?;
-        glyphs.push(Placed {
-            id: GlyphId(id),
-            x: (caret + position.x_offset) as f32,
-            y: position.y_offset as f32,
-        });
+        glyphs.push(Placed { id: GlyphId(id), x: (caret + position.x_offset) as f32, y: position.y_offset as f32 });
         caret += position.x_advance;
     }
     Ok((glyphs, caret as f32))
@@ -249,8 +245,7 @@ impl Canvas {
     }
 
     fn index(&self, x: u32, y: u32) -> Option<usize> {
-        (x < self.width && y < self.height)
-            .then(|| (y as usize * self.width as usize + x as usize) * Self::CHANNELS)
+        (x < self.width && y < self.height).then(|| (y as usize * self.width as usize + x as usize) * Self::CHANNELS)
     }
 
     fn png(&self) -> Result<Vec<u8>, Error> {

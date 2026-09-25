@@ -279,7 +279,12 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
     // The first choice is made before anything here is listening, and the events only say what
     // changes after it, so the path the call started on is said once, here.
     if let Some(p) = &path {
-        tracing::info!(family = p.family.name(), remote = p.remote, rtt_ms = p.rtt.as_millis(), "path selected at start");
+        tracing::info!(
+            family = p.family.name(),
+            remote = p.remote,
+            rtt_ms = p.rtt.as_millis(),
+            "path selected at start"
+        );
     }
     log_candidates(&endpoint, &connection, "connected", &media).await;
     loop {

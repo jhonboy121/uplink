@@ -20,9 +20,13 @@ const TRAFFIC_HEIGHT: u16 = 6;
 const SECONDS_PER_MINUTE: u64 = 60;
 
 pub fn draw(frame: &mut Frame, tui: &Tui) {
-    let [header, body, log, footer] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(CALL_HEIGHT), Constraint::Percentage(35), Constraint::Length(1)])
-            .areas(frame.area());
+    let [header, body, log, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(CALL_HEIGHT),
+        Constraint::Percentage(35),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
     let [contacts, right] = Layout::horizontal([Constraint::Length(CONTACTS_WIDTH), Constraint::Min(0)]).areas(body);
     let [call, quality, traffic] = Layout::vertical([
         Constraint::Length(CALL_HEIGHT),
@@ -35,7 +39,9 @@ pub fn draw(frame: &mut Frame, tui: &Tui) {
     frame.render_widget(Paragraph::new(call_lines(tui)).block(Block::bordered().title(" call ")), call);
     frame.render_widget(Paragraph::new(quality_lines(tui)).block(Block::bordered().title(" quality ")), quality);
     frame.render_widget(
-        Paragraph::new(traffic_lines(tui)).wrap(Wrap { trim: false }).block(Block::bordered().title(" traffic ")),
+        Paragraph::new(traffic_lines(tui))
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(" traffic ")),
         traffic,
     );
     draw_log(frame, tui, log);
@@ -52,7 +58,11 @@ fn header_line(tui: &Tui) -> Line<'static> {
 }
 
 fn draw_contacts(frame: &mut Frame, tui: &Tui, area: Rect) {
-    let items: Vec<ListItem> = tui.peers().into_iter().map(|(name, id)| ListItem::new(format!("{name}  {}", id.fmt_short()))).collect();
+    let items: Vec<ListItem> = tui
+        .peers()
+        .into_iter()
+        .map(|(name, id)| ListItem::new(format!("{name}  {}", id.fmt_short())))
+        .collect();
     let empty = items.is_empty();
     let list = List::new(items)
         .block(Block::bordered().title(" contacts "))
@@ -63,7 +73,11 @@ fn draw_contacts(frame: &mut Frame, tui: &Tui, area: Rect) {
 }
 
 fn on_off(on: bool) -> Span<'static> {
-    if on { Span::styled("on", Style::new().fg(Color::Green)) } else { Span::styled("off", Style::new().fg(Color::Red)) }
+    if on {
+        Span::styled("on", Style::new().fg(Color::Green))
+    } else {
+        Span::styled("off", Style::new().fg(Color::Red))
+    }
 }
 
 fn call_lines(tui: &Tui) -> Vec<Line<'static>> {
@@ -105,7 +119,8 @@ fn call_lines(tui: &Tui) -> Vec<Line<'static>> {
         ]),
     ];
     if call.asked_us {
-        lines.push(Line::styled("they ask to switch to video — y switch, n keep voice", Style::new().fg(Color::Yellow)));
+        lines
+            .push(Line::styled("they ask to switch to video — y switch, n keep voice", Style::new().fg(Color::Yellow)));
     } else if call.we_asked {
         lines.push(Line::styled("asked them to switch to video (u takes it back)", Style::new().fg(Color::Yellow)));
     }
@@ -128,7 +143,8 @@ fn quality_lines(tui: &Tui) -> Vec<Line<'static>> {
         Metered::Mobile => "mobile data",
     };
     let cap = tui.cap();
-    let mut lines = vec![Line::raw(format!("on {network} · cap {} · voice {} kbps", step(cap), cap.voice_bps() / 1000))];
+    let mut lines =
+        vec![Line::raw(format!("on {network} · cap {} · voice {} kbps", step(cap), cap.voice_bps() / 1000))];
     if let Some(rate) = tui.call.as_ref().and_then(|call| call.rate.as_ref()) {
         lines.push(Line::raw(format!("rate control: step {} · target {} kbps", step(rate.step()), rate.kbps())));
     }
@@ -185,7 +201,12 @@ fn traffic_lines(tui: &Tui) -> Vec<Line<'static>> {
 
 fn draw_log(frame: &mut Frame, tui: &Tui, area: Rect) {
     let rows = usize::from(area.height.saturating_sub(2));
-    let lines: Vec<Line> = tui.log.iter().skip(tui.log.len().saturating_sub(rows)).map(|line| Line::raw(line.clone())).collect();
+    let lines: Vec<Line> = tui
+        .log
+        .iter()
+        .skip(tui.log.len().saturating_sub(rows))
+        .map(|line| Line::raw(line.clone()))
+        .collect();
     frame.render_widget(Paragraph::new(lines).block(Block::bordered().title(" log ")), area);
 }
 

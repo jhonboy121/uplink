@@ -269,7 +269,9 @@ fn translations(res: &Path, defaults: &Texts) -> Result<Vec<([u8; 2], Texts)>> {
         for node in roxmltree::Document::parse(&text)?.root_element().children().filter(roxmltree::Node::is_element) {
             texts.add(node)?;
         }
-        for (kind, mine, theirs) in [("string", &texts.strings, &defaults.strings), ("plurals", &texts.plurals, &defaults.plurals)] {
+        for (kind, mine, theirs) in
+            [("string", &texts.strings, &defaults.strings), ("plurals", &texts.plurals, &defaults.plurals)]
+        {
             if let Some((stray, _)) = mine.iter().find(|(name, _)| !theirs.iter().any(|(other, _)| other == name)) {
                 bail!("{name}: {kind} {stray} has no default in {VALUES}");
             }
@@ -332,8 +334,8 @@ fn run(args: &CompileArgs) -> Result<()> {
     }
 
     let manifest_path = args.source.join("AndroidManifest.xml");
-    let manifest = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let manifest =
+        std::fs::read_to_string(&manifest_path).with_context(|| format!("reading {}", manifest_path.display()))?;
     std::fs::create_dir_all(&args.out)?;
     std::fs::write(
         args.out.join("AndroidManifest.xml"),
@@ -354,8 +356,10 @@ fn gen_table(args: &GenTableArgs) -> Result<()> {
     let mut class = String::new();
     let mut attrs: Vec<(String, u32)> = Vec::new();
     let mut styles: Vec<(String, u32)> = Vec::new();
-    let mut named: Vec<Named> =
-        VALUE_SOURCES.iter().map(|(attr, flags, ..)| Named { attr, flags: *flags, rows: Vec::new() }).collect();
+    let mut named: Vec<Named> = VALUE_SOURCES
+        .iter()
+        .map(|(attr, flags, ..)| Named { attr, flags: *flags, rows: Vec::new() })
+        .collect();
     for line in input.lines() {
         let line = line.trim();
         // `public [final] class android.R$attr {`, `public class android.content.pm.ServiceInfo …`
@@ -423,7 +427,9 @@ fn gen_table(args: &GenTableArgs) -> Result<()> {
          pub const VALUE_NAMES: &[NamedValues] = &[\n",
     );
     for Named { attr, flags, rows } in &named {
-        out.push_str(&format!("    NamedValues {{\n        attr: \"{attr}\",\n        flags: {flags},\n        words: &[\n"));
+        out.push_str(&format!(
+            "    NamedValues {{\n        attr: \"{attr}\",\n        flags: {flags},\n        words: &[\n"
+        ));
         for (name, value) in rows {
             out.push_str(&format!("            (\"{name}\", {value:#x}),\n"));
         }

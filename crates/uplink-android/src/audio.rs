@@ -55,7 +55,10 @@ impl Streams {
     /// callback, so its state has to be polled as well.
     pub fn disconnected(&self) -> bool {
         [&self.capture, &self.playback].into_iter().any(|stream| {
-            matches!(stream.state(), AudioStreamState::Disconnected | AudioStreamState::Closing | AudioStreamState::Closed)
+            matches!(
+                stream.state(),
+                AudioStreamState::Disconnected | AudioStreamState::Closing | AudioStreamState::Closed
+            )
         })
     }
 }
@@ -66,9 +69,14 @@ pub struct Rings {
     pub speaker: Producer<i16>,
 }
 
-fn builder(direction: AudioDirection, health: &Arc<AudioHealth>, what: &'static str) -> Result<AudioStreamBuilder, Error> {
+fn builder(
+    direction: AudioDirection,
+    health: &Arc<AudioHealth>,
+    what: &'static str,
+) -> Result<AudioStreamBuilder, Error> {
     let health = Arc::clone(health);
-    Ok(AudioStreamBuilder::new().at("AAudio_createStreamBuilder")?
+    Ok(AudioStreamBuilder::new()
+        .at("AAudio_createStreamBuilder")?
         .direction(direction)
         .format(AudioFormat::PCM_I16)
         .channel_count(CHANNELS)
@@ -103,7 +111,9 @@ pub fn open(health: &Arc<AudioHealth>) -> Result<(Streams, Rings), Error> {
         .data_callback(Box::new(move |_, data, frames| {
             // SAFETY: AAudio passes `frames` mono i16 samples for this stream's format.
             let samples = unsafe { samples(data, frames) };
-            captured.captured_samples.fetch_add(u64::try_from(samples.len()).unwrap_or_default(), Ordering::Relaxed);
+            captured
+                .captured_samples
+                .fetch_add(u64::try_from(samples.len()).unwrap_or_default(), Ordering::Relaxed);
             let lost = samples.iter().filter(|&&sample| into_ring.push(sample).is_err()).count();
             if lost > 0 {
                 captured.captured.fetch_add(u64::try_from(lost).unwrap_or_default(), Ordering::Relaxed);

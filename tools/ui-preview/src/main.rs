@@ -18,9 +18,9 @@ mod dump;
 mod ui;
 
 use ui::{
-    Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending, Grant, Group,
-    Language, Output, OutputItem, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Screen, Stall,
-    Theme, Unit, Weak,
+    Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending,
+    Grant, Group, Language, Output, OutputItem, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route,
+    Screen, Stall, Theme, Unit, Weak,
 };
 
 /// Logical pixels.
@@ -544,7 +544,11 @@ fn fingerprint_lines(key: &str) -> slint::ModelRc<slint::SharedString> {
         .collect::<Vec<_>>()
         .chunks(GROUP * ROW_GROUPS)
         .map(|line| {
-            line.chunks(GROUP).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join(" ").into()
+            line.chunks(GROUP)
+                .map(|group| group.iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into()
         })
         .collect();
     slint::ModelRc::new(slint::VecModel::from(lines))

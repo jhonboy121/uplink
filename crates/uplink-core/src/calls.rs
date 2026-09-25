@@ -166,13 +166,8 @@ const COLUMNS: &str = "id, peer, incoming, outcome, at, seconds, sent, received,
 
 /// Columns added after the table first shipped, with their types. `CREATE TABLE IF NOT EXISTS`
 /// leaves an existing table as it was, so these are added to it on open when missing.
-const ADDED: [(&str, &str); 5] = [
-    ("sent", "INTEGER"),
-    ("received", "INTEGER"),
-    ("quality", "BLOB"),
-    ("voice", "INTEGER"),
-    ("video_at", "INTEGER"),
-];
+const ADDED: [(&str, &str); 5] =
+    [("sent", "INTEGER"), ("received", "INTEGER"), ("quality", "BLOB"), ("voice", "INTEGER"), ("video_at", "INTEGER")];
 
 /// A row as [`COLUMNS`] reads it, or `None` for one whose key no longer parses.
 fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
