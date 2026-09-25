@@ -81,6 +81,9 @@ pub enum Command {
     AnswerVideo(bool),
     /// For the relay pilot; ignored on a local network, which has none.
     Relays(Steer),
+    /// The platform saw the network change. iroh cannot on Android, and until told it keeps the
+    /// old network's DNS servers.
+    NetworkChanged,
 }
 
 #[derive(Debug)]
@@ -465,6 +468,7 @@ impl Engine {
                 }
                 None => tracing::debug!(?steer, "no relays on a local network"),
             },
+            (Command::NetworkChanged, _) => self.endpoint.network_change().await,
             (Command::Call(peer, mode), None) => {
                 let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
                 let task =

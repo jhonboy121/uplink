@@ -477,7 +477,7 @@ extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void)
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 4] {
+fn natives() -> [NativeMethod<'static>; 5] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkApplication's natives.
     unsafe {
         [
@@ -500,6 +500,11 @@ fn natives() -> [NativeMethod<'static>; 4] {
                 jni_str!("nativeRingAction"),
                 jni_str!("(JI)V"),
                 native_ring_action as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeNetworkChanged"),
+                jni_str!("(J)V"),
+                native_network_changed as *mut c_void,
             ),
         ]
     }
@@ -589,5 +594,14 @@ extern "system" fn native_ring_action<'local>(
     match core.calls().try_send(Command::Answer(false)) {
         Ok(()) => tracing::info!("declined from the notification"),
         Err(e) => tracing::error!("declining from the notification: {e}"),
+    }
+}
+
+/// Android's default network changed. Java says what to; iroh only needs telling.
+extern "system" fn native_network_changed<'local>(_env: EnvUnowned<'local>, _class: JClass<'local>, handle: jlong) {
+    let Some(core) = Core::from_java(handle) else { return };
+    let _log = tracing::dispatcher::set_default(&core.dispatch());
+    if let Err(e) = core.calls().try_send(Command::NetworkChanged) {
+        tracing::error!("telling the endpoint the network changed: {e}");
     }
 }

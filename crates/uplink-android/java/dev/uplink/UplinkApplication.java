@@ -27,6 +27,10 @@ import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.media.ToneGenerator;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -149,6 +153,8 @@ public class UplinkApplication extends Application {
 
     private static native void nativeRingAction(long core, int action);
 
+    private static native void nativeNetworkChanged(long core);
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -170,6 +176,7 @@ public class UplinkApplication extends Application {
         } else {
             registerReceiver(ringActions, filter);
         }
+        getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(network, main);
     }
 
     /** The manifest names the library once, for NativeActivity; read it rather than repeat it. */
@@ -651,6 +658,65 @@ public class UplinkApplication extends Application {
             }
         }
     };
+
+    /**
+     * iroh cannot watch the network on Android (netwatch's route monitor there is empty), so it is
+     * told from here, for the whole process, window or not. Without this, a switch from wifi to
+     * mobile data left DNS pointed at the wifi router, and a relay that dropped never came back.
+     */
+    private final ConnectivityManager.NetworkCallback network = new ConnectivityManager.NetworkCallback() {
+        /** The default network's interface and DNS servers as last told, so repeats are skipped. */
+        private String last = "";
+
+        @Override
+        public void onAvailable(Network network) {
+            log(Log.INFO, "network: " + transport(network));
+        }
+
+        /**
+         * Only logged. Told now, iroh re-reads DNS while there is no default network, keeps just the
+         * public fallbacks, and then counts the next network appearing as a minor change that does
+         * not re-read it again. The next network's link properties are the moment to tell it.
+         */
+        @Override
+        public void onLost(Network network) {
+            last = "";
+            log(Log.INFO, "network: lost");
+        }
+
+        @Override
+        public void onLinkPropertiesChanged(Network network, LinkProperties link) {
+            String now = link.getInterfaceName() + ", dns " + link.getDnsServers();
+            if (now.equals(last)) {
+                return;
+            }
+            last = now;
+            log(Log.INFO, "network: " + now);
+            networkChanged();
+        }
+    };
+
+    private String transport(Network network) {
+        NetworkCapabilities capabilities = getSystemService(ConnectivityManager.class).getNetworkCapabilities(network);
+        if (capabilities == null) {
+            return "unknown";
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            return "wifi";
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+            return "mobile";
+        }
+        return "other";
+    }
+
+    /** Before the core is up there is nothing to tell: it binds to whatever network is current. */
+    private static void networkChanged() {
+        long handle = core;
+        if (handle != 0) {
+            nativeNetworkChanged(handle);
+        }
+    }
 
     /**
      * Whether any of our activities is in front, which decides whether a ringing call needs a

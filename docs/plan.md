@@ -968,3 +968,21 @@ default); keep disk usage lean. Avoid build scripts.
     listening service starts the core long before any window) sent Online to nobody, and the chip
     stays at its default, Offline, until the connection next changes. The inbox now keeps the last
     reachability, and `attach` replays it first, the same way it replays the relays and a ringing call.
+  - **iroh never heard that the network changed.** A wifi-off test with `n0_dns_resolver=debug` sent all
+    4,248 lookups in 15 minutes on mobile data to `192.168.31.1`, the wifi router's DNS. The server list was
+    never re-read, none of the lookups succeeded, and the public fallbacks were never reached: a lookup to a
+    router that is no longer there hangs until whoever asked gives up. The relay only survived because its
+    connection happened not to drop. Last night it did drop, and the phone was unreachable for 10 hours. The
+    cause is netwatch's Android route monitor, which is empty ("Android doesn't allow us to do this"). iroh
+    only re-checks the network on a wake from suspend or when `Endpoint::network_change` is called, and its
+    docs say Android apps must call it from Java. We never did.
+  - **Fix:** `UplinkApplication` registers `registerDefaultNetworkCallback` once per process, on the main
+    handler. It logs what the network is (wifi/mobile, interface, DNS servers). On `onLinkPropertiesChanged`
+    (interface or DNS actually changed) it calls `nativeNetworkChanged` → `Command::NetworkChanged` →
+    `endpoint.network_change()`. **Not on `onLost`:** the first device test notified there, and iroh re-read
+    DNS while there was no default network, which left only the public fallbacks. It then counted mobile
+    appearing 350 ms later as a *minor* change (netwatch's `is_major_change` only notices interfaces that
+    disappear or change, not new ones), so the carrier's DNS was never read. Lookups still worked through
+    the public servers and the relay was back 1 s after wifi went off, but that is luck on a network that
+    blocks them. Notified from the new network's link properties, iroh sees `wlan0` gone (a major change)
+    and reads the new network's DNS. Not yet device-tested in this form.
