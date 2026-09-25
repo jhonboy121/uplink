@@ -461,6 +461,35 @@
   .callbar .end { display: grid; gap: 4px; justify-items: end; }
   .flag.weak svg { width: 10px; height: 10px; }
 
+  /* ---------- audio & hold (locked 2026-09-25) ---------- */
+  .sheet .routes { display: grid; }
+  .route {
+    display: flex; align-items: center; gap: 9px; padding: 8px 2px;
+    font-size: 11px; color: #0E151E; border-top: 1px solid #E7ECF2;
+  }
+  .route:first-child { border-top: 0; }
+  .route svg { width: 15px; height: 15px; flex: none; color: #5B6B7D; }
+  .route .what { display: grid; gap: 1px; flex: 1; min-width: 0; }
+  .route .what small { font-size: 8.5px; color: #5B6B7D; }
+  .route.current { color: #0A6FC2; font-weight: 600; }
+  .route.current svg { color: #0A6FC2; }
+  .route .tick { width: 13px; height: 13px; }
+  .held {
+    position: absolute; inset: 0; z-index: 3;
+    background: rgba(7, 10, 15, .82);
+    display: grid; align-content: center; justify-items: center; gap: 6px; padding: 0 24px 60px; text-align: center;
+  }
+  .held .mark {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(233, 240, 247, .1); border: 1px solid rgba(233, 240, 247, .16); margin-bottom: 2px;
+  }
+  .held .mark svg { width: 15px; height: 15px; }
+  .held b { font-family: Outfit, sans-serif; font-size: 14px; font-weight: 600; }
+  .held span { font-size: 9.5px; color: var(--app-muted); max-width: 24ch; }
+  .keystrip { display: flex; gap: 18px; flex-wrap: wrap; }
+  .keystrip div { display: grid; justify-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .keystrip .key { cursor: default; background: #18212C; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
@@ -482,6 +511,7 @@
       <li><a href="#screens">Screens</a></li>
       <li><a href="#modes">Call modes</a></li>
       <li><a href="#network">Network feedback</a></li>
+      <li><a href="#audio">Audio &amp; hold</a></li>
       <li><a href="#color">Color</a></li>
       <li><a href="#type">Type</a></li>
       <li><a href="#motion">Motion</a></li>
@@ -1439,6 +1469,245 @@
     </div>
     <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
       No new motion: the offline and waiting frames reuse the reconnecting dots. The weak pill appears and goes without animation, and it is held for a few seconds so it does not flicker on a single late frame.
+    </p>
+  </section>
+
+  <section id="audio">
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">Telecom</span><span class="pill ok">Locked 2026-09-25</span></div>
+      <h2>Audio &amp; hold</h2>
+      <p>
+        Android now treats an uplink call as a call. It knows which outputs are connected (the phone's
+        earpiece, the speaker, a Bluetooth headset, wired headphones), and it puts the call on hold when a
+        phone call is answered over it. The Speaker key becomes an Audio key, and each phone says when the
+        call is on hold and whose hold it is.
+      </p>
+    </div>
+
+    <div class="screens">
+      <!-- 17 · choosing where the sound goes -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:15</span><span>5G ▚ 81%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="sheetwrap">
+                <div class="sheet" role="dialog" aria-label="Audio">
+                  <h5>Audio</h5>
+                  <div class="routes">
+                    <div class="route">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg>
+                      <div class="what">Phone</div>
+                    </div>
+                    <div class="route">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                      <div class="what">Speaker</div>
+                    </div>
+                    <div class="route current" aria-current="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg>
+                      <div class="what">Galaxy Buds2 Pro<small>Bluetooth</small></div>
+                      <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>Where the sound goes</b>Opened from the Audio key when three or more outputs are available. The current one is ticked, and a tap switches and closes the sheet. Bluetooth shows the headset's own name. Wired headphones take the Phone row's place while plugged in, because Android offers one or the other. Back closes the sheet without changing anything.</figcaption>
+      </figure>
+
+      <!-- 18 · the audio key -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar"><span>23:16</span><span>5G ▚ 81%</span></div>
+            <div class="stage">
+              <div class="voice">
+                <div class="face rose">N</div>
+                <div>
+                  <div class="who">Noor</div>
+                  <div class="timer">16:08</div>
+                </div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Audio: Galaxy Buds2 Pro">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch to video">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>The Audio key</b>It sits where Speaker was and draws the current output, never filled, because it is a choice and not an on/off switch. With only Phone and Speaker available, a tap switches between them directly. With more, a tap opens the sheet. Its label names the output, for TalkBack.</figcaption>
+      </figure>
+
+      <!-- 19 · you're on hold -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:17</span><span>5G ▚ 81%</span></div>
+            <div class="stage">
+              <div class="video"><div class="face rose">N</div></div>
+              <div class="selfview">
+                <div class="camoff" aria-label="Your camera is off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6H14a2 2 0 0 1 2 2v2l5-3v10"/><path d="M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/><path d="M3 3l18 18"/></svg>
+                </div>
+                <div class="label">On hold</div>
+              </div>
+              <div class="held" role="status">
+                <div class="mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6v12"/><path d="M15 6v12"/></svg>
+                </div>
+                <b>On hold</b>
+                <span>You're on a phone call. Noor can't hear or see you until it ends.</span>
+              </div>
+              <div class="callbar" style="z-index: 4;">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">17:02</span></div>
+                </div>
+              </div>
+              <div class="controls">
+                <button class="key muted-out" type="button" aria-label="Mute" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key muted-out" type="button" aria-label="Turn camera off" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key muted-out" type="button" aria-label="Switch camera" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key muted-out" type="button" aria-label="Audio" aria-disabled="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>You're on hold</b>A phone call was answered over this one. Android holds it: your mic, camera and their sound stop. The same scrim as Reconnecting, with a pause mark instead of dots, because nothing is being retried. Every key but End call dims; there is no Resume, because the call comes back by itself when the phone call ends. The timer keeps running. On a voice call the message takes the middle, as in frame 11.</figcaption>
+      </figure>
+
+      <!-- 20 · they're on hold -->
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen connected">
+            <div class="statusbar"><span>23:17</span><span>5G ▚ 81%</span></div>
+            <div class="stage">
+              <div class="peeroff">
+                <div class="face rose">N</div>
+                <div class="who">Noor</div>
+                <span class="flag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M9 6v12"/><path d="M15 6v12"/></svg>
+                  On hold
+                </span>
+                <div class="inline-line">Noor is on a phone call</div>
+              </div>
+              <div class="selfview">
+                <div class="video self"><div class="face">A</div></div>
+                <div class="label">You</div>
+              </div>
+              <div class="callbar">
+                <div class="start">
+                  <button class="fold" type="button" aria-label="Fold away">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></svg>
+                  </button>
+                  <div class="peer"><span class="name">Noor</span><span class="timer">17:02</span></div>
+                </div>
+                <div class="chips"><span class="chip route">direct</span></div>
+              </div>
+              <div class="controls">
+                <button class="key" type="button" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Turn camera off">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Switch camera">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7"/><path d="M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/><path d="M13.8 9.6v1.7h-1.7"/><path d="M10.2 16.4v-1.7h1.7"/></svg>
+                </button>
+                <button class="key" type="button" aria-label="Audio: Speaker">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg>
+                </button>
+                <button class="key end" type="button" aria-label="End call">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 14.5c5-5 14-5 19 0l-2.6 2.6-3.6-1.7v-2.6a13 13 0 0 0-6.6 0v2.6l-3.6 1.7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption><b>They're on hold</b>Noor answered a phone call, and their phone says so. Their avatar and name replace the picture, as for Camera off, with an On hold pill and one line saying why. No scrim and no dots, because nothing is wrong with the network. Your keys all still work. On a voice call the pill and the line sit under their name in the middle.</figcaption>
+      </figure>
+    </div>
+
+    <div class="cards" style="margin-top: 26px;">
+      <div class="card">
+        <h3>The Audio key's icon</h3>
+        <div class="keystrip">
+          <div>
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span>
+            Phone
+          </div>
+          <div>
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/><path d="M20 6a9 9 0 0 1 0 12"/></svg></span>
+            Speaker
+          </div>
+          <div>
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg></span>
+            Bluetooth
+          </div>
+          <div>
+            <span class="key"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3z"/><path d="M3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg></span>
+            Wired
+          </div>
+        </div>
+        <p>A video call starts on Speaker and a voice call on Phone, unless a headset is connected, which Android picks first.</p>
+      </div>
+      <div class="card">
+        <h3>Hold, in order</h3>
+        <ul>
+          <li><b>A phone call rings</b>: Android asks the user, and answering it holds this call</li>
+          <li><b>Held</b>: mic, camera and playout stop; the other phone is told, and shows frame 20</li>
+          <li><b>The phone call ends</b>: Android resumes this call; the camera comes back on a keyframe</li>
+          <li>Hold is not a network fault: Reconnecting, Waiting and the weak pills stay hidden while either side is held</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>New strings</h3>
+        <ul>
+          <li>Audio · Phone · Speaker · Bluetooth · Wired headphones</li>
+          <li>On hold · You're on a phone call. {name} can't hear or see you until it ends.</li>
+          <li>{name} is on a phone call</li>
+        </ul>
+      </div>
+    </div>
+    <p style="margin-top: 14px; color: var(--muted); font-size: 13.5px;">
+      No new motion. The sheet opens and closes like the video-ask sheet, and the hold scrim appears and goes without animation.
     </p>
   </section>
 

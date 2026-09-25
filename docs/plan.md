@@ -1041,8 +1041,22 @@ default); keep disk usage lean. Avoid build scripts.
     `onUnhold` brings them back (camera with a keyframe). Wire: `MediaState` gains `3 held: bool`.
     No compatibility: both phones run the same build.
   - **Routes:** earpiece, speaker, Bluetooth and wired come from Telecom (`CallEndpoint` from API 34,
-    `CallAudioState` + `setAudioRoute` on 30–33). The speaker key becomes a **route picker**, to be
-    designed and locked in the call-UI mockup first, together with the held states (ours: "On hold";
-    theirs: "{name} is on hold").
+    `CallAudioState` + `setAudioRoute` on 30–33). The speaker key becomes the **Audio key**, and the
+    held states are drawn: **locked 2026-09-25**, call-UI mockup section "Audio & hold", frames 17–20.
   - The call foreground service and its notification stay. New: `MANAGE_OWN_CALLS`, the service bound
     by `BIND_TELECOM_CONNECTION_SERVICE`, and the `PhoneAccount` registered once per process.
+- **2026-09-25**: **to do — call quality controls** (the user's ask). Today the video is fixed at
+  1280×720, 30 fps, 2 Mbps (`crates/uplink/src/lib.rs`) and Opus at 32 kbps (`uplink-core` `audio.rs`),
+  and Settings' "Call quality" row is a static "720p · 30".
+  - **Presets**, not raw numbers: e.g. Data saver / Balanced / Best, each a resolution, frame rate and
+    video bitrate cap plus an Opus bitrate. Best may go up to 1080p where the camera and encoder allow it;
+    someone who does not want FHD calls picks a lower one.
+  - **Split by network:** one preset on wifi and another on mobile data (e.g. Balanced on wifi, Data
+    saver on mobile). It follows the network the call is on *now*, from the same Android network callback
+    the chip uses, so a call that moves from wifi to mobile steps down mid-call.
+  - The preset is a **cap**. Congestion control (the RTT and drop signals `health` already reads) can
+    still go below it, never above.
+  - Both sides send what their own preset allows. The receiver just decodes what arrives, so no wire
+    change is needed unless we later let one side ask the other to send less.
+  - Design first: the Call quality row becomes a page (the two network rows, each opening its presets),
+    locked in the shell mockup before it is built.
