@@ -10,7 +10,7 @@ use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{Image, ImageFormat, ImageReader};
 use ndk::native_window::NativeWindow;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use uplink_android::codec::{Avc, Decoder, Encoder, Event, Events, VideoConfig};
 use uplink_android::preview::TURNS_PER_REVOLUTION;
@@ -37,6 +37,8 @@ pub struct CallVideo {
     /// Our own ask for a keyframe: the camera coming back on after being off.
     keyframe: mpsc::Sender<()>,
     swap: mpsc::Sender<(Encoder, Events)>,
+    /// What rate control last set, in bits a second; the task gives each change to the encoder.
+    bitrate: watch::Sender<i32>,
     pub shown: Option<Image>,
     pub remote: ImageReader,
     encoder_window: NativeWindow,
@@ -79,8 +81,10 @@ impl CallVideo {
         let (keyframe, ours) = mpsc::channel(KEYFRAME_QUEUE);
         let asks = Asks { theirs: keyframe_requests, ours };
         let (swap, swaps) = mpsc::channel(SWAP_QUEUE);
-        tasks.spawn(encode(encoder, encoder_events, sender, asks, swaps, Arc::clone(&local_turns), cancel));
-        Ok(Self { tasks, keyframe, swap, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+        let (bitrate, bitrates) = watch::channel(video.bitrate);
+        let changes = Changes { swaps, bitrates };
+        tasks.spawn(encode(encoder, encoder_events, sender, asks, changes, Arc::clone(&local_turns), cancel));
+        Ok(Self { tasks, keyframe, swap, bitrate, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
     }
 
     /// Sends from here on at another size, rate or bitrate: a new encoder replaces the old one
@@ -89,8 +93,17 @@ impl CallVideo {
         let (encoder, events) = Encoder::new(avc, video).context("the new encoder")?;
         let window = encoder.window().clone();
         self.swap.try_send((encoder, events)).map_err(|_| anyhow::anyhow!("the encoder task is not taking a new encoder"))?;
+        // Already the new encoder's; said again only so a change still on its way is not
+        // applied on top of it.
+        self.bitrate.send_replace(video.bitrate);
         self.encoder_window = window;
         Ok(())
+    }
+
+    /// The same picture at `bps` from here on: the running encoder changes over, with no new one
+    /// and no keyframe.
+    pub fn set_bitrate(&self, bps: i32) {
+        self.bitrate.send_replace(bps);
     }
 
     /// The next frame is a keyframe, so the peer's decoder has something to start again from.
@@ -144,16 +157,19 @@ struct Asks {
     ours: mpsc::Receiver<()>,
 }
 
-/// A new encoder for a new quality, handed to the running task so the call's sender, and its
-/// sequence numbers, carry on.
-type Swaps = mpsc::Receiver<(Encoder, Events)>;
+/// What rate control changes in the running task: a new encoder for another step, handed over
+/// so the call's sender, and its sequence numbers, carry on; or the bitrate of the one it has.
+struct Changes {
+    swaps: mpsc::Receiver<(Encoder, Events)>,
+    bitrates: watch::Receiver<i32>,
+}
 
 async fn encode(
     mut encoder: Encoder,
     mut events: Events,
     mut sender: VideoSender,
     mut asks: Asks,
-    mut swaps: Swaps,
+    mut changes: Changes,
     turns: Arc<AtomicU8>,
     cancel: CancellationToken,
 ) {
@@ -161,10 +177,16 @@ async fn encode(
         tokio::select! {
             () = cancel.cancelled() => break,
             // The old one stops here; the new one's first frame is a keyframe by nature.
-            Some((fresh, fresh_events)) = swaps.recv() => {
+            Some((fresh, fresh_events)) = changes.swaps.recv() => {
                 encoder = fresh;
                 events = fresh_events;
                 tracing::info!("encoder swapped");
+            }
+            Ok(()) = changes.bitrates.changed() => {
+                let bps = *changes.bitrates.borrow_and_update();
+                if let Err(e) = encoder.set_bitrate(bps) {
+                    tracing::warn!(bps, "encoder bitrate: {e}");
+                }
             }
             Some(()) = asks.theirs.recv() => {
                 match encoder.request_keyframe() {

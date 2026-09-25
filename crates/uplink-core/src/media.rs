@@ -35,8 +35,8 @@ const KEYFRAME_REQUEST_QUEUE: usize = 1;
 /// Highest QUIC stream priority wins; video yields to signalling and (later) audio.
 const VIDEO_PRIORITY: i32 = 0;
 const STALE_FRAME: VarInt = VarInt::from_u32(0);
-/// How often arrivals are checked for a stall.
-const ARRIVAL_CHECK: Duration = Duration::from_millis(500);
+/// How often the link is read: arrivals for a stall, and the path's round trip and losses.
+const LINK_CHECK: Duration = Duration::from_millis(500);
 /// Nothing at all from the peer for this long is a call that has stopped, not a quiet one: QUIC
 /// keeps a call's connection busy at least every [`crate::node::KEEP_ALIVE`], muted or not.
 const STALL_AFTER: Duration = Duration::from_secs(2);
@@ -95,9 +95,17 @@ pub struct MediaStats {
     /// Nothing has arrived from the peer for [`STALL_AFTER`]: what "Reconnecting…" is shown from,
     /// well before the connection itself would be given up on.
     stalled: AtomicBool,
-    /// The selected path's smoothed round trip in milliseconds, as telemetry last read it; zero
-    /// before the first reading. What the weak pill watches climb.
+    /// The selected path's smoothed round trip in milliseconds, read twice a second; zero before
+    /// the first reading. What the weak pill watches climb, and rate control too.
     pub rtt_ms: AtomicU64,
+    /// The connection's packets lost and UDP datagrams sent, as last read: gauges of the current
+    /// connection, which start again from zero on a rejoined one.
+    pub lost_packets: AtomicU64,
+    pub datagrams_sent: AtomicU64,
+    /// The bitrate our encoder was last set to, in kbps, by rate control; zero on a voice call.
+    pub video_kbps: AtomicU64,
+    /// Times rate control changed the picture's step, down or up.
+    pub step_changes: AtomicU64,
     /// Times the connection was lost mid-call, and times the call was rejoined on a new one.
     pub drops: AtomicU64,
     pub rejoins: AtomicU64,
@@ -161,6 +169,7 @@ impl MediaStats {
             rebuilt: count(&self.audio_fec_recovered),
             concealed: count(&self.audio_concealed),
         };
+        quality.step_changes = u32::try_from(count(&self.step_changes)).unwrap_or(u32::MAX);
         quality.drops = u32::try_from(count(&self.drops)).unwrap_or(u32::MAX);
         quality.rejoins = u32::try_from(count(&self.rejoins)).unwrap_or(u32::MAX);
         quality
@@ -302,7 +311,7 @@ pub(crate) fn start(connection: &Connection, endpoint: &Endpoint) -> Result<(Med
     let (request_tx, request_keyframe) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     let (keyframe_requested, keyframe_requests) = mpsc::channel(KEYFRAME_REQUEST_QUEUE);
     tokio::spawn(receive_video(following.clone(), incoming_tx, request_tx, Arc::clone(&stats)));
-    tokio::spawn(watch_arrivals(following.clone(), Arc::clone(&stats)));
+    tokio::spawn(watch_link(following.clone(), Arc::clone(&stats)));
     tokio::spawn(telemetry::run(connection.clone(), endpoint.clone(), Arc::clone(&stats)));
     let video = VideoSender {
         link: following,
@@ -317,9 +326,11 @@ pub(crate) fn start(connection: &Connection, endpoint: &Endpoint) -> Result<(Med
     Ok((session, links))
 }
 
-/// Says whether anything at all is arriving from the peer, for as long as the call lasts.
-async fn watch_arrivals(mut link: Link, stats: Arc<MediaStats>) {
-    let mut tick = tokio::time::interval(ARRIVAL_CHECK);
+/// Says whether anything at all is arriving from the peer, and keeps the path's gauges fresh for
+/// the weak pill and rate control, for as long as the call lasts. Telemetry's lines come only
+/// every few seconds.
+async fn watch_link(mut link: Link, stats: Arc<MediaStats>) {
+    let mut tick = tokio::time::interval(LINK_CHECK);
     let (mut last, mut since) = (None, Instant::now());
     loop {
         tick.tick().await;
@@ -328,7 +339,13 @@ async fn watch_arrivals(mut link: Link, stats: Arc<MediaStats>) {
             break;
         }
         let connection = link.borrow_and_update().clone();
-        let arrived = (connection.stable_id(), connection.stats().udp_rx.datagrams);
+        let link_stats = connection.stats();
+        if let Some(path) = telemetry::selected_path(&connection) {
+            stats.rtt_ms.store(u64::try_from(path.rtt.as_millis()).unwrap_or(u64::MAX), Ordering::Relaxed);
+        }
+        stats.lost_packets.store(link_stats.lost_packets, Ordering::Relaxed);
+        stats.datagrams_sent.store(link_stats.udp_tx.datagrams, Ordering::Relaxed);
+        let arrived = (connection.stable_id(), link_stats.udp_rx.datagrams);
         let now = Instant::now();
         if last != Some(arrived) {
             (last, since) = (Some(arrived), now);

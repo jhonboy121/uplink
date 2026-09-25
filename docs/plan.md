@@ -1157,3 +1157,27 @@ default); keep disk usage lean. Avoid build scripts.
     at full. Our code applies no gain. In the one capture, SystemUI played an in-call sound
     (usage VOICE_COMMUNICATION, on the `voip_rx` output) as Wi-Fi came back, and playback ran
     ~7% short for 4 s. Not yet shown to be the cause: pull logcat right after it happens.
+- **2026-09-25**: **rate control: bitrate follows the path, and the picture steps down with it**
+  (`uplink_core::rate`). The preset is the cap; the app samples the call's counters each second.
+  - **Cut:** frames of ours dropped or late, a round trip 150 ms over the path's best of the last
+    minute (reset on a new route), or 5% loss. The target goes to 85% of what got through, never
+    below half of what it was nor 150 kbps, then holds two samples while the queue drains.
+  - **Growth:** 8% a clean sample, up to the cap's bitrate. A change within a step goes to the
+    running encoder (`AMediaCodec_setParameters`, video-bitrate): no new encoder, no keyframe.
+  - **Steps:** 5 s under the step below's bitrate steps the picture down to it (new encoder,
+    camera reopened, the preset change-over). Up after 10 s at 125% of the current step's
+    bitrate; a step up that falls back within 15 s doubles that wait, up to 80 s. Only steps the
+    phone can send; never above the preset.
+  - A new network or choice starts it over at the new cap. Paused while the call is stalled or
+    reconnecting. The path's round trip and losses are now read twice a second (with arrivals),
+    no longer only on telemetry's 5 s lines.
+  - Telemetry: `video_kbps` on each call stats line, cuts and step changes logged as they
+    happen, and the call summary gains the bitrate's spread (tag 19) and step changes (tag 20).
+  - Not in this pass: the voice (stays at the preset), BBRv3, the CLI (sends its clip as is).
+    Not yet device-tested.
+- **2026-09-25**: **minSdk 31 (Android 12).** The NDK's MediaCodec keys we link, keyframe on
+  request and now the bitrate, are API 31, so a minSdk 30 build could not have loaded on
+  Android 11 anyway. The `ndk` feature is `api-level-31`. The Android 11 branches are gone: the
+  incoming and ongoing call notifications are always CallStyle (their plain-action fallbacks and
+  the strings only they used, `decline`, `answer`, `call_in_progress`, are removed), picture in
+  picture always auto-enters, and both foreground services always show their notification at once.

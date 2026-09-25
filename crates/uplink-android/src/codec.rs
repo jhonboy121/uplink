@@ -171,6 +171,13 @@ impl Encoder {
         self.codec.0.set_parameters(params).at("AMediaCodec_setParameters (sync frame)")
     }
 
+    /// Sends at `bps` from here on, without a new encoder or a keyframe.
+    pub fn set_bitrate(&self, bps: i32) -> Result<(), Error> {
+        let mut params = MediaFormat::new();
+        params.set_i32(ndk_key!(AMEDIACODEC_KEY_VIDEO_BITRATE)?, bps);
+        self.codec.0.set_parameters(params).at("AMediaCodec_setParameters (bitrate)")
+    }
+
     /// Takes the output reported by [`Event::OutputAvailable`]; `None` for codec config, which is
     /// kept for the next keyframe.
     pub fn take_output(&mut self, index: usize, info: &BufferInfo) -> Result<Option<Packet>, Error> {

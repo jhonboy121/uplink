@@ -140,6 +140,13 @@ pub struct Quality {
     pub drops: u32,
     #[prost(uint32, tag = "18")]
     pub rejoins: u32,
+    /// The bitrate rate control set our encoder to, sampled with the rest: under `target`'s while
+    /// the path could not carry it.
+    #[prost(message, required, tag = "19")]
+    pub video_kbps: Spread,
+    /// Times rate control changed the picture's size or frame rate.
+    #[prost(uint32, tag = "20")]
+    pub step_changes: u32,
 }
 
 impl Quality {

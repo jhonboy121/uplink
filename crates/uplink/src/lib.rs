@@ -44,6 +44,7 @@ use uplink_core::reach::Reach as CoreReach;
 use uplink_core::settings::{self, Settings};
 use uplink_core::preset::{Network as PresetNetwork, Preset};
 use uplink_core::qr;
+use uplink_core::rate::{Change, Rate, Reading};
 use uplink_core::relays::{self, Choice, Ranking, Source};
 use uplink_core::media::{MediaSession, MediaStats, Route};
 use uplink_core::node::{Behind, Command, EndReason, Event, MediaState, Mode, RelayView, Steer};
@@ -97,9 +98,14 @@ const fn video_config(preset: Preset) -> VideoConfig {
         width: video.width.cast_signed(),
         height: video.height.cast_signed(),
         fps: video.fps.cast_signed(),
-        bitrate: (video.kbps * BPS_PER_KBPS).cast_signed(),
+        bitrate: bps(video.kbps),
         keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
     }
+}
+
+/// The encoder counts in bits a second, the presets and rate control in kbps.
+const fn bps(kbps: u32) -> i32 {
+    (kbps * BPS_PER_KBPS).cast_signed()
 }
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 /// The markup's "Android has not said which output yet".
@@ -172,8 +178,10 @@ struct State {
     chrome: Option<Chrome>,
     /// The quality steps this phone's camera and encoder manage, asked once per window.
     presets: Option<Vec<Preset>>,
-    /// The step the call in progress sends at.
+    /// The step the call in progress may send at: its cap, for this network.
     sending: Option<Preset>,
+    /// What the call's video sends within that cap, while the path cannot carry all of it.
+    rate: Option<Rate>,
     /// The call's counters, voice or video: a voice call has no codecs to hold them.
     media: Option<Arc<MediaStats>>,
     /// The chip's answer, which also says whose side a stalled call is on.
@@ -339,9 +347,12 @@ impl State {
             // Fails only once the event loop has quit; nothing left to redraw then.
             let _ = ui.upgrade_in_event_loop(|ui| ui.window().request_redraw());
         };
-        let video = video_config(self.sending.unwrap_or(Preset::Balanced));
-        match CallVideo::start(parts, &self.avc, video, self.runtime.clone(), on_remote_frame) {
-            Ok(call) => self.call = Some(call),
+        let cap = self.sending.unwrap_or(Preset::Balanced);
+        match CallVideo::start(parts, &self.avc, video_config(cap), self.runtime.clone(), on_remote_frame) {
+            Ok(call) => {
+                self.pace_from(cap, &call.stats);
+                self.call = Some(call);
+            }
             Err(e) => {
                 // Loud on both ends of the report: in the log with the reason, and on the call
                 // screen, because the peer cannot tell a broken encoder from a still room.
@@ -435,8 +446,42 @@ impl State {
         }
     }
 
+    /// Rate control starts over at `cap`, all of it: a new call, or a new network or choice.
+    fn pace_from(&mut self, cap: Preset, stats: &MediaStats) {
+        let rate = Rate::new(cap, self.presets.as_deref().unwrap_or_default());
+        stats.video_kbps.store(u64::from(rate.kbps()), Ordering::Relaxed);
+        self.rate = Some(rate);
+    }
+
+    /// Rate control's second: the call's counters in, and the encoder changed over if they say so.
+    fn pace(&mut self) {
+        let (Some(rate), Some(media)) = (&mut self.rate, &self.media) else { return };
+        let change = rate.sample(Reading::read(media, Instant::now()));
+        let Some(call) = &mut self.call else { return };
+        match change {
+            Change::None => return,
+            Change::Bitrate(kbps) => call.set_bitrate(bps(kbps)),
+            Change::Step(step, kbps) => {
+                tracing::info!(?step, kbps, "call picture steps");
+                media.step_changes.fetch_add(1, Ordering::Relaxed);
+                let video = VideoConfig { bitrate: bps(kbps), ..video_config(step) };
+                if let Err(e) = call.reconfigure(&self.avc, video) {
+                    tracing::warn!("stepping the call's picture: {e:#}");
+                    return;
+                }
+                if self.session.is_some() {
+                    self.start_camera();
+                }
+            }
+        }
+        if let (Some(rate), Some(media)) = (&self.rate, &self.media) {
+            media.video_kbps.store(u64::from(rate.kbps()), Ordering::Relaxed);
+        }
+    }
+
     /// Stops the call's codecs and streams; a running camera restarts without the encoder.
     fn end_call(&mut self) {
+        self.rate = None;
         if self.call.is_none() && self.audio.is_none() {
             return;
         }
@@ -1192,6 +1237,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         chrome: None,
         presets: None,
         sending: None,
+        rate: None,
         media: None,
         reach: CoreReach::Connecting,
         network_moved: None,
@@ -1974,6 +2020,14 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 Some(media) if !stalled && !state.reconnecting => state.health.sample(media),
                 _ => Weak::None,
             };
+            // Only while there is a path to judge; what piles up while there is none is not it.
+            if stalled || state.reconnecting {
+                if let Some(rate) = &mut state.rate {
+                    rate.pause();
+                }
+            } else {
+                state.pace();
+            }
             let moved = state.network_moved.is_some_and(|at| at.elapsed() < UNSETTLED);
             if let Some(ui) = state.ui.upgrade() {
                 // Only while it runs: a lost call's screen keeps the length it ended at.
@@ -2319,14 +2373,19 @@ fn requalify(state: &Rc<RefCell<State>>, platform: &Platform) {
         }
         let swapped = match &mut s.call {
             Some(call) => match call.reconfigure(&s.avc, video_config(now)) {
-                Ok(()) => true,
+                Ok(()) => Some(Arc::clone(&call.stats)),
                 Err(e) => {
                     tracing::warn!("changing the call's video over: {e:#}");
-                    false
+                    None
                 }
             },
-            None => false,
+            None => None,
         };
+        // A new network is a new path: what the old one could carry says nothing about it.
+        if let Some(stats) = &swapped {
+            s.pace_from(now, stats);
+        }
+        let swapped = swapped.is_some();
         if swapped && s.session.is_some() {
             s.start_camera();
         }

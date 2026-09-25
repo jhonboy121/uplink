@@ -220,16 +220,16 @@ impl Counters {
 
 /// The path QUIC currently sends on.
 #[derive(Clone, PartialEq, Eq)]
-struct SelectedPath {
+pub(crate) struct SelectedPath {
     family: Family,
     remote: String,
-    rtt: Duration,
+    pub(crate) rtt: Duration,
     cwnd: u64,
     mtu: u16,
     congestion_events: u64,
 }
 
-fn selected_path(connection: &Connection) -> Option<SelectedPath> {
+pub(crate) fn selected_path(connection: &Connection) -> Option<SelectedPath> {
     let paths = connection.paths();
     let path = paths.iter().find(|path| path.is_selected())?;
     let stats = path.stats();
@@ -300,7 +300,7 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
         path = current.or(path);
         let Some(p) = &path else { continue };
         media.set_route(if p.family == Family::Relay { Route::Relay } else { Route::Direct });
-        media.rtt_ms.store(u64::try_from(p.rtt.as_millis()).unwrap_or(u64::MAX), Ordering::Relaxed);
+        let video_kbps = media.video_kbps.load(Ordering::Relaxed);
         let counters = Counters::sample(&connection, &media, p.congestion_events);
         let delta = counters.since(&last);
         let over = now.duration_since(last_at);
@@ -315,6 +315,10 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
             quality.kbps_up.add(float(kbps(delta.bytes_up, over)));
             quality.kbps_down.add(float(kbps(delta.bytes_down, over)));
             quality.rtt_ms.add(float(u64::try_from(p.rtt.as_millis()).unwrap_or(u64::MAX)));
+            // Voice calls have no encoder to set.
+            if video_kbps > 0 {
+                quality.video_kbps.add(float(video_kbps));
+            }
             let counter = match p.family {
                 Family::Relay => Some(&mut quality.relayed_samples),
                 Family::V4 => Some(&mut quality.direct_v4_samples),
@@ -333,6 +337,7 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
             loss_pct = format!("{:.1}", loss_percent(delta.lost_packets, delta.datagrams_up)),
             lost = delta.lost_packets,
             congestion_events = delta.congestion_events,
+            video_kbps,
             up_kbps = kbps(delta.bytes_up, over),
             down_kbps = kbps(delta.bytes_down, over),
             fps_out = format!("{:.1}", rate(delta.frames_sent, over)),
@@ -382,6 +387,7 @@ pub(crate) async fn run(connection: Connection, endpoint: Endpoint, media: Arc<M
         audio_late = total.audio_late,
         audio_fec = total.audio_fec,
         audio_concealed = total.audio_concealed,
+        step_changes = media.step_changes.load(Ordering::Relaxed),
         "call summary"
     );
 }
