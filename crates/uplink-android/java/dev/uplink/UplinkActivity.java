@@ -20,6 +20,7 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Rational;
+import android.view.Display;
 import android.view.HapticFeedbackConstants;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -298,6 +299,26 @@ public class UplinkActivity extends NativeActivity {
             }
           }
         });
+  }
+
+  /**
+   * The fastest this screen refreshes at its current size, for the frame-rate vote on our surface:
+   * 120 on a phone that can, where Android otherwise leaves an app at 60. Called from Rust.
+   */
+  float peakRefreshRate() {
+    Display display = getDisplay();
+    if (display == null) {
+      return 0f;
+    }
+    Display.Mode now = display.getMode();
+    float peak = now.getRefreshRate();
+    for (Display.Mode mode : display.getSupportedModes()) {
+      if (mode.getPhysicalWidth() == now.getPhysicalWidth()
+          && mode.getPhysicalHeight() == now.getPhysicalHeight()) {
+        peak = Math.max(peak, mode.getRefreshRate());
+      }
+    }
+    return peak;
   }
 
   /** The tick a long press gets everywhere else on Android, through the window's own view. */

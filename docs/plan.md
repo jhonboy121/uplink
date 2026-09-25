@@ -1280,3 +1280,11 @@ default); keep disk usage lean. Avoid build scripts.
   upgrade). `uplink-release.apk` is 16 MB (debug 35): the library 160 → 34 MB, the dex 68 → 54 KB;
   about 5½ minutes to build here. Device-tested: starts clean, no JNI or class lookups failing.
   - A release install has no `run-as`: read its log from logcat, or the in-app diagnostics.
+- **2026-09-26**: **120 Hz: the surface votes for the screen's peak rate.** Scrolling felt like
+  60 on the S24 because it was: nothing asked, and Android leaves an app at 60 (the display sat
+  at mode 60 with 120/80/60/48/30/24 on offer). On every `InitWindow` the app reads the fastest
+  mode at the current size (`UplinkActivity.peakRefreshRate`) and votes it on the surface with
+  `ANativeWindow_setFrameRate` (compatibility default). SurfaceFlinger weighs a layer's vote only
+  while it posts frames, so the panel runs 120 while scrolling or animating and may slow again
+  when the app is still; a forced display mode would hold 120 all the time. SurfaceFlinger shows
+  the layer at `frameRate: 120.00 Hz`; smooth on the S24 (device-tested, debug build).

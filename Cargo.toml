@@ -81,6 +81,7 @@ mp4-atom = "0.15"
 ndk = { version = "0.9", default-features = false, features = [
   "audio",
   "media",
+  "nativewindow",
   "api-level-31",
 ] }
 ndk-sys = { version = "0.6", features = ["camera", "media"] }

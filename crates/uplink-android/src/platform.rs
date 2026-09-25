@@ -838,6 +838,13 @@ impl Platform {
         })
     }
 
+    /// The screen's fastest refresh rate at its current size; zero when there is no display.
+    pub fn peak_refresh_rate(&self) -> Result<f32, Error> {
+        self.with_activity(|env, activity| {
+            Ok(env.call_method(activity, jni_str!("peakRefreshRate"), jni_sig!("()F"), &[])?.f()?)
+        })
+    }
+
     /// How long this user needs a press held before it is a long press. It is an accessibility
     /// setting ("Touch and hold delay"), so it is read rather than assumed.
     pub fn long_press_timeout(&self) -> Result<std::time::Duration, Error> {

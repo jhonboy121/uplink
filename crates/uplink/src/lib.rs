@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
-use ndk::native_window::NativeWindow;
+use ndk::native_window::{FrameRateCompatibility, NativeWindow};
 use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
@@ -1289,7 +1289,14 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let lifecycle = Rc::clone(&state);
     let resumed = Rc::downgrade(&platform);
+    let (windowed, window_platform) = (app.clone(), Rc::downgrade(&platform));
     slint::android::init_with_event_listener(app, move |event| match event {
+        // A new surface each time: it votes again for the screen's fastest rate.
+        PollEvent::Main(MainEvent::InitWindow { .. }) => {
+            if let (Some(window), Some(platform)) = (windowed.native_window(), window_platform.upgrade()) {
+                vote_frame_rate(&window, &platform);
+            }
+        }
         // A call keeps the camera: the foreground service is what allows that in the background.
         PollEvent::Main(MainEvent::Pause) => with_state(&lifecycle, |s| {
             s.resume_camera = s.call.is_none() && s.session.take().is_some();
@@ -2324,6 +2331,24 @@ fn follow_telecom(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
     // A headset's mute button, or the system's own: the call's mute follows it, and says so.
     if now.muted != before.muted && now.muted == ui.get_mic_on() {
         ui.invoke_toggle_mic();
+    }
+}
+
+/// Asks for the screen's fastest refresh rate for our surface. Android leaves an app at 60 unless
+/// it asks, and weighs a surface's vote only while it is drawing: 120 while scrolling or
+/// animating, and the panel free to slow down again when the app sits still.
+fn vote_frame_rate(window: &NativeWindow, platform: &Platform) {
+    let peak = match platform.peak_refresh_rate() {
+        Ok(peak) if peak > 0.0 => peak,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!("reading the screen's refresh rates: {e}");
+            return;
+        }
+    };
+    match window.set_frame_rate(peak, FrameRateCompatibility::Default) {
+        Ok(()) => tracing::info!(fps = peak, "surface frame rate"),
+        Err(e) => tracing::warn!(fps = peak, "surface frame rate: {e}"),
     }
 }
 
