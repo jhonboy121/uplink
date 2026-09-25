@@ -13,6 +13,7 @@ anyhow.workspace = true
 i-slint-core.workspace = true
 jni.workspace = true
 ndk.workspace = true
+ndk-context.workspace = true
 rtrb.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true

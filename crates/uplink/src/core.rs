@@ -471,10 +471,15 @@ extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void)
     }
 }
 
-fn natives() -> [NativeMethod<'static>; 3] {
+fn natives() -> [NativeMethod<'static>; 4] {
     // SAFETY: signatures match the `extern "system"` functions below and UplinkApplication's natives.
     unsafe {
         [
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeInit"),
+                jni_str!("()V"),
+                native_init as *mut c_void,
+            ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeStart"),
                 jni_str!("(Ljava/lang/String;)J"),
@@ -491,6 +496,27 @@ fn natives() -> [NativeMethod<'static>; 3] {
                 native_ring_action as *mut c_void,
             ),
         ]
+    }
+}
+
+/// Publishes the VM and the Application to `ndk_context`, which iroh's DNS resolver and netdev
+/// read over JNI. Called from `Application.onCreate`, before any activity, service or receiver
+/// exists, so a core started at boot sees it too; android-activity's later call with the same
+/// Application is ignored (see the patch in external/ndk-context).
+extern "system" fn native_init<'local>(mut env: EnvUnowned<'local>, application: JObject<'local>) {
+    let outcome = env.with_env(|env| -> Result<(), jni::errors::Error> {
+        let vm = env.get_java_vm()?;
+        // Never deleted: ndk_context requires it to stay valid until the process exits.
+        let application = env.new_global_ref(&application)?.into_raw();
+        // SAFETY: the process's VM and a leaked global ref, both valid for the life of the process.
+        unsafe { ndk_context::initialize_android_context(vm.get_raw().cast(), application.cast()) };
+        Ok(())
+    });
+    // Logcat: nothing else is up yet.
+    match outcome.into_outcome() {
+        Outcome::Ok(()) => {}
+        Outcome::Err(e) => log::logcat(LOG_TAG, Level::ERROR, &format!("setting the android context: {e}")),
+        Outcome::Panic(_) => log::logcat(LOG_TAG, Level::ERROR, "panic setting the android context"),
     }
 }
 

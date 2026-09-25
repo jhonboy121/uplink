@@ -102,3 +102,38 @@ Notable additions relevant to uplink: `AImage_getTransform`, `AImageReader_setDe
 - `ndk/src/media/media_codec.rs`, `media_format.rs`: imports (`abort_on_panic`, `c_char`, `c_void`, `Pin`, `Result`)
   and the `async_notify_callback` field are gated with the same `api-level-28`/`29` cfg as the code that uses them.
   Upstream leaves them ungated, which warns with `media` + `api-level-26`. Worth sending upstream.
+
+## Patched `ndk-context` (first caller wins)
+
+Upstream: crates.io `ndk-context` 0.1.1 (2022-04-19; the repo's last commit is 2022-12). Our changes
+are two commits on that last commit (`0eb252b`, doc-test fixes on top of 0.1.1), branch `uplink` of
+the fork https://github.com/jhonboy121/ndk-context, the submodule at `external/ndk-context/`, patched
+in through `[patch.crates-io]`. `cargo tree -i ndk-context --target aarch64-linux-android` should list
+one copy, ours, under android-activity, n0-dns-resolver, netdev, netwatch and uplink.
+
+**Why:** a core started with no activity (a boot, an update, a restarted service) had no context.
+`n0-dns-resolver` then falls back to public nameservers in debug builds and **panics in release**, and
+`netdev` caches "no context" in a `OnceLock` for the life of the process. Setting it ourselves first was
+impossible because upstream `initialize_android_context` asserts nothing was set before, and
+android-activity 0.6.1 calls it when the first activity starts.
+
+**The patch** (API unchanged):
+- The storage is a `OnceLock` instead of `static mut`. Reading it is one acquire load, with no lock.
+- `initialize_android_context` keeps the first context and ignores later calls. It
+  `debug_assert`s the VM matches; the context pointers are separate global refs to the same
+  Application, so comparing them would mean nothing.
+- `release_android_context` is a no-op. Nothing in the graph calls it. Android never tells an app its
+  process is ending (`Application.onTerminate` never runs on a device), and threads reading the context
+  can outlive every activity.
+- `cargo test -p ndk-context --lib --target-dir ../../target` in `external/ndk-context` has one test.
+
+**Who sets it:** `UplinkApplication.onCreate` → `nativeInit()`, right after `System.loadLibrary`, with
+a global ref to the Application that is never freed. That runs before any activity, service or
+receiver in the process. android-activity 0.6.1 sets the **Application** too (upstream PR #229, not
+the Activity), so its later call carries the same value and is ignored.
+
+**Upstream status (checked 2026-09-25):** nothing fixes this. ndk-context PRs #3 (an `Option` getter,
+closed without merging) and #4 (`is_initialized`, open) only add ways to read it. The maintainer
+declined the getter in #5 in favour of `android-context`, which is an empty 0.0.0 placeholder on
+crates.io. android-activity `main` has had no changes since 0.6.1. **Drop this patch once
+`android-context` ships and our dependencies move to it.** Related: hickory-dns#3625.

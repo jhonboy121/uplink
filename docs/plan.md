@@ -558,10 +558,11 @@ default); keep disk usage lean. Avoid build scripts.
     around it now. The native side of it moved from the activity to the Application, so the
     service and the receiver log to the file with no window up.
   - **Known gaps:** a missed call while no window is up is not written to the call log (that
-    bookkeeping is still the window's), and there is no missed-call notification. A core started
+    bookkeeping is still the window's), and there is no missed-call notification. ~~A core started
     at boot resolves DNS with iroh's fallback nameservers: iroh reads the system's through
     `ndk_context`, which android-activity sets only when an activity starts. It asserts it is the
-    first to set it, so we cannot set it earlier.
+    first to set it, so we cannot set it earlier.~~ Fixed 2026-09-25: `ndk-context` is vendored so the
+    first caller wins.
 - **2026-09-24**: **Settings is grouped by surface, not by headers** (Settings canvas:
   artboard E is the spec; A–D were the
   alternatives). Each group is an inset `surface` card with a 14 px radius, 16 px in from the edge.
@@ -937,3 +938,25 @@ default); keep disk usage lean. Avoid build scripts.
     - `relay-in` serves QUIC address discovery (UDP 7842 is open).
     - iroh's `unstable-net-report` feature is turned on.
   - **Open:** is two the right active-set size? The beat line's relay bytes will say.
+- **2026-09-25**: **Rust has an Android context from the moment the process starts.** Last night's log
+  showed iroh's DNS failing on mobile data from 02:31 to 12:42 IST. The relay dropped at 02:52 and never
+  came back, and the endpoint sent ~33k unanswered packets an hour (about 73 bytes each, 86 mAh of mobile
+  radio). The cause of the DNS failure is **still unknown**: that process had an activity, so it had a
+  context. The fix below closes the related hole, not necessarily this one.
+  - **The hole:** a core started with no activity (boot, update, a restarted service) had no
+    `ndk_context`. `n0-dns-resolver` then uses public nameservers in debug builds and **panics in
+    release**, and `netdev` gives up on its JNI path for the life of the process. We could not set the
+    context first, because upstream asserts it is set exactly once and android-activity sets it later.
+  - **Fix:** `ndk-context` is vendored with a first-caller-wins `OnceLock` and a no-op release
+    (docs/ref/ndk-vendoring.md). `UplinkApplication.onCreate` calls `nativeInit()` right after loading
+    the library, which publishes the VM and a leaked global ref to the Application.
+    android-activity 0.6.1 passes the same Application later, and that call is ignored.
+  - **Device-tested headless:** a reinstall on mobile data with no activity (`MY_PACKAGE_REPLACED` →
+    receiver → listening service → core) resolved the relay and was online about 1 s after the core
+    came up. A running headless core that moved from wifi to mobile re-resolved in about 1.5 s. The shell
+    cannot send `BOOT_COMPLETED` on Android 16 (it's a protected broadcast), and a force-stopped app gets
+    no broadcasts until one is sent to it explicitly, so a reinstall is the way to test this.
+    Still unproven: which nameservers were used (needs the trace below).
+  - **Still to do:** log the nameservers iroh actually uses (`n0_dns_resolver` at trace, or our own
+    line on each network change), then a night on mobile data. The beat's `elapsed_s` uses a clock
+    that stops in deep sleep, so it always reads 300. It needs a boot-time or wall clock.

@@ -140,6 +140,9 @@ public class UplinkApplication extends Application {
     /** Missed calls since the app was last opened, for the one notification that counts them. */
     private int missed;
 
+    /** Hands this Application to Rust's `ndk_context`, before anything there can read it. */
+    private native void nativeInit();
+
     private native long nativeStart(String dataDir);
 
     private static native void nativeLog(long core, int priority, String message);
@@ -154,6 +157,7 @@ public class UplinkApplication extends Application {
         // which is what registers the natives above. NativeActivity later finds it loaded.
         try {
             System.loadLibrary(libraryName());
+            nativeInit();
         } catch (PackageManager.NameNotFoundException | UnsatisfiedLinkError e) {
             Log.e(TAG, "loading the native library: " + e);
         }
