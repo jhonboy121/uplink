@@ -31,6 +31,40 @@ export component Tap inherits TouchArea {
     }
 }
 
+// A tap, or a drag of whatever holds it. `clicked` fires on release whether or not the finger
+// travelled, so letting go of a drag would also count as a tap: a tap is a press that stayed put.
+export component DragTap inherits TouchArea {
+    callback tapped();
+    // Where the finger is now, from where it went down, in the holder's own coordinates.
+    callback dragged(length, length);
+    out property <bool> dragging: self.pressed && self.travelled;
+    property <bool> travelled;
+    mouse-cursor: pointer;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down) {
+            self.travelled = false;
+        }
+    }
+    moved => {
+        if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
+            || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
+            self.travelled = true;
+        }
+        if (self.travelled) {
+            root.dragged(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+        }
+    }
+    // Checked at the release too, not only by `moved`: a cancelled Back arrives as a release
+    // far from the press with no move in between, which `travelled` never sees.
+    clicked => {
+        if (!self.travelled
+            && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
+            && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
+            root.tapped();
+        }
+    }
+}
+
 // A row's touch: a tap, or a hold. Slint 1.18's TouchArea has no long press, so this is one —
 // a press held within `drag-slop` for `Theme.long-press` (the user's own touch-and-hold
 // delay). A finger that wanders is scrolling, not holding, and the release that ends a hold

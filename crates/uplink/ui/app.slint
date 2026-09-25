@@ -87,6 +87,10 @@ export component App inherits Window {
     in-out property <length> call-fold-x;
     in-out property <length> call-fold-y;
     in-out property <bool> call-fold-placed: false;
+    // The call screen's corner card, likewise.
+    in-out property <length> call-card-x;
+    in-out property <length> call-card-y;
+    in-out property <bool> call-card-placed: false;
     in property <Route> call-route: Route.unknown;
     // Cleared when a call starts; set if its video never came up, or stopped.
     in property <bool> video-failed: false;
@@ -369,6 +373,9 @@ export component App inherits Window {
             video-failed: root.video-failed;
             state: root.call-state;
             swapped <=> root.swapped;
+            card-x <=> root.call-card-x;
+            card-y <=> root.call-card-y;
+            card-placed <=> root.call-card-placed;
             mic-on: root.mic-on;
             speaker-on: root.speaker-on;
             voice: root.call-voice;

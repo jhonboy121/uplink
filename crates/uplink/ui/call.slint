@@ -3,7 +3,7 @@
 
 import { Theme } from "theme.slint";
 import { CallState, Route, Stall, Weak } from "types.slint";
-import { BigAvatar, Key, Line, Row, Tap } from "controls.slint";
+import { BigAvatar, DragTap, Key, Line, Row, Tap } from "controls.slint";
 
 // A label on the call's scrim: how the call is set up.
 component Chip inherits VerticalLayout {
@@ -96,33 +96,11 @@ export component MiniCall inherits Rectangle {
             vertical-alignment: center;
         }
     }
-    // `clicked` fires on release whether or not the finger travelled, so letting go of a drag
-    // would also unfold the call. A tap is a press that stayed put.
-    property <bool> dragged;
-    TouchArea {
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
-                root.dragged = false;
-            }
-        }
-        moved => {
-            if (abs(self.mouse-x - self.pressed-x) > Theme.drag-slop
-                || abs(self.mouse-y - self.pressed-y) > Theme.drag-slop) {
-                root.dragged = true;
-            }
-            if (root.dragged) {
-                root.pos-x = root.x + self.mouse-x - self.pressed-x;
-                root.pos-y = root.y + self.mouse-y - self.pressed-y;
-            }
-        }
-        // Checked at the release too, not only by `moved`: a cancelled Back arrives as a
-        // release far from the press with no move in between, which `dragged` never sees.
-        clicked => {
-            if (!root.dragged
-                && abs(self.mouse-x - self.pressed-x) <= Theme.drag-slop
-                && abs(self.mouse-y - self.pressed-y) <= Theme.drag-slop) {
-                root.restore();
-            }
+    DragTap {
+        tapped => { root.restore(); }
+        dragged(dx, dy) => {
+            root.pos-x = root.x + dx;
+            root.pos-y = root.y + dy;
         }
     }
 }
@@ -230,6 +208,10 @@ export component CallScreen inherits Rectangle {
     in property <bool> video-failed;
     in property <CallState> state;
     in-out property <bool> swapped;
+    // Where the corner card was dragged to, if it was.
+    in-out property <length> card-x;
+    in-out property <length> card-y;
+    in-out property <bool> card-placed;
     in property <bool> mic-on;
     in property <bool> speaker-on;
     // Placed or offered as voice, and not switched to video since.
@@ -318,10 +300,17 @@ export component CallScreen inherits Rectangle {
     // of the two pictures is not filling the screen. It depends on `connected` alone — while
     // it also depended on `swapped`, a tap grew the card back to full size and buried the
     // other picture under it, which read as the self view vanishing rather than trading.
+    // Dragged, it stays where it was left, between the top bar and the keys; until then it
+    // rests in the end corner.
     if root.video : Rectangle {
         property <bool> inset: root.connected;
-        x: inset ? (Theme.rtl ? Theme.self-view-edge : parent.width - self.width - Theme.self-view-edge) : 0px;
-        y: inset ? root.top-inset + Theme.self-view-top : 0px;
+        property <length> min-x: Theme.self-view-edge;
+        property <length> max-x: parent.width - Theme.self-view-width - Theme.self-view-edge;
+        property <length> min-y: root.top-inset + Theme.self-view-top;
+        property <length> max-y: max(min-y, parent.height - root.bottom-inset - Theme.call-bottom
+            - Theme.key-size - Theme.self-view-edge - Theme.self-view-height);
+        x: !inset ? 0px : root.card-placed ? clamp(root.card-x, min-x, max-x) : Theme.rtl ? min-x : max-x;
+        y: !inset ? 0px : root.card-placed ? clamp(root.card-y, min-y, max-y) : min-y;
         width: inset ? Theme.self-view-width : parent.width;
         height: inset ? Theme.self-view-height : parent.height;
         border-radius: inset ? Theme.self-view-edge : 0px;
@@ -351,10 +340,17 @@ export component CallScreen inherits Rectangle {
                 vertical-alignment: center;
             }
         }
-        Tap {
+        drag := DragTap {
             tapped => { root.swapped = !root.swapped; }
+            dragged(dx, dy) => {
+                root.card-x = parent.x + dx;
+                root.card-y = parent.y + dy;
+                root.card-placed = true;
+            }
         }
-        animate x, y, width, height, border-radius { duration: 620ms; easing: ease-out-quint; }
+        // Under the finger while dragged, not 620ms behind it.
+        animate x, y { duration: 620ms; easing: ease-out-quint; enabled: !drag.dragging; }
+        animate width, height, border-radius { duration: 620ms; easing: ease-out-quint; }
     }
 
     // Ringing and incoming video: the name over a dimmed camera.
