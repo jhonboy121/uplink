@@ -10,6 +10,7 @@ mod arsc;
 mod chunk;
 mod compile;
 mod framework;
+mod vector;
 mod xml;
 
 use std::collections::HashMap;
@@ -50,6 +51,19 @@ enum Command {
     /// Write `R.java`: every resource's id as a constant, `R.string.mute`, from the same table
     /// `compile` writes — so Java names resources the compiler checks, not strings it looks up.
     RClass(RClassArgs),
+    /// Write the UI's SVG icons into res/drawable as `<vector>` drawables. The results are
+    /// checked in; run it again when an icon changes.
+    Vectors(VectorsArgs),
+}
+
+#[derive(Parser)]
+struct VectorsArgs {
+    /// Where the SVGs are.
+    #[arg(long, default_value = "assets/icons")]
+    icons: PathBuf,
+    /// The drawable folder to write into.
+    #[arg(long, default_value = "android/res/drawable")]
+    out: PathBuf,
 }
 
 #[derive(Parser)]
@@ -459,6 +473,7 @@ fn main() -> Result<()> {
         }
         Command::GenTable(args) => gen_table(&args)?,
         Command::RClass(args) => r_class(&args)?,
+        Command::Vectors(args) => vector::write_all(&args.icons, &args.out)?,
     }
     Ok(())
 }

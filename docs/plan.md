@@ -1102,3 +1102,11 @@ default); keep disk usage lean. Avoid build scripts.
   picture-in-picture icons are PNGs rendered through Chromium; they should be `<vector>` drawables
   converted from the same SVGs, compiled by `tools/android-res` (check it handles `<vector>`/`<path>`
   attributes), and the PNGs and `actions.py` retired. `R.drawable` is already generated.
+- **2026-09-25**: **drawables are vectors now** (the to-do above, done). `android-res vectors` (`just
+  drawables`) writes every drawable from `assets/icons/*.svg` as a `<vector>`, checked in; the PNGs
+  and `actions.py` are gone, and `mark.py` renders only the QR badge. The compiler types `<vector>`'s
+  values by attribute name (colour, float, dp, enum) the way aapt2 does from `attrs.xml`. XML is
+  written through `xmlwriter` (elements and attributes, never string-built; already in the lock), and
+  ui-preview reads a resource string with roxmltree instead of searching the text. Detail in
+  docs/ref/android-res.md. Not yet device-tested: the launcher icon, the notification icon and the
+  picture-in-picture buttons are the things to look at.

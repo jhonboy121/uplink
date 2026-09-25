@@ -95,6 +95,10 @@ fmt:
 build:
     nice cargo build -p {{lib}} --target {{android_target}} --profile {{cargo_profile}}
 
+[doc("Write assets/icons' SVGs into android/res/drawable as <vector> drawables (checked in)")]
+drawables:
+    cargo run -q -p android-res -- vectors
+
 [doc("Compile the Java shim into dex_dir/classes.dex")]
 dex:
     #!/bin/sh

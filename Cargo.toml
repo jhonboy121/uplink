@@ -32,6 +32,9 @@ clap = { version = "4.6", features = ["derive", "env"] }
 # Read-only XML DOM, no transitive dependencies: android-res compiles real XML to Android's
 # binary form, so the manifest and resources are XML in the repo rather than Rust element trees.
 roxmltree = "0.20"
+# The writing half: android-res generates the vector drawables as elements and attributes, not
+# strings. Already in the lock through Slint's SVG support, so it costs nothing new.
+xmlwriter = "0.1"
 # Contacts. `bundled` compiles SQLite's own C through our clang wrapper, like libopus; the
 # alternative pure-Rust rewrite is beta by its maintainers' own account, and contacts are the one
 # thing here a person cannot regenerate.

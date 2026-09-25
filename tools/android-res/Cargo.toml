@@ -13,3 +13,4 @@ anyhow.workspace = true
 clap.workspace = true
 flate2.workspace = true
 roxmltree.workspace = true
+xmlwriter.workspace = true

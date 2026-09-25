@@ -155,6 +155,7 @@ dependencies = [
  "clap",
  "flate2",
  "roxmltree 0.20.0",
+ "xmlwriter",
 ]
 
 [[package]]
@@ -7027,6 +7028,7 @@ dependencies = [
  "i-slint-compiler",
  "i-slint-core",
  "image",
+ "roxmltree 0.20.0",
  "slint",
  "uplink-core",
 ]

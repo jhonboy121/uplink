@@ -510,10 +510,13 @@ fn open_call() -> CallDetail {
 fn resource_string(folder: &str, name: &str) -> Result<String> {
     let path = format!("{}/../../android/res/{folder}/values.xml", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?;
-    let open = format!("<string name=\"{name}\">");
-    let start = text.find(&open).with_context(|| format!("{name} is not in {path}"))? + open.len();
-    let end = text[start..].find("</string>").with_context(|| format!("{name} is not closed in {path}"))?;
-    Ok(text[start..start + end].to_owned())
+    let values = roxmltree::Document::parse(&text).with_context(|| format!("parsing {path}"))?;
+    let string = values
+        .root_element()
+        .children()
+        .find(|node| node.has_tag_name("string") && node.attribute("name") == Some(name))
+        .with_context(|| format!("{name} is not in {path}"))?;
+    Ok(string.text().unwrap_or_default().to_owned())
 }
 
 /// An optional value as the markup takes one: a list of at most one.

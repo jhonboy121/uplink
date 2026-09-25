@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 image = { workspace = true, features = ["png"] }
+roxmltree.workspace = true
 uplink-core.workspace = true
 # The app builds Slint for Android with Skia; here it is the software renderer and no backend,
 # so the same markup renders headless on the host.

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Renders the u-link into the PNGs the adaptive icon and the QR badge reference.
+"""Renders the u-link into the PNG badge the QR code carries, which Rust draws into an image.
 
-An adaptive icon's layers are 108dp but only the middle 72dp always survives the launcher's mask,
-so the mark is drawn at 60dp on a transparent 432px canvas (108dp at xxxhdpi). The monochrome
-layer is the same shape in one colour, because a themed icon is tinted by the system.
+Android's own copies (the launcher layers and the notification icon) are `<vector>` drawables
+now, written by `just drawables` from the same SVG; this is only the badge.
 
 The badge is the same mark for the middle of a QR code, where it sits on a white plate rather
 than on the app's ground. It gets its own render because the art is not centred in the 48-unit
@@ -17,18 +16,11 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DRAWABLE = ROOT / "android" / "res" / "drawable"
 ICONS = ROOT / "assets" / "icons"
 CHROMIUM = "/usr/bin/chromium"
-# 108dp at xxxhdpi, and the safe circle the mask keeps.
-CANVAS = 432
-MARK = 240
 # The badge is small on screen (a fifth of a code) but is also drawn into a shared image at a
 # size we do not control, so it is rendered well above either.
 BADGE = 256
-# A notification's small icon is 24dp, drawn flat in one colour from the alpha alone — so it is
-# the mark cropped to its own bounds, filling the box rather than sitting in an icon's safe zone.
-NOTIFICATION = 96
 # The mark's own bounds inside the viewBox: the circles' outer edges and the arc's stroke.
 ART = "8.4 4.4 31.2 34.35"
 
@@ -45,7 +37,7 @@ PAGE = """<!doctype html>
 """
 
 
-def render(out, accent, peer, canvas=CANVAS, mark=MARK, box="0 0 48 48"):
+def render(out, accent, peer, canvas, mark, box):
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
         page = pathlib.Path(work) / "mark.html"
@@ -73,10 +65,5 @@ def render(out, accent, peer, canvas=CANVAS, mark=MARK, box="0 0 48 48"):
     print(f"{out} ({out.stat().st_size} bytes)")
 
 
-# The launcher's own layer keeps the palette; the themed one is tinted, so it is drawn flat.
-render(DRAWABLE / "mark.png", "#58B6FF", "#E9F0F7")
-render(DRAWABLE / "mark_mono.png", "#FFFFFF", "#FFFFFF")
 # On a white plate, so the mark takes the light theme's colours.
 render(ICONS / "mark-badge.png", "#0A6FC2", "#0E151E", canvas=BADGE, mark=BADGE, box=ART)
-# The status bar's own: only the alpha survives, so the colour is whatever is opaque.
-render(DRAWABLE / "notification.png", "#FFFFFF", "#FFFFFF", canvas=NOTIFICATION, mark=NOTIFICATION, box=ART)

@@ -6,7 +6,8 @@ use anyhow::Result;
 use crate::chunk::{
     BOOL_TRUE, CHUNK_HEADER_SIZE, NO_INDEX, RES_VALUE_SIZE, RES_XML_END_ELEMENT_TYPE, RES_XML_END_NAMESPACE_TYPE,
     RES_XML_RESOURCE_MAP_TYPE, RES_XML_START_ELEMENT_TYPE, RES_XML_START_NAMESPACE_TYPE, RES_XML_TYPE, StringPool,
-    TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE, TYPE_STRING, Writer,
+    TYPE_DIMENSION, TYPE_FLOAT, TYPE_INT_BOOLEAN, TYPE_INT_COLOR_ARGB8, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE,
+    TYPE_STRING, Writer,
 };
 
 pub const ANDROID_NS: &str = "http://schemas.android.com/apk/res/android";
@@ -22,6 +23,11 @@ pub enum Value {
     Bool(bool),
     /// A resource id, as `@drawable/x` compiles to.
     Ref(u32),
+    /// `#AARRGGBB`, for an attribute that is a colour.
+    Color(u32),
+    Float(f32),
+    /// Already packed as a complex (see `chunk::TYPE_DIMENSION`).
+    Dimension(u32),
 }
 
 pub struct Attr {
@@ -89,6 +95,9 @@ fn write_element(e: &Element, pool: &mut StringPool, ns: u32, w: &mut Writer) ->
             Value::Hex(v) => (NO_INDEX, TYPE_INT_HEX, *v),
             Value::Bool(b) => (NO_INDEX, TYPE_INT_BOOLEAN, if *b { BOOL_TRUE } else { 0 }),
             Value::Ref(id) => (NO_INDEX, TYPE_REFERENCE, *id),
+            Value::Color(argb) => (NO_INDEX, TYPE_INT_COLOR_ARGB8, *argb),
+            Value::Float(f) => (NO_INDEX, TYPE_FLOAT, f.to_bits()),
+            Value::Dimension(complex) => (NO_INDEX, TYPE_DIMENSION, *complex),
         };
         w.u32(raw);
         w.u16(RES_VALUE_SIZE);

@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 
-use crate::chunk::{TYPE_ATTRIBUTE, TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX, TYPE_REFERENCE, TYPE_STRING};
+use crate::chunk::{
+    COMPLEX_MANTISSA_SHIFT, COMPLEX_UNIT_DIP, TYPE_ATTRIBUTE, TYPE_INT_BOOLEAN, TYPE_INT_DEC, TYPE_INT_HEX,
+    TYPE_REFERENCE, TYPE_STRING,
+};
 use crate::framework;
 use crate::xml::{ANDROID_NS, Attr, Element, Value};
 
@@ -77,6 +80,59 @@ fn value(text: &str, symbols: &Symbols) -> Result<Value> {
     })
 }
 
+/// `android:` attributes whose format is not in their text. aapt2 knows these from the SDK's
+/// `attrs.xml`; this is the part of it `<vector>` needs, which is all that uses them here.
+const COLOR_ATTRS: [&str; 3] = ["fillColor", "strokeColor", "tint"];
+const FLOAT_ATTRS: [&str; 14] = [
+    "viewportWidth",
+    "viewportHeight",
+    "strokeWidth",
+    "strokeAlpha",
+    "strokeMiterLimit",
+    "fillAlpha",
+    "alpha",
+    "translateX",
+    "translateY",
+    "scaleX",
+    "scaleY",
+    "rotation",
+    "pivotX",
+    "pivotY",
+];
+const DIMENSION_ATTRS: [&str; 2] = ["width", "height"];
+/// Enum attributes and their values, as `attrs.xml` declares them (`Paint.Cap`, `Paint.Join`).
+const ENUM_ATTRS: [(&str, &[(&str, u32)]); 3] = [
+    ("strokeLineCap", &[("butt", 0), ("round", 1), ("square", 2)]),
+    ("strokeLineJoin", &[("miter", 0), ("round", 1), ("bevel", 2)]),
+    ("fillType", &[("nonZero", 0), ("evenOdd", 1)]),
+];
+const DP: &str = "dp";
+
+/// The value of an `android:` attribute whose format decides it, or `None` to type it by its text.
+fn typed(name: &str, text: &str) -> Result<Option<Value>> {
+    if COLOR_ATTRS.contains(&name) && text.starts_with('#') {
+        return Ok(Some(Value::Color(color(text)?)));
+    }
+    if FLOAT_ATTRS.contains(&name) {
+        return Ok(Some(Value::Float(text.parse().with_context(|| format!("android:{name}={text} is not a number"))?)));
+    }
+    if DIMENSION_ATTRS.contains(&name) {
+        let whole: u32 = text
+            .strip_suffix(DP)
+            .and_then(|n| n.parse().ok())
+            .with_context(|| format!("android:{name}={text}: only whole dp is supported"))?;
+        return Ok(Some(Value::Dimension((whole << COMPLEX_MANTISSA_SHIFT) | COMPLEX_UNIT_DIP)));
+    }
+    if let Some((_, values)) = ENUM_ATTRS.iter().find(|(attr, _)| *attr == name) {
+        let (_, number) = values
+            .iter()
+            .find(|(word, _)| *word == text)
+            .with_context(|| format!("android:{name}={text} is not one of its values"))?;
+        return Ok(Some(Value::Int(*number)));
+    }
+    Ok(None)
+}
+
 /// Element and attribute names outlive the document they were parsed from, so they are leaked
 /// deliberately: this is a short-lived tool and the alternative is threading a lifetime through
 /// the writer for no gain.
@@ -96,7 +152,12 @@ pub fn element(node: roxmltree::Node, symbols: &Symbols, defines: &HashMap<Strin
             Some(other) => bail!("unknown namespace {other} on {}", attr.name()),
             None => None,
         };
-        attrs.push(Attr { res_id, name: name_of(attr.name()), value: value(&text, symbols)? });
+        let typed = if res_id.is_some() { typed(attr.name(), &text)? } else { None };
+        let value = match typed {
+            Some(value) => value,
+            None => value(&text, symbols)?,
+        };
+        attrs.push(Attr { res_id, name: name_of(attr.name()), value });
     }
     let children = node
         .children()
@@ -201,5 +262,7 @@ pub fn style_item(node: roxmltree::Node, symbols: &Symbols) -> Result<(u32, u8, 
         Value::Int(n) => (attr, TYPE_INT_DEC, n),
         Value::Hex(n) => (attr, TYPE_INT_HEX, n),
         Value::Str(_) => (attr, TYPE_STRING, 0),
+        // Only typed by attribute on an element (`typed`); no style here sets one.
+        Value::Color(_) | Value::Float(_) | Value::Dimension(_) => bail!("{name}: not a value a style takes here"),
     })
 }

@@ -64,10 +64,22 @@ apkanalyzer resources xml --file res/mipmap/launcher.xml app.apk
 
 ## The icon
 
-`tools/design-probe/mark.py` renders the u-link to `android/res/drawable/mark.png` and
-`mark_mono.png` with headless Chromium: 240px of mark centred on a transparent 432px canvas, which
-is 108dp at xxxhdpi with the mark inside the 72dp the launcher's mask always keeps. The monochrome
-layer is the same path in flat white, because the system tints it.
+Every drawable is a `<vector>`, not a PNG: `just drawables` (`android-res vectors`, in
+`src/vector.rs`) writes them from `assets/icons/*.svg`, the same files the window draws, as
+elements and attributes through `xmlwriter` (never string-built). The results are checked in;
+regenerate after changing an icon. The launcher layers put the mark at 60dp in the middle of a 108dp
+layer, inside the 72dp the mask always keeps; `mark_mono` is the same shape in white, because the
+system tints it; `notification` is the mark cropped to its own bounds, in white, because a status-bar
+icon is drawn from its alpha. Only `<path>` and `<circle>` are understood — anything else is an
+error. (`tools/design-probe/mark.py` now renders only the QR badge, which Rust draws into an image.)
+
+`<vector>` needs value types plain XML cannot tell from the text, so `compile.rs` types these by
+attribute name, as aapt2 does from the SDK's `attrs.xml`: colours (`fillColor`, `strokeColor`,
+`tint` → `TYPE_INT_COLOR_ARGB8`), floats (`viewportWidth`, `strokeWidth`, the group transforms →
+`TYPE_FLOAT`), whole `dp` (`width`, `height` → `TYPE_DIMENSION`, `n << 8 | 1`), and the enums
+`strokeLineCap`, `strokeLineJoin`, `fillType`. A colour left as a string would fail at inflation
+(`getComplexColor` reads a string as a file path). Check a compiled one with
+`apkanalyzer resources xml --file res/drawable/mic.xml app.apk`.
 
 The splash needs no `values-v31` work: Android 12+ builds its own from `android:icon` and the
 theme's `windowBackground`, so setting those to the mark and to `@color/ground` makes the system

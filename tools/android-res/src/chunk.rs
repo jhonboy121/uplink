@@ -37,6 +37,13 @@ pub const TYPE_REFERENCE: u8 = 0x01;
 /// A reference to a theme attribute, as `?android:attr/foo` — resolved per theme at runtime.
 pub const TYPE_ATTRIBUTE: u8 = 0x02;
 pub const TYPE_STRING: u8 = 0x03;
+/// An IEEE 754 single, its bits as the data word.
+pub const TYPE_FLOAT: u8 = 0x04;
+/// A number and a unit packed as a "complex": mantissa from bit 8, radix in bits 4-5, unit in 0-3.
+pub const TYPE_DIMENSION: u8 = 0x05;
+/// `dp`. With radix 0 (23p0) the mantissa is the whole number, so `24dp` is `24 << 8 | 1`.
+pub const COMPLEX_UNIT_DIP: u32 = 1;
+pub const COMPLEX_MANTISSA_SHIFT: u32 = 8;
 pub const TYPE_INT_DEC: u8 = 0x10;
 pub const TYPE_INT_HEX: u8 = 0x11;
 pub const TYPE_INT_BOOLEAN: u8 = 0x12;
