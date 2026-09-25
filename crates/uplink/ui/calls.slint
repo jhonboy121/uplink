@@ -17,6 +17,7 @@ global CallWords {
             : ending == Ending.no-answer ? @tr("No answer")
             : ending == Ending.unreachable ? @tr("Couldn't reach them")
             : ending == Ending.needs-update ? @tr("Needs an update")
+            : ending == Ending.screened ? @tr("Not in your contacts")
             : ending == Ending.lost ? @tr("Connection lost")
             : @tr("Did not connect");
     }

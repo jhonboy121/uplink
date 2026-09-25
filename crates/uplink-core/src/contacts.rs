@@ -35,6 +35,18 @@ pub struct Contacts {
 }
 
 impl Contacts {
+    /// Whether `id` is saved, read from the store now rather than a list loaded earlier: the
+    /// endpoint asks while the window adds and removes contacts through its own.
+    pub fn known(db: &Db, id: &EndpointId) -> Result<bool, Error> {
+        db.with(|db| {
+            let found = db
+                .query_row("SELECT 1 FROM contacts WHERE id = ?1", [id.to_string()], |_| Ok(()))
+                .map(|()| true)
+                .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) })?;
+            Ok(found)
+        })
+    }
+
     pub fn open(db: Db) -> Result<Self, Error> {
         db.with(|db| {
             db.execute_batch(
@@ -208,6 +220,20 @@ mod tests {
 
     fn key() -> EndpointId {
         SecretKey::generate().public()
+    }
+
+    /// Read from the store, so a contact another handle added counts at once.
+    #[test]
+    fn known_reads_the_store_now() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Db::open(dir.path())?;
+        let mut contacts = Contacts::open(db.clone())?;
+        let id = key();
+        assert!(!Contacts::known(&db, &id)?);
+        contacts.add("Noor", id)?;
+        assert!(Contacts::known(&db, &id)?);
+        assert!(!Contacts::known(&db, &key())?);
+        Ok(())
     }
 
     #[test]

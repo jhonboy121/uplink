@@ -27,6 +27,8 @@ pub const RELAYS_RANKING: &str = "relays-ranking";
 pub const BLOCK_CAPTURE: &str = "block-capture";
 /// Set when every call asks the other phone to keep its screen from them, for that call.
 pub const ASK_BLOCK_CAPTURE: &str = "ask-block-capture";
+/// Set when a key not in contacts never rings: turned away at signalling and logged.
+pub const REJECT_UNKNOWN: &str = "reject-unknown";
 
 const TRUE: &str = "1";
 
@@ -38,6 +40,11 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The store these settings are in, for what reads another table next to a setting.
+    pub(crate) const fn db(&self) -> &Db {
+        &self.db
+    }
+
     pub fn open(db: Db) -> Result<Self, Error> {
         db.with(|db| {
             db.execute_batch(

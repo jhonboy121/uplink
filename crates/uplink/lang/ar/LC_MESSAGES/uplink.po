@@ -1451,3 +1451,15 @@ msgstr "مفعّل"
 msgctxt "SettingsPage"
 msgid "Off"
 msgstr "متوقف"
+
+msgctxt "SettingsPage"
+msgid "Reject unknown callers"
+msgstr "رفض المتصلين المجهولين"
+
+msgctxt "SettingsPage"
+msgid "Only people in your contacts ring"
+msgstr "يرنّ فقط من في جهات اتصالك"
+
+msgctxt "CallWords"
+msgid "Not in your contacts"
+msgstr "ليس في جهات اتصالك"

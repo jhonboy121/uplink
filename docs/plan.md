@@ -1260,3 +1260,13 @@ default); keep disk usage lean. Avoid build scripts.
     skips the field; the host CLI answers honestly that a terminal cannot).
   - A cooperative block, not a guarantee: a second camera or a modified app gets around it.
     Detecting captures (Android 14+ screenshots, 15+ recordings) is left out: the Huawei is 12.
+- **2026-09-26**: **reject unknown callers** (7b's second switch; the design's copy). On, a key not
+  in contacts never rings: the node screens it in `ring`, after the version check and before
+  `Incoming` is emitted (nothing rings, no call screen), answers it as a decline (`Reject`), and
+  ends it `EndReason::Screened`, which the log records as "Not in your contacts". Contacts are
+  read from the store at each call (`Contacts::known`), so one saved a moment ago rings; a store
+  that cannot be read rings rather than turning a contact away. Busy while in a call, as before.
+  The connection is up by then, so it does not hide that the key answers, only the phone stays
+  quiet. The host CLI screens too if the flag is set in its data dir (it has no switch).
+  - **Not as designed yet:** the design puts this and *share my profile* on their own Privacy
+    page; they are rows in a Settings group, with the screenshot switches. Raise with the user.

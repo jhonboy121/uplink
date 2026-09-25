@@ -198,7 +198,7 @@ const fn disconnect(reason: &EndReason) -> Disconnect {
     match reason {
         EndReason::LocalHangup => Disconnect::Local,
         EndReason::RemoteHangup | EndReason::Rejected | EndReason::NoAnswer => Disconnect::Remote,
-        EndReason::Declined => Disconnect::Rejected,
+        EndReason::Declined | EndReason::Screened { .. } => Disconnect::Rejected,
         EndReason::Busy => Disconnect::Busy,
         EndReason::DialTimeout
         | EndReason::Incompatible { .. }
@@ -278,6 +278,8 @@ impl Ledger {
                 let call = match (self.pending.take(), reason, peer) {
                     (Some(call), ..) => call,
                     (None, EndReason::Incompatible { .. }, Some(peer)) => Pending::new(*peer, true, Mode::Video),
+                    // Screened: turned away before ringing, and logged so it can be seen.
+                    (None, EndReason::Screened { mode }, Some(peer)) => Pending::new(*peer, true, *mode),
                     (None, ..) => return None,
                 };
                 let record = CallRecord {

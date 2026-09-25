@@ -60,7 +60,8 @@ final class UplinkKeystore {
       throw new GeneralSecurityException("not a sealed identity");
     }
     Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-    cipher.init(Cipher.DECRYPT_MODE, key(false), new GCMParameterSpec(TAG_BITS, sealed, 1, IV_BYTES));
+    cipher.init(
+        Cipher.DECRYPT_MODE, key(false), new GCMParameterSpec(TAG_BITS, sealed, 1, IV_BYTES));
     return cipher.doFinal(sealed, HEADER, sealed.length - HEADER);
   }
 
@@ -93,8 +94,7 @@ final class UplinkKeystore {
             .setIsStrongBoxBacked(strongBox)
             .build());
     SecretKey key = generator.generateKey();
-    UplinkApplication.log(
-        Log.INFO, "keystore: identity key made, StrongBox " + strongBox);
+    UplinkApplication.log(Log.INFO, "keystore: identity key made, StrongBox " + strongBox);
     return key;
   }
 }

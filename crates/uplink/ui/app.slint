@@ -222,6 +222,8 @@ export component App inherits Window {
     // Privacy: screenshots and recordings.
     in property <bool> block-capture;
     in property <bool> ask-block-capture;
+    in property <bool> reject-unknown;
+    callback toggle-reject-unknown();
     callback toggle-block-capture();
     callback toggle-ask-block-capture();
     in property <bool> maker-list: false;
@@ -370,6 +372,8 @@ export component App inherits Window {
                     full-screen-calls: root.full-screen-calls;
                     block-capture: root.block-capture;
                     ask-block-capture: root.ask-block-capture;
+                    reject-unknown: root.reject-unknown;
+                    toggle-reject-unknown => { root.toggle-reject-unknown(); }
                     toggle-block-capture => { root.toggle-block-capture(); }
                     toggle-ask-block-capture => { root.toggle-ask-block-capture(); }
                     maker-list: root.maker-list;

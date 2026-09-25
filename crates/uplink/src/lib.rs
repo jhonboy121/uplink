@@ -1859,6 +1859,20 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     show_capture(&state, &ui);
     apply_capture(&state, &platform);
 
+    // Read by the endpoint at each incoming call, so saving it is all it takes.
+    ui.set_reject_unknown(settings.flag(settings::REJECT_UNKNOWN));
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_toggle_reject_unknown(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let on = !ui.get_reject_unknown();
+        tracing::info!(on, "reject unknown callers");
+        match with_state_value(&s, |state| state.settings.set_flag(settings::REJECT_UNKNOWN, on)) {
+            Some(Ok(())) => ui.set_reject_unknown(on),
+            Some(Err(e)) => tracing::warn!("saving reject unknown callers: {e}"),
+            None => {}
+        }
+    });
+
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
         let Some(ui) = weak.upgrade() else { return };

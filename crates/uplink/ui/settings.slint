@@ -123,6 +123,8 @@ export component SettingsPage inherits Rectangle {
     in property <bool> full-screen-calls;
     in property <bool> block-capture;
     in property <bool> ask-block-capture;
+    in property <bool> reject-unknown;
+    callback toggle-reject-unknown();
     callback toggle-block-capture();
     callback toggle-ask-block-capture();
     in property <bool> maker-list;
@@ -234,10 +236,19 @@ export component SettingsPage inherits Rectangle {
                         clicked => { root.edit-relays(); }
                     }
                 }
-                // Screenshots and recordings: ours always, theirs asked of per call. Two
-                // switches, off until chosen; the other phone's app does the blocking, so an
-                // older one cannot, and the call screen says so.
+                // Who can ring, then screenshots and recordings: ours always, theirs asked of
+                // per call. All off until chosen; the other phone's app does the blocking, so
+                // an older one cannot, and the call screen says so.
                 SettingsGroup {
+                    // Turned away at signalling and logged; it cannot hide that the key answers.
+                    SettingsRow {
+                        icon: @image-url("icons/call-in.svg");
+                        title: @tr("Reject unknown callers");
+                        detail: @tr("Only people in your contacts ring");
+                        value: root.reject-unknown ? @tr("On") : @tr("Off");
+                        clicked => { root.toggle-reject-unknown(); }
+                    }
+                    SettingsDivider { }
                     SettingsRow {
                         icon: @image-url("icons/camera-off.svg");
                         title: @tr("Block screenshots");

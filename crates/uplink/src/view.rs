@@ -201,6 +201,7 @@ pub const fn ending(outcome: Outcome) -> Ending {
         Outcome::NoAnswer => Ending::NoAnswer,
         Outcome::Unreachable => Ending::Unreachable,
         Outcome::Incompatible => Ending::NeedsUpdate,
+        Outcome::Screened => Ending::Screened,
         Outcome::Failed => Ending::Failed,
     }
 }

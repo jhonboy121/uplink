@@ -35,6 +35,8 @@ pub enum Outcome {
     Lost,
     /// The network gave out, or the call failed for a reason worth reporting.
     Failed,
+    /// Theirs, turned away without ringing: not in contacts, with reject unknown callers on.
+    Screened,
 }
 
 impl Outcome {
@@ -52,6 +54,7 @@ impl Outcome {
         match reason {
             EndReason::Busy | EndReason::Failed(_) | EndReason::ConnectionLost | EndReason::Refused => Self::Failed,
             EndReason::Incompatible { .. } => Self::Incompatible,
+            EndReason::Screened { .. } => Self::Screened,
             EndReason::DialTimeout => Self::Unreachable,
             EndReason::NoAnswer => Self::NoAnswer,
             EndReason::Declined => Self::Declined,
@@ -79,6 +82,7 @@ impl Outcome {
             Self::NoAnswer => "no-answer",
             Self::Unreachable => "unreachable",
             Self::Incompatible => "incompatible",
+            Self::Screened => "screened",
             Self::Lost => "lost",
             Self::Failed => "failed",
         }
@@ -101,6 +105,7 @@ impl Outcome {
             "no-answer" => Self::NoAnswer,
             "unreachable" => Self::Unreachable,
             "incompatible" => Self::Incompatible,
+            "screened" => Self::Screened,
             "lost" => Self::Lost,
             _ => Self::Failed,
         }

@@ -167,6 +167,10 @@ pub enum EndReason {
     ConnectionLost,
     /// The platform would not have the call, as [`Command::Refused`] said.
     Refused,
+    /// A key not in contacts, turned away before it rang: reject unknown callers is on.
+    Screened {
+        mode: Mode,
+    },
     Failed(String),
 }
 
@@ -211,8 +215,11 @@ impl Node {
         emit(&events, Event::Ready { id: endpoint.id() }).await;
         let (in_call, in_call_rx) = watch::channel(false);
         let (platform_network, platform_network_rx) = watch::channel(true);
+        // Who may ring: the settings, and the contacts beside them. A local network has neither.
+        let mut gate = None;
         let pilot = match network {
             Network::Public(store) => {
+                gate = Some(store.clone());
                 drop(tokio::spawn(watch_reachable(endpoint.clone(), events.clone(), platform_network_rx)));
                 drop(tokio::spawn(heartbeat(endpoint.clone())));
                 let (steer, steer_rx) = mpsc::channel(CONTROL_QUEUE);
@@ -234,6 +241,7 @@ impl Node {
             finished,
             finished_rx,
             hello: Hello::ours(app),
+            gate,
             pilot,
             in_call,
             platform_network,
@@ -479,6 +487,8 @@ struct Engine {
     /// What this build says about itself in every offer and answer.
     hello: Hello,
     /// The relay pilot's commands; none on a local network.
+    /// The store that says whether unknown callers ring; `None` rings everyone.
+    gate: Option<Settings>,
     pilot: Option<mpsc::Sender<Steer>>,
     /// Whether a call is up, which the pilot waits on before it moves the home relay.
     in_call: watch::Sender<bool>,
@@ -563,7 +573,14 @@ impl Engine {
             return;
         }
         let (control, control_rx) = mpsc::channel(CONTROL_QUEUE);
-        let task = answer(incoming, self.endpoint.clone(), control_rx, self.events.clone(), self.hello.clone());
+        let task = answer(
+            incoming,
+            self.endpoint.clone(),
+            control_rx,
+            self.events.clone(),
+            self.hello.clone(),
+            self.gate.clone(),
+        );
         self.spawn_call(control, None, task);
     }
 
@@ -771,13 +788,14 @@ async fn answer(
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: Hello,
+    gate: Option<Settings>,
 ) -> CallOutcome {
     let connection = match accept_connection(incoming).await {
         Ok(connection) => connection,
         Err(e) => return (None, Err(e)),
     };
     let peer = connection.remote_id();
-    (Some(peer), ring(connection, &endpoint, &mut control, events, &hello).await)
+    (Some(peer), ring(connection, &endpoint, &mut control, events, &hello, gate.as_ref()).await)
 }
 
 async fn accept_connection(incoming: Incoming) -> Result<Connection, Error> {
@@ -796,12 +814,28 @@ async fn first_offer(connection: &Connection, signals: &mut Signals) -> Result<H
     }
 }
 
+/// Whether reject unknown callers is on and `peer` is not a contact. A store that cannot be read
+/// rings: a contact who cannot get through is worse than a stranger who can.
+fn screened(settings: &Settings, peer: &EndpointId) -> bool {
+    if !settings.flag(crate::settings::REJECT_UNKNOWN) {
+        return false;
+    }
+    match crate::contacts::Contacts::known(settings.db(), peer) {
+        Ok(known) => !known,
+        Err(e) => {
+            tracing::warn!("reading contacts to screen a call; it rings: {e}");
+            false
+        }
+    }
+}
+
 async fn ring(
     connection: Connection,
     endpoint: &Endpoint,
     control: &mut mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
     hello: &Hello,
+    gate: Option<&Settings>,
 ) -> Result<Option<EndReason>, Error> {
     let peer = connection.remote_id();
     let key_exchange = secure(&connection)?;
@@ -819,6 +853,13 @@ async fn ring(
         return Ok(None);
     }
     let mode = if setup.voice { Mode::Voice } else { Mode::Video };
+    // Turned away as a decline before anything rings, and logged. The connection is already up by
+    // now, so this does not hide that the key answers: only the phone stays quiet.
+    if gate.is_some_and(|settings| screened(settings, &peer)) {
+        tracing::info!(%peer, ?mode, "screened: not in contacts");
+        finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
+        return Ok(Some(EndReason::Screened { mode }));
+    }
     tracing::info!(%peer, protocol = theirs.protocol, app = theirs.app, ?mode, "incoming call");
     emit(&events, Event::Incoming { peer, mode }).await;
     let mut ours = MediaState::default();
@@ -1244,6 +1285,21 @@ mod tests {
     use super::*;
 
     const TIMEOUT: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn only_unknown_keys_are_screened_and_only_when_asked() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = crate::db::Db::open(dir.path())?;
+        let settings = Settings::open(db.clone())?;
+        let mut contacts = crate::contacts::Contacts::open(db)?;
+        let (saved, stranger) = (SecretKey::generate().public(), SecretKey::generate().public());
+        contacts.add("Noor", saved)?;
+        assert!(!screened(&settings, &stranger), "off by default: everyone rings");
+        settings.set_flag(crate::settings::REJECT_UNKNOWN, true)?;
+        assert!(screened(&settings, &stranger));
+        assert!(!screened(&settings, &saved));
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn classical_key_exchange_is_refused() -> anyhow::Result<()> {
