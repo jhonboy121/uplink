@@ -10,11 +10,20 @@ import { Line, Prose, Row, SheetTitle, Tap, Wide } from "controls.slint";
 // a field the sheet exists for is never the part that ends up underneath it.
 component Sheet inherits Rectangle {
     in property <length> keyboard;
+    // A picker, not a decision: a tap on the dimmed area closes it, as Back does.
+    in property <bool> outside-closes: false;
+    callback closed();
     background: Theme.scrim;
 
-    // Swallows taps on the dimmed area, so the sheet is dismissed deliberately and nothing
-    // behind it reacts.
-    TouchArea { }
+    // Swallows taps on the dimmed area, so nothing behind it reacts, and a sheet that asks
+    // something is dismissed deliberately.
+    Tap {
+        tapped => {
+            if (root.outside-closes) {
+                root.closed();
+            }
+        }
+    }
 
     Rectangle {
         width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
@@ -23,6 +32,8 @@ component Sheet inherits Rectangle {
         animate y { duration: 180ms; easing: ease-out; }
         border-radius: Theme.wide-radius;
         background: Theme.ground;
+        // The card's own empty space is not outside it.
+        TouchArea { }
         body := VerticalLayout {
             padding: Theme.edge;
             spacing: Theme.stack-gap;
@@ -171,6 +182,7 @@ export component AudioSheet inherits Sheet {
     in property <bool> silenced;
     callback choose(int);
     callback silence();
+    outside-closes: true;
 
     SheetTitle { text: @tr("Audio"); }
     VerticalLayout {

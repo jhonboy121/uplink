@@ -1707,8 +1707,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
     ui.on_choose_output(move |index| {
         silence(&s, &weak, false);
-        if let Ok(index) = usize::try_from(index) {
-            choose_output(&p, index);
+        if let (Ok(index), Some(ui)) = (usize::try_from(index), weak.upgrade()) {
+            choose_output(&s, &ui, &p, index);
         }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
@@ -2083,11 +2083,11 @@ fn next_output(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
     let next = (at + 1) % choices;
     if next == telecom.routes.len() {
         silence(state, &ui.as_weak(), true);
+        sync_chrome(state, ui, platform);
     } else {
         silence(state, &ui.as_weak(), false);
-        choose_output(platform, next);
+        choose_output(state, ui, platform, next);
     }
-    sync_chrome(state, ui, platform);
 }
 
 /// Mute as an output: their voice stops playing, here only. Our mic and what they see of us
@@ -2106,11 +2106,22 @@ fn silence(state: &Rc<RefCell<State>>, ui: &slint::Weak<App>, silenced: bool) {
     }
 }
 
-/// Asks Telecom for one of the outputs it listed; it answers by reporting the route again.
-fn choose_output(platform: &Platform, index: usize) {
+/// Asks Telecom for one of the outputs it listed, and shows it as chosen at once: until Telecom
+/// reports it, what it reports is the output being left, and the Audio key and the small window's
+/// button would flash that first. Its report confirms this, or puts back what it did instead.
+fn choose_output(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform, index: usize) {
+    with_state(state, |s| {
+        s.telecom.current = Some(index);
+        // Rerouting restarts our voice streams; the gap is ours, not their network's.
+        s.health.ours_restarted();
+    });
+    if let Ok(shown) = i32::try_from(index) {
+        ui.set_call_output(shown);
+    }
     if let Err(e) = platform.context().telecom_choose_route(index) {
         tracing::warn!(index, "choosing an output: {e}");
     }
+    sync_chrome(state, ui, platform);
 }
 
 /// Telecom changed the call's hold, mute or outputs: read what it says now and follow it.

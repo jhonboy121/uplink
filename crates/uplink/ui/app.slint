@@ -432,6 +432,7 @@ export component App inherits Window {
                 root.choosing-output = false;
                 root.silence();
             }
+            closed => { root.choosing-output = false; }
         }
 
         // Their ask to switch to video, over the call, whether it is up or folded away.
