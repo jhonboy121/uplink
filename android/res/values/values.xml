@@ -30,6 +30,12 @@
     <string name="mute">Mute</string>
     <string name="unmute">Unmute</string>
     <string name="end_call">End call</string>
+    <string name="audio_output">Audio: %1$s</string>
+    <string name="output_phone">Phone</string>
+    <string name="output_speaker">Speaker</string>
+    <string name="output_bluetooth">Bluetooth</string>
+    <string name="output_wired">Wired headphones</string>
+    <string name="output_mute">Mute</string>
 
     <!-- Ringing. -->
     <string name="channel_ring">Incoming calls</string>

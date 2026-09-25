@@ -37,6 +37,8 @@
     <!-- Calls go through Telecom as a self-managed app: audio mode, routes, headset buttons and
          hold are the system's. A normal permission, granted at install. -->
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <!-- The proximity lock: a voice call on the earpiece turns the screen off at the ear. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- From Android 11 another app's component resolves to nothing unless its package is named
          here, installed or not. These are the makers whose background lists we can offer; see

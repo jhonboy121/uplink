@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
 use uplink_android::camera::{Camera, Facing, Intent};
 use uplink_android::codec::{Avc, VideoConfig};
-use uplink_android::platform::{Permission, Platform, PlatformEvent, TelecomState, Text};
+use uplink_android::platform::{CallScreen, Permission, Platform, PlatformEvent, RouteKind, TelecomState, Text};
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
@@ -159,6 +159,9 @@ struct State {
     reconnecting: bool,
     /// The call as Telecom last said: held, muted by the system, and where the sound goes.
     telecom: TelecomState,
+    /// What the screen and the small window's output button were last told, so each is told
+    /// again only when it changes.
+    chrome: Option<Chrome>,
     /// The call's counters, voice or video: a voice call has no codecs to hold them.
     media: Option<Arc<MediaStats>>,
     /// The chip's answer, which also says whose side a stalled call is on.
@@ -1162,6 +1165,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         camera_on: true,
         reconnecting: false,
         telecom: TelecomState::default(),
+        chrome: None,
         media: None,
         reach: CoreReach::Connecting,
         network_moved: None,
@@ -1579,7 +1583,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                     with_state(&s, |state| state.clock.forget());
                     show_calls(&s, &ui);
                 }
-                PlatformEvent::CallAudio => follow_telecom(&s, &ui, &p),
+                PlatformEvent::CallAudio => {
+                    follow_telecom(&s, &ui, &p);
+                    sync_chrome(&s, &ui, &p);
+                }
+                PlatformEvent::NextOutput => next_output(&s, &ui, &p),
             }
         }
     });
@@ -1886,7 +1894,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     })?;
 
     let stats_timer = Timer::default();
-    let s = Rc::clone(&state);
+    let (s, p, window) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
     let mut last = (Instant::now(), cpu::process_seconds());
     let mut ticks: u32 = 0;
     stats_timer.start(TimerMode::Repeated, STATS_INTERVAL, move || {
@@ -1930,6 +1938,10 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 ui.set_call_weak(view::weak(weak));
             }
         });
+        // A call starting, ending, turning video or going on hold: within the second.
+        if let Some(ui) = window.upgrade() {
+            sync_chrome(&s, &ui, &p);
+        }
     });
 
     let outcome = ui.run();
@@ -2013,6 +2025,69 @@ fn place_call(state: &Rc<RefCell<State>>, weak: &slint::Weak<App>, platform: &Pl
         set_peer(&ui, &name);
         start_call_service(platform, &name, mode);
     }
+}
+
+/// What a call needs outside the window's own pixels: the screen, and the small window's output
+/// button.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Chrome {
+    screen: CallScreen,
+    /// `None` is Mute.
+    output: Option<RouteKind>,
+}
+
+impl Chrome {
+    /// As Signal does it: video keeps the screen on, a voice call on the earpiece turns it off at
+    /// the ear, and anything else (speaker, a headset, on hold, no call) leaves it alone.
+    fn of(ui: &App, telecom: &TelecomState) -> Self {
+        let silenced = ui.get_call_silenced();
+        let routed = telecom.current.and_then(|index| telecom.routes.get(index)).map(|route| route.kind);
+        let live = matches!(ui.get_call_state(), CallState::Dialing | CallState::Ringing | CallState::Connected);
+        let screen = if !live || ui.get_call_held() {
+            CallScreen::Normal
+        } else if !ui.get_call_voice() {
+            CallScreen::On
+        } else if routed == Some(RouteKind::Phone) && !silenced {
+            CallScreen::Proximity
+        } else {
+            CallScreen::Normal
+        };
+        let output = if silenced { None } else { Some(routed.unwrap_or(RouteKind::Speaker)) };
+        Self { screen, output }
+    }
+}
+
+/// Tells Android what the call needs of the screen and the small window, when that changed.
+fn sync_chrome(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
+    let Some(telecom) = with_state_value(state, |s| s.telecom.clone()) else { return };
+    let now = Chrome::of(ui, &telecom);
+    let Some(before) = with_state_value(state, |s| s.chrome.replace(now)) else { return };
+    if before.map(|c| c.screen) != Some(now.screen)
+        && let Err(e) = platform.set_call_screen(now.screen)
+    {
+        tracing::warn!(screen = ?now.screen, "call screen: {e}");
+    }
+    if before.map(|c| c.output) != Some(now.output)
+        && let Err(e) = platform.set_pip_output(now.output)
+    {
+        tracing::warn!("small window's output button: {e}");
+    }
+}
+
+/// The small window's output button: the next output in Telecom's order, then Mute, then round
+/// again, with no sheet in between.
+fn next_output(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
+    let Some(telecom) = with_state_value(state, |s| s.telecom.clone()) else { return };
+    let choices = telecom.routes.len() + 1;
+    let at = if ui.get_call_silenced() { telecom.routes.len() } else { telecom.current.unwrap_or_default() };
+    let next = (at + 1) % choices;
+    if next == telecom.routes.len() {
+        silence(state, &ui.as_weak(), true);
+    } else {
+        silence(state, &ui.as_weak(), false);
+        choose_output(platform, next);
+    }
+    sync_chrome(state, ui, platform);
 }
 
 /// Mute as an output: their voice stops playing, here only. Our mic and what they see of us

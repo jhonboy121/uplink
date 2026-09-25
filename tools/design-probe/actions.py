@@ -18,7 +18,17 @@ CHROMIUM = "/usr/bin/chromium"
 # Comfortably above the ~48dp the system draws them at, on any density.
 SIZE = 144
 # The SVG name, and the drawable name UplinkActivity looks up with getIdentifier.
-WANTED = {"mic.svg": "mic", "mic-off.svg": "mic_off", "call-end.svg": "call_end"}
+WANTED = {
+    "mic.svg": "mic",
+    "mic-off.svg": "mic_off",
+    "call-end.svg": "call_end",
+    # The output button, which draws where the sound goes now.
+    "call.svg": "output_phone",
+    "speaker.svg": "output_speaker",
+    "bluetooth.svg": "output_bluetooth",
+    "headphones.svg": "output_wired",
+    "speaker-off.svg": "output_mute",
+}
 
 PAGE = """<!doctype html>
 <style>

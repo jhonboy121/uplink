@@ -130,6 +130,8 @@ public class UplinkApplication extends Application {
     private volatile boolean inCall;
     private volatile String peer = "";
     private volatile boolean micOn = true;
+    /** An `UplinkTelecom.ROUTE_*`, or `OUTPUT_MUTE`. */
+    private volatile int output = UplinkTelecom.ROUTE_SPEAKER;
     /** Whether the call uses the camera: a voice call holds the microphone type alone. */
     private volatile boolean camera;
 
@@ -277,6 +279,15 @@ public class UplinkApplication extends Application {
 
     boolean micOn() {
         return micOn;
+    }
+
+    /** Where the call's sound goes, for the small window's output button. */
+    void setOutput(int kind) {
+        output = kind;
+    }
+
+    int output() {
+        return output;
     }
 
     /**

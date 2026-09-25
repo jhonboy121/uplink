@@ -49,6 +49,8 @@ final class UplinkTelecom {
     static final int ROUTE_SPEAKER = 1;
     static final int ROUTE_BLUETOOTH = 2;
     static final int ROUTE_WIRED = 3;
+    /** Not an output Telecom offers, but one of ours: their voice not played. */
+    static final int OUTPUT_MUTE = 4;
     private static final int NO_ROUTE = -1;
 
     private static final String ACCOUNT_ID = "uplink";

@@ -1085,3 +1085,20 @@ default); keep disk usage lean. Avoid build scripts.
     cycles through the outputs (and Mute) with no sheet. There is no separate microphone to pick:
     with Telecom the mic follows the output (a Bluetooth headset brings its own, wired its own, else
     the phone's), so "which mic" is answered by the output.
+- **2026-09-25**: **screen and picture-in-picture during a call, built** (the to-do above). Not yet
+  device-tested.
+  - **Screen, as Signal's `LockManager` does it:** video keeps it on (`FLAG_KEEP_SCREEN_ON`); a voice
+    call on the earpiece holds a proximity lock (off at the ear, released with
+    `RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY` so it does not light up against a cheek); speaker, a headset,
+    Mute, on hold or no call leave it alone. Rust derives it once a second and on every Telecom change,
+    and tells Java only when it changes: the lock is not reference counted, and re-acquiring it would
+    wake a screen the user turned off. `WAKE_LOCK` added.
+  - **Picture-in-picture buttons:** Mute, End call, the output (three is what Android allows; End call
+    in the middle, as calling apps have it, after a tap meant for an edge hung up). The output button
+    draws where the sound goes and a tap moves to the next output, then Mute, then round, with no
+    sheet. Its title names the output ("Audio: Speaker"): Samsung's small window redrew the icon only
+    when the title changed, so a new icon under a fixed title stayed stale. Its drawables are rendered from the UI's own SVGs by `tools/design-probe/actions.py`.
+- **2026-09-25**: **to do — drawables as vectors** (a cleanup pass of its own). The notification and
+  picture-in-picture icons are PNGs rendered through Chromium; they should be `<vector>` drawables
+  converted from the same SVGs, compiled by `tools/android-res` (check it handles `<vector>`/`<path>`
+  attributes), and the PNGs and `actions.py` retired. `R.drawable` is already generated.

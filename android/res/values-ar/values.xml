@@ -15,6 +15,12 @@
     <string name="mute">كتم الصوت</string>
     <string name="unmute">إلغاء الكتم</string>
     <string name="end_call">إنهاء المكالمة</string>
+    <string name="audio_output">الصوت: %1$s</string>
+    <string name="output_phone">الهاتف</string>
+    <string name="output_speaker">مكبر الصوت</string>
+    <string name="output_bluetooth">بلوتوث</string>
+    <string name="output_wired">سماعات سلكية</string>
+    <string name="output_mute">كتم الصوت</string>
 
     <string name="channel_ring">المكالمات الواردة</string>
     <string name="incoming_video_call">مكالمة فيديو واردة</string>

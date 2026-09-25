@@ -103,7 +103,40 @@ pub enum RouteKind {
     Wired,
 }
 
+/// What a call needs of the screen. Must match `UplinkActivity.SCREEN_*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallScreen {
+    /// It times out as it always does.
+    Normal,
+    /// Kept on: a video call.
+    On,
+    /// Off at the ear: a voice call on the earpiece.
+    Proximity,
+}
+
+impl CallScreen {
+    const fn code(self) -> jint {
+        match self {
+            Self::Normal => 0,
+            Self::On => 1,
+            Self::Proximity => 2,
+        }
+    }
+}
+
+/// `UplinkTelecom.OUTPUT_MUTE`: our own "output", their voice not played.
+const OUTPUT_MUTE: jint = 4;
+
 impl RouteKind {
+    const fn code(self) -> jint {
+        match self {
+            Self::Phone => 0,
+            Self::Speaker => 1,
+            Self::Bluetooth => 2,
+            Self::Wired => 3,
+        }
+    }
+
     const fn from_code(code: jint) -> Option<Self> {
         match code {
             0 => Some(Self::Phone),
@@ -458,6 +491,8 @@ pub enum PlatformEvent {
     /// Telecom changed the call's hold, mute or outputs: read them with
     /// [`AppContext::telecom_state`].
     CallAudio,
+    /// The small window's output button: the next output, or Mute.
+    NextOutput,
 }
 
 impl PlatformEvent {
@@ -468,6 +503,7 @@ impl PlatformEvent {
             2 => Some(Self::Answer),
             3 => Some(Self::ClockChanged),
             4 => Some(Self::CallAudio),
+            5 => Some(Self::NextOutput),
             _ => None,
         }
     }
@@ -627,6 +663,28 @@ impl Platform {
         })?;
         self.on_screen(|env, activity| {
             env.call_method(activity, jni_str!("refreshPictureInPicture"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
+    /// Where the call's sound goes, for the small window's output button: an output, or `None`
+    /// for Mute.
+    pub fn set_pip_output(&self, output: Option<RouteKind>) -> Result<(), Error> {
+        let code = output.map_or(OUTPUT_MUTE, RouteKind::code);
+        self.with_context(|env, context| {
+            env.call_method(context, jni_str!("setOutput"), jni_sig!("(I)V"), &[JValue::Int(code)])?;
+            Ok(())
+        })?;
+        self.on_screen(|env, activity| {
+            env.call_method(activity, jni_str!("refreshPictureInPicture"), jni_sig!("()V"), &[])?;
+            Ok(())
+        })
+    }
+
+    /// Kept on for video, off at the ear on the earpiece, or left alone. Java ignores a repeat.
+    pub fn set_call_screen(&self, screen: CallScreen) -> Result<(), Error> {
+        self.on_screen(|env, activity| {
+            env.call_method(activity, jni_str!("setCallScreen"), jni_sig!("(I)V"), &[JValue::Int(screen.code())])?;
             Ok(())
         })
     }

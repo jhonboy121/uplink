@@ -16,11 +16,13 @@ import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Rational;
 import android.view.HapticFeedbackConstants;
 import android.view.WindowInsetsController;
+import android.view.WindowManager;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -51,6 +53,18 @@ public class UplinkActivity extends NativeActivity {
     static final int ACTION_CLOCK = 3;
     /** Telecom changed the call's hold, mute or outputs; the window reads them back. */
     static final int ACTION_AUDIO = 4;
+    /** The small window's output button: the next output, or Mute, with no sheet. */
+    static final int ACTION_OUTPUT = 5;
+
+    /** What a call needs of the screen. Must match `CallScreen` in Rust. */
+    static final int SCREEN_NORMAL = 0;
+    /** Video: the picture is the point, so the screen stays on. */
+    static final int SCREEN_ON = 1;
+    /** A voice call on the earpiece: off at the ear, back on away from it. */
+    static final int SCREEN_PROXIMITY = 2;
+    private int screen = SCREEN_NORMAL;
+    /** Made once and not reference counted: every acquire of a held lock would wake the screen again. */
+    private PowerManager.WakeLock proximity;
     /** Why the activity was opened for a call, from the ringing notification. */
     static final String EXTRA_CALL = "call";
     static final int CALL_SHOW = 1;
@@ -452,13 +466,97 @@ public class UplinkActivity extends NativeActivity {
     private List<RemoteAction> callActions() {
         List<RemoteAction> actions = new ArrayList<>();
         boolean micOn = app().micOn();
-        actions.add(action(micOn ? R.drawable.mic : R.drawable.mic_off, micOn ? R.string.mute : R.string.unmute, ACTION_MIC));
-        actions.add(action(R.drawable.call_end, R.string.end_call, ACTION_HANGUP));
+        String mic = app().text(micOn ? R.string.mute : R.string.unmute);
+        actions.add(action(micOn ? R.drawable.mic : R.drawable.mic_off, mic, ACTION_MIC));
+        // End call between the two toggles, as calling apps have it: the edges are the safe spots.
+        actions.add(action(R.drawable.call_end, app().text(R.string.end_call), ACTION_HANGUP));
+        int output = app().output();
+        // The title names the output as well as the icon drawing it: the system's small window
+        // only redraws a button whose title changed, so a new icon under the same words is dropped.
+        String where = app().text(R.string.audio_output, app().text(outputName(output)));
+        actions.add(action(outputIcon(output), where, ACTION_OUTPUT));
         return actions;
     }
 
-    private RemoteAction action(int drawable, int title, int code) {
-        String words = app().text(title);
+    /** Where the sound goes now, drawn as the call screen's Audio key draws it. */
+    private static int outputIcon(int output) {
+        switch (output) {
+            case UplinkTelecom.ROUTE_PHONE:
+                return R.drawable.output_phone;
+            case UplinkTelecom.ROUTE_BLUETOOTH:
+                return R.drawable.output_bluetooth;
+            case UplinkTelecom.ROUTE_WIRED:
+                return R.drawable.output_wired;
+            case UplinkTelecom.OUTPUT_MUTE:
+                return R.drawable.output_mute;
+            default:
+                return R.drawable.output_speaker;
+        }
+    }
+
+    private static int outputName(int output) {
+        switch (output) {
+            case UplinkTelecom.ROUTE_PHONE:
+                return R.string.output_phone;
+            case UplinkTelecom.ROUTE_BLUETOOTH:
+                return R.string.output_bluetooth;
+            case UplinkTelecom.ROUTE_WIRED:
+                return R.string.output_wired;
+            case UplinkTelecom.OUTPUT_MUTE:
+                return R.string.output_mute;
+            default:
+                return R.string.output_speaker;
+        }
+    }
+
+    /**
+     * What the call needs of the screen, from Rust, only when it changes: the proximity lock is
+     * not reference counted, and acquiring it again would turn a screen back on that the user or
+     * the sensor had turned off.
+     */
+    void setCallScreen(final int mode) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mode == screen) {
+                    return;
+                }
+                screen = mode;
+                if (mode == SCREEN_ON) {
+                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                } else {
+                    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                }
+                PowerManager.WakeLock lock = proximity();
+                if (lock == null) {
+                    return;
+                }
+                if (mode == SCREEN_PROXIMITY) {
+                    lock.acquire();
+                } else if (lock.isHeld()) {
+                    // Not while it is still at the ear: the screen lighting up against a cheek
+                    // is how calls get hung up by accident.
+                    lock.release(PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY);
+                }
+                log(Log.INFO, "call screen " + mode);
+            }
+        });
+    }
+
+    /** Null on a phone without a proximity sensor, where the screen just times out. */
+    private PowerManager.WakeLock proximity() {
+        if (proximity == null) {
+            PowerManager power = getSystemService(PowerManager.class);
+            if (power == null || !power.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                return null;
+            }
+            proximity = power.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "uplink:proximity");
+            proximity.setReferenceCounted(false);
+        }
+        return proximity;
+    }
+
+    private RemoteAction action(int drawable, String words, int code) {
         Intent intent = new Intent(ACTION_CALL).setPackage(getPackageName()).putExtra(EXTRA_ACTION, code);
         PendingIntent pending = PendingIntent.getBroadcast(
                 this, code, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -501,6 +599,9 @@ public class UplinkActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        if (proximity != null && proximity.isHeld()) {
+            proximity.release();
+        }
         unregisterReceiver(callActions);
         unregisterReceiver(clockChanges);
         long handle = nativeHandle;
