@@ -26,7 +26,6 @@
 
     <!-- A call in progress, in its notification and its shrunken window. -->
     <string name="channel_calls">Calls</string>
-    <string name="call_in_progress">Call in progress</string>
     <string name="mute">Mute</string>
     <string name="unmute">Unmute</string>
     <string name="end_call">End call</string>
@@ -40,8 +39,6 @@
     <!-- Ringing. -->
     <string name="channel_ring">Incoming calls</string>
     <string name="incoming_video_call">Incoming video call</string>
-    <string name="decline">Decline</string>
-    <string name="answer">Answer</string>
 
     <!-- Missed calls, counted in one notification. -->
     <string name="channel_missed">Missed calls</string>

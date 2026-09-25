@@ -407,15 +407,13 @@ public class UplinkActivity extends NativeActivity {
      * fill either way. The actions are what the window can be driven with once it is small.
      */
     private PictureInPictureParams pictureInPictureParams() {
-        PictureInPictureParams.Builder params = new PictureInPictureParams.Builder()
+        return new PictureInPictureParams.Builder()
                 .setAspectRatio(new Rational(PIP_WIDTH, PIP_HEIGHT))
-                .setActions(callActions());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Hands the shrink animation to the system, so the home gesture is one movement
-            // instead of the window appearing after it.
-            params.setAutoEnterEnabled(true);
-        }
-        return params.build();
+                .setActions(callActions())
+                // Hands the shrink animation to the system, so the home gesture is one movement
+                // instead of the window appearing after it.
+                .setAutoEnterEnabled(true)
+                .build();
     }
 
     /**
@@ -456,11 +454,7 @@ public class UplinkActivity extends NativeActivity {
 
     /** Nothing to watch, so leaving the app should just leave it. */
     private PictureInPictureParams idleParams() {
-        PictureInPictureParams.Builder params = new PictureInPictureParams.Builder();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            params.setAutoEnterEnabled(false);
-        }
-        return params.build();
+        return new PictureInPictureParams.Builder().setAutoEnterEnabled(false).build();
     }
 
     private List<RemoteAction> callActions() {

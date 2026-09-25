@@ -11,7 +11,6 @@
     <string name="starting_text">uplink يتصل بالشبكة</string>
 
     <string name="channel_calls">المكالمات</string>
-    <string name="call_in_progress">مكالمة جارية</string>
     <string name="mute">كتم الصوت</string>
     <string name="unmute">إلغاء الكتم</string>
     <string name="end_call">إنهاء المكالمة</string>
@@ -24,8 +23,6 @@
 
     <string name="channel_ring">المكالمات الواردة</string>
     <string name="incoming_video_call">مكالمة فيديو واردة</string>
-    <string name="decline">رفض</string>
-    <string name="answer">رد</string>
 
     <string name="channel_missed">المكالمات الفائتة</string>
     <plurals name="missed_calls">

@@ -7,7 +7,8 @@ log := "info,iroh::_events::path=debug,iroh::socket::biased_rtt_path_selector=tr
 android_target := "aarch64-linux-android"
 # Only what the manifest shares with the build; the rest of the app's identity (label, versions,
 # targetSdk, its other components) is written in android/AndroidManifest.xml.
-min_sdk := "30"
+# Android 12: the NDK's MediaCodec keys (keyframe on request, bitrate) and CallStyle start there.
+min_sdk := "31"
 app_id := "dev.uplink"
 out_dir := home_directory() / "android/out"
 keystore := home_directory() / "android/debug.keystore"

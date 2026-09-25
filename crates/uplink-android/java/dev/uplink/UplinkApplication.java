@@ -21,7 +21,6 @@ import android.content.res.Configuration;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.drawable.Icon;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
@@ -689,15 +688,8 @@ public class UplinkApplication extends Application {
                 // a heads-up when it is in use.
                 .setFullScreenIntent(show, true)
                 .setOngoing(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            Person caller = new Person.Builder().setName(who).setImportant(true).build();
-            builder.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer));
-        } else {
-            builder.addAction(new Notification.Action.Builder(
-                            Icon.createWithResource(this, R.drawable.call_end), text(R.string.decline), decline).build())
-                    .addAction(new Notification.Action.Builder(
-                            Icon.createWithResource(this, R.drawable.notification), text(R.string.answer), answer).build());
-        }
+        Person caller = new Person.Builder().setName(who).setImportant(true).build();
+        builder.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer));
         return builder.build();
     }
 

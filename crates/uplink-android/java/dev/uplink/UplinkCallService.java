@@ -10,7 +10,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
-import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -119,24 +118,13 @@ public class UplinkCallService extends Service {
         Notification.Action mute =
                 action(context, micOn ? R.drawable.mic : R.drawable.mic_off, micOn ? R.string.mute : R.string.unmute,
                         UplinkActivity.ACTION_MIC);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Names the person and owns the hang-up itself; the mute rides along beside it.
-            Person who = new Person.Builder().setName(peer).setImportant(true).build();
-            builder.setStyle(Notification.CallStyle.forOngoingCall(who, pending(context, UplinkActivity.ACTION_HANGUP)))
-                    .addAction(mute)
-                    // A call's controls are no use ten seconds after the call starts, which is
-                    // how long the system may otherwise sit on a foreground service's notification.
-                    .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
-        } else {
-            // loadLabel, not getString(labelRes): our manifest has a literal label, no resources.
-            CharSequence title = peer.isEmpty()
-                    ? context.getApplicationInfo().loadLabel(context.getPackageManager())
-                    : peer;
-            builder.setContentTitle(title)
-                    .setContentText(app(context).text(R.string.call_in_progress))
-                    .addAction(action(context, R.drawable.call_end, R.string.end_call, UplinkActivity.ACTION_HANGUP))
-                    .addAction(mute);
-        }
+        // Names the person and owns the hang-up itself; the mute rides along beside it.
+        Person who = new Person.Builder().setName(peer).setImportant(true).build();
+        builder.setStyle(Notification.CallStyle.forOngoingCall(who, pending(context, UplinkActivity.ACTION_HANGUP)))
+                .addAction(mute)
+                // A call's controls are no use ten seconds after the call starts, which is how
+                // long the system may otherwise sit on a foreground service's notification.
+                .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         return builder.build();
     }
 

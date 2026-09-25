@@ -55,7 +55,7 @@ failed loudly — the theme would simply have inherited from the wrong style.
   `android-res package` exists: it deflates every entry except the table, and pads the table's
   extra field (id `0xd935`, as zipalign uses) to align it. apksigner copies entry data verbatim, so
   the alignment survives signing.
-- **minSdk 30 means adaptive icons are always available.** So there is one `mipmap` entry in the
+- **minSdk 31 means adaptive icons are always available.** So there is one `mipmap` entry in the
   default configuration — no density buckets, no `-v26` qualifier, no legacy square fallback.
 
 ## Verifying without a device

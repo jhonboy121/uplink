@@ -7,7 +7,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
-import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -79,14 +78,12 @@ public class UplinkListenService extends Service {
                 .setContentTitle(app().text(ready ? R.string.ready : R.string.starting))
                 .setContentText(app().text(ready ? R.string.ready_text : R.string.starting_text))
                 .setContentIntent(tap)
-                .setOngoing(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android holds a foreground service's notification back for up to ten seconds, so
-            // that a service which starts and finishes in that time never flashes one up. This
-            // one lives as long as the app does, and the wait reads as uplink taking that long
-            // to come online when it has in fact been reachable the whole time.
-            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
-        }
+                .setOngoing(true)
+                // Android holds a foreground service's notification back for up to ten seconds,
+                // so that a service which starts and finishes in that time never flashes one up.
+                // This one lives as long as the app does, and the wait reads as uplink taking that
+                // long to come online when it has in fact been reachable the whole time.
+                .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         return builder.build();
     }
 
