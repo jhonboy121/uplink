@@ -741,18 +741,18 @@ export component CallScreen inherits Rectangle {
     // view's. The route, because a relayed call explains a bad one; the encryption is not said,
     // being always the same. Our own weak pill over it, on our side of the screen, so it is never
     // read as theirs. The open question to switch to video takes this spot while it shows.
-    if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours) : VerticalLayout {
+    if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours || root.weak-shown == Weak.both) : VerticalLayout {
         x: Theme.rtl ? parent.width - self.width - Theme.self-view-edge : Theme.self-view-edge;
         y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
         width: self.preferred-width;
         height: self.preferred-height;
         spacing: Theme.flags-gap;
-        if root.weak-shown == Weak.ours : HorizontalLayout {
+        if root.weak-shown == Weak.ours || root.weak-shown == Weak.both : HorizontalLayout {
             alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
             Flag {
                 icon: @image-url("icons/signal-weak.svg");
                 icon-size: Theme.weak-icon;
-                text: @tr("Your connection is weak");
+                text: root.weak-shown == Weak.both ? @tr("Weak connection") : @tr("Your connection is weak");
             }
         }
         if root.route != Route.unknown : HorizontalLayout {

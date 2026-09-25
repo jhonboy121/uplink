@@ -25,8 +25,10 @@ const PERCENT: u32 = 100;
 const CUT_TO_PERCENT: u32 = 85;
 /// Never more than half at once: one second's count is noisy, a keyframe's burst most of all.
 const MOST_CUT_PERCENT: u32 = 50;
-/// Growth per clean sample: back from half in about nine seconds.
-const GROWTH_PERCENT: u32 = 108;
+/// Growth per clean sample: back from half in about four seconds, and from the floor to the
+/// highest cap in under half a minute. It stops at the first queue or loss, and a cut then goes
+/// to under what got through, so a faster climb overshoots a bottleneck by a second at most.
+const GROWTH_PERCENT: u32 = 120;
 /// Samples after a cut, or a new step, before the path is judged again: QUIC's smoothed round
 /// trip lags, and a queue takes a moment to drain.
 const HOLD_SAMPLES: u32 = 2;
@@ -41,8 +43,8 @@ const LOSS_PERCENT: u64 = 5;
 const DOWN_AFTER: u32 = 5;
 /// Samples with room for the step above before the picture steps up; doubled after a step up
 /// that did not hold, up to the most.
-const UP_AFTER: u32 = 10;
-const UP_AFTER_MOST: u32 = 80;
+const UP_AFTER: u32 = 5;
+const UP_AFTER_MOST: u32 = 40;
 /// Room for the step above: this much over the current step's own bitrate.
 const UP_MARGIN_PERCENT: u32 = 125;
 /// A step up that falls back within this many samples did not hold.
@@ -112,6 +114,11 @@ impl Best {
         self.recent.push_back(rtt_ms);
         self.recent.iter().min().is_some_and(|best| rtt_ms >= best + QUEUE_MS)
     }
+}
+
+/// The bitrate that has room for the step above `step`: a margin over `step`'s own.
+const fn room_above(step: Preset) -> u32 {
+    step.video().kbps * UP_MARGIN_PERCENT / PERCENT
 }
 
 pub struct Rate {
@@ -226,7 +233,7 @@ impl Rate {
             (self.since_up, self.up_after) = (None, UP_AFTER);
         }
         let starved = lower.is_some_and(|lower| self.target_kbps < lower.video().kbps);
-        let roomy = higher.is_some() && self.target_kbps >= self.step.video().kbps * UP_MARGIN_PERCENT / PERCENT;
+        let roomy = higher.is_some() && self.target_kbps >= room_above(self.step);
         (self.below, self.above) = (if starved { self.below + 1 } else { 0 }, if roomy { self.above + 1 } else { 0 });
         let next = if self.below >= DOWN_AFTER {
             if self.since_up.is_some() {
@@ -236,7 +243,20 @@ impl Rate {
             lower
         } else if self.above >= self.up_after {
             self.since_up = Some(0);
-            higher
+            // As high as the bitrate has room for, not one step a wait: back from the floor, a
+            // step at a time was a minute and more of a small picture on a path that was fine.
+            self.steps.get(at + 1..).and_then(|above| {
+                let mut below = self.step;
+                above
+                    .iter()
+                    .copied()
+                    .take_while(|step| {
+                        let room = self.target_kbps >= room_above(below);
+                        below = *step;
+                        room
+                    })
+                    .last()
+            })
         } else {
             None
         };
@@ -371,6 +391,26 @@ mod tests {
         path.clean(&mut rate, 60);
         assert_eq!(rate.step(), Preset::High);
         assert_eq!(rate.kbps(), Preset::High.video().kbps);
+    }
+
+    /// The path from the netem squeeze test: starved to the floor, then clean again. A step at a
+    /// time behind 10 s waits took more than a minute to get the picture back.
+    #[test]
+    fn back_from_the_floor_in_under_half_a_minute_skipping_steps() {
+        const BACK_WITHIN: u32 = 30;
+        let (mut rate, mut path) = started(Preset::Highest, 30);
+        path.narrow(&mut rate, 0, 60);
+        assert_eq!(rate.step(), Preset::Lowest);
+        let mut steps = Vec::new();
+        let mut waited = 0;
+        while rate.step() != Preset::Highest {
+            if let Some(Change::Step(step, _)) = path.clean(&mut rate, 1).pop() {
+                steps.push(step);
+            }
+            waited += 1;
+            assert!(waited <= BACK_WITHIN, "still at {:?} after {waited} s ({steps:?})", rate.step());
+        }
+        assert!(steps.len() < Preset::ALL.len() - 1, "one step at a time: {steps:?}");
     }
 
     #[test]

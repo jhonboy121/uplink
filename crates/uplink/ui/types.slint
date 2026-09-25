@@ -25,8 +25,9 @@ export enum Reach { connecting, online, no-network, offline }
 // when this phone cannot tell.
 export enum Stall { reconnecting, offline, waiting }
 
-// A call that works but struggles, and on whose side: the weak pill.
-export enum Weak { none, ours, theirs }
+// A call that works but struggles, and on whose side: the weak pill. Both ways, nobody's: one
+// phone cannot place a bottleneck that slows both directions.
+export enum Weak { none, ours, theirs, both }
 
 // How much a call sends, lowest to highest.
 export enum Preset { lowest, low, balanced, high, highest }

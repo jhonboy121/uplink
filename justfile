@@ -247,6 +247,23 @@ ui-diff name="people" screen="People": (design-shot screen)
     UPLINK_PREVIEW_SIZE={{design_size}} nice cargo run -q -p ui-preview
     nice cargo run -q -p ui-preview -- target/design/{{lowercase(replace(screen, " ", "-"))}}.png target/ui-preview/{{name}}.png
 
+[doc('''
+A bad network for this box's calls, both ways (sudo), to test rate control and reconnecting
+against the phone: `just netem 3g`, `just netem cut 10` (undone after 10 s), or
+`just netem custom "rate 2mbit loss 3%"`. Profiles: 3g, 4g-bad, slow, lossy, jitter, squeeze,
+cut. Only UDP and TCP 443 are shaped; SSH and the adb tunnel never are. See tools/netem/netem.sh.
+''')]
+netem profile seconds="":
+    sudo sh tools/netem/netem.sh {{profile}} {{quote(seconds)}}
+
+[doc("Back to the plain network after `just netem`")]
+netem-off:
+    sudo sh tools/netem/netem.sh off
+
+[doc("What `just netem` has applied now")]
+netem-show:
+    sh tools/netem/netem.sh show
+
 [doc("Unit + integration tests for uplink-core (host, loopback only)")]
 test *args:
     nice cargo test -p uplink-core {{args}}

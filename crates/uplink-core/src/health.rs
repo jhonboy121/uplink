@@ -3,8 +3,10 @@
 //!
 //! Ours: what we send backs up, so frames are dropped before sending or reset after missing their
 //! deadline, or audio does not fit the send buffer; or the round trip climbs, which is a queue
-//! filling somewhere before any of that shows. Theirs: what arrives is late or has gaps while our
-//! own sending is fine. A call that has stopped altogether is the reconnecting overlay's, not this.
+//! filling somewhere before any of that shows. Theirs: what arrives is late or has gaps. Both at
+//! once is a path struggling both ways, which one phone cannot place: a bottleneck at either end
+//! slows both directions, so it blames nobody. A call that has stopped altogether is the
+//! reconnecting overlay's, not this.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,6 +34,8 @@ pub enum Weak {
     None,
     Ours,
     Theirs,
+    /// Both ways: weak, but whose cannot be told from here.
+    Both,
 }
 
 /// The counters that say something about health, at one moment.
@@ -154,16 +158,14 @@ impl Health {
             if self.excused > 0 {
                 self.excused -= 1;
             } else {
-                // Theirs only while ours is healthy: a phone that cannot send cannot judge the other.
-                self.theirs.sample(!ours && !self.ours.shown && now.theirs_bad(&before));
+                self.theirs.sample(now.theirs_bad(&before));
             }
         }
-        if self.ours.shown {
-            Weak::Ours
-        } else if self.theirs.shown {
-            Weak::Theirs
-        } else {
-            Weak::None
+        match (self.ours.shown, self.theirs.shown) {
+            (true, true) => Weak::Both,
+            (true, false) => Weak::Ours,
+            (false, true) => Weak::Theirs,
+            (false, false) => Weak::None,
         }
     }
 }
@@ -199,14 +201,16 @@ mod tests {
     }
 
     #[test]
-    fn theirs_needs_our_side_healthy() {
+    fn both_ways_blames_nobody() {
         let (mut health, mut counts) = (Health::default(), Counts::default());
         run(&mut health, &mut counts, 1, |_| {});
         let both = |c: &mut Counts| {
             c.received_dropped += 1;
             c.late += 1;
         };
-        assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, both), Weak::Ours);
+        // The netem squeeze on the other phone's end: every frame late both ways. Blaming this
+        // phone's connection for it was wrong.
+        assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, both), Weak::Both);
         let mut health = Health::default();
         run(&mut health, &mut counts, 1, |_| {});
         assert_eq!(run(&mut health, &mut counts, SHOW_AFTER, |c| c.received_dropped += 1), Weak::Theirs);

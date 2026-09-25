@@ -1210,3 +1210,33 @@ default); keep disk usage lean. Avoid build scripts.
   a full-screen viewfinder, still covers the card. Device-tested. The TUI's log is `target/cli.log`
   again under `just cli` (`$UPLINK_CLI_LOG`). TUI to phone at Highest measured 59.4 fps and
   ~6.1 Mbps received, nothing late or dropped.
+- **2026-09-25**: **rate control, measured under netem, climbs back faster.** `just netem <profile>`
+  (tools/netem/netem.sh, sudo) shapes this box's call traffic both ways (UDP and TCP 443, never
+  SSH) to test against the phone. The first `squeeze` froze the picture and said "weak" because
+  its queue was netem's 10,000 packets, ~2 minutes at 800 kbit: the round trip climbed to 11.8 s
+  and nothing was dropped. Each profile now holds its delay plus ~250 ms, as a real bottleneck.
+  - Both sides cut and stepped down as designed (TUI 6000 → 150 kbps, phone 4000 → 150), but the
+    climb back was a minute and more: 8% a clean second from the floor, and one step at a time
+    behind 10 s of room.
+  - Now: **growth 20% a clean second, 5 s of room before a step up (doubling to 40 s after one
+    that did not hold), straight to the highest step there is room for.** Floor to Highest on
+    a clean path in 28 s (was ~70), skipping Balanced; a test holds it under 30 s. Cutting and
+    stepping down are unchanged.
+  - `cut` (100% loss for N s) gave stalled → reconnected on both sides, as 7f wants.
+- **2026-09-25**: **a narrow path froze the picture: stale frames held the link.** Re-running
+  `squeeze` with a real queue (~350 ms round trip) still stopped the video both ways: what got
+  through was 16 kbps while the link ran full at ~780, every frame `unopened`, STREAMS_BLOCKED
+  ~100 per 5 s, no stream ever reset. The frame deadline only covered handing a frame to QUIC:
+  after `finish()` it was sent and retransmitted however old, and its in-flight permit was already
+  free, so ~100 stale frame streams (the peer's whole stream credit) sat in front of every new
+  one. Rate control cutting to 150 kbps could not help.
+  - **Fix (`media::delivered`):** after `finish()`, a frame waits for QUIC's acknowledgement
+    (`stopped()`) until its deadline and a round trip; past that it is reset. The permit is still
+    released at `finish()` (held to the ack, 8 frames would not cover a relayed round trip).
+    `bytes_sent`, which rate control reads as what got through, now counts delivered frames.
+  - **Stream credit:** we allow the peer 256 concurrent uni streams (QUIC's default 100 is ~90 at
+    60 fps over a second-long round trip).
+  - **The weak pill blamed "your connection"** for the squeeze on the other end: both directions
+    were bad, and theirs was only judged while ours was healthy. One phone cannot place a
+    bottleneck that slows both ways, so that is now `Weak::Both`, "Weak connection" (user's call;
+    a third state beyond the locked design's two), in ours' place; ours and theirs alone as before.

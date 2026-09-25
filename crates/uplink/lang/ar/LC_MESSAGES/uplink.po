@@ -1237,6 +1237,10 @@ msgid "Your connection is weak"
 msgstr "اتصالك ضعيف"
 
 msgctxt "CallScreen"
+msgid "Weak connection"
+msgstr "الاتصال ضعيف"
+
+msgctxt "CallScreen"
 msgid "{}'s connection is weak"
 msgstr "اتصال {} ضعيف"
 

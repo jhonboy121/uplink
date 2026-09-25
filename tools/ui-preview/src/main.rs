@@ -204,6 +204,8 @@ fn main() -> Result<()> {
     app.set_call_route(Route::Direct);
     app.set_call_weak(Weak::Ours);
     shoot(&window, &app, canvas, "your-connection-is-weak")?;
+    app.set_call_weak(Weak::Both);
+    shoot(&window, &app, canvas, "weak-connection")?;
     app.set_call_weak(Weak::None);
     // Audio & hold, named as the design's frames 17 to 20 are.
     let with_headset = [

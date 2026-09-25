@@ -410,6 +410,7 @@ pub const fn weak(weak: CoreWeak) -> Weak {
         CoreWeak::None => Weak::None,
         CoreWeak::Ours => Weak::Ours,
         CoreWeak::Theirs => Weak::Theirs,
+        CoreWeak::Both => Weak::Both,
     }
 }
 

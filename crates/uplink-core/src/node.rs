@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
 use iroh::address_lookup::MemoryLookup;
-use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, presets};
+use iroh::endpoint::{Connection, ConnectionError, Incoming, QuicTransportConfig, SendStream, VarInt, presets};
 use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, SecretKey, TransportAddr, Watcher as _};
 use rustls::NamedGroup;
 use tokio::sync::{mpsc, watch};
@@ -62,6 +62,10 @@ const OFFER_WAIT: Duration = Duration::from_secs(10);
 /// a longer silence is the network rather than the people. It costs a packet a second, and only
 /// on a connection that exists: an idle endpoint has none.
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(1);
+/// Frame streams the peer may have open to us at once. A frame's lasts until delivered, or its
+/// deadline and a round trip: 60 fps over a second-long round trip is ~90, over QUIC's default
+/// of 100, and a sender out of stream credit cannot send even the newest frame.
+const FRAME_STREAMS: VarInt = VarInt::from_u32(256);
 
 /// How a call is placed: with the camera, or voice alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,9 +304,13 @@ async fn bind(secret: SecretKey, network: &Network) -> Result<Endpoint, Error> {
         }
         Network::Local(lookup) => Endpoint::builder(presets::Minimal).address_lookup(lookup.clone()),
     };
-    // iroh's own transport defaults, which its holepunching is tuned for, with only the keep-alive
-    // shortened: that is what lets a call tell a stalled network from two quiet people.
-    let transport = QuicTransportConfig::builder().keep_alive_interval(KEEP_ALIVE).build();
+    // iroh's own transport defaults, which its holepunching is tuned for, with the keep-alive
+    // shortened (what lets a call tell a stalled network from two quiet people) and room for
+    // more video frames at once: one stream each, held until delivered or stale.
+    let transport = QuicTransportConfig::builder()
+        .keep_alive_interval(KEEP_ALIVE)
+        .max_concurrent_uni_streams(FRAME_STREAMS)
+        .build();
     Ok(builder
         .transport_config(transport)
         .crypto_provider(crypto::provider())

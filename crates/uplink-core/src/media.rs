@@ -1,8 +1,11 @@
 //! Video over QUIC: one unidirectional stream per encoded frame (design in docs/plan.md).
 //!
 //! Frames are reliable individually but never block each other. The sender resets frames that
-//! miss [`FRAME_DEADLINE`]; the receiver's [`Sequencer`] delivers in order, and after a gap drops
-//! frames until the next keyframe while asking the peer for one.
+//! miss [`FRAME_DEADLINE`], and ones QUIC has not delivered a round trip after that: handed over is
+//! not delivered, and on a narrow path stale frames would otherwise hold the link and the peer's
+//! stream credit for seconds while every new frame waits behind them. The receiver's [`Sequencer`]
+//! delivers in order, and after a gap drops frames until the next keyframe while asking the peer
+//! for one.
 //!
 //! Everything here follows the call's [`Link`] rather than one connection: a call that drops and
 //! rejoins carries on over the new connection with the same codecs, counters and sequence numbers.
@@ -13,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use iroh::Endpoint;
-use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
+use iroh::endpoint::{Connection, RecvStream, SendStream, StoppedError, VarInt};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::time::Instant;
@@ -210,9 +213,17 @@ impl VideoSender {
         };
         let (connection, stats) = (self.link.borrow().clone(), Arc::clone(&self.stats));
         self.runtime.spawn(async move {
-            let _permit = permit;
+            let queued = Instant::now();
             let bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
-            match send_frame(&connection, sequence, frame, &stats).await {
+            let sent = send_frame(&connection, sequence, frame, &stats).await;
+            // The permit bounds frames waiting to be handed to QUIC; one being delivered holds
+            // none, or a long round trip alone would leave no room for the next frame.
+            drop(permit);
+            let delivered = match sent {
+                Ok(stream) => delivered(stream, queued, &stats).await,
+                Err(e) => Err(e),
+            };
+            match delivered {
                 Ok(()) => {
                     MediaStats::count(&stats.frames_sent, 1);
                     MediaStats::count(&stats.bytes_sent, bytes);
@@ -224,7 +235,13 @@ impl VideoSender {
     }
 }
 
-async fn send_frame(connection: &Connection, sequence: u64, frame: Frame, stats: &MediaStats) -> Result<(), Error> {
+/// Opens the frame's stream and hands it all to QUIC, which is not yet delivering it.
+async fn send_frame(
+    connection: &Connection,
+    sequence: u64,
+    frame: Frame,
+    stats: &MediaStats,
+) -> Result<SendStream, Error> {
     let header = StreamHeader {
         kind: Some(StreamKind::Video(FrameHeader {
             sequence,
@@ -242,10 +259,32 @@ async fn send_frame(connection: &Connection, sequence: u64, frame: Frame, stats:
     match tokio::time::timeout(FRAME_DEADLINE, write_frame(&mut stream, &header, &frame.data)).await {
         Ok(written) => {
             written?;
-            Ok(stream.finish()?)
+            stream.finish()?;
+            Ok(stream)
         }
         Err(_) => {
             stream.reset(STALE_FRAME)?;
+            Err(Error::FrameLate)
+        }
+    }
+}
+
+/// Waits for the peer to have all of a finished frame: until [`FRAME_DEADLINE`] after it was
+/// queued, and a round trip more for the acknowledgement to come back. Past that it is reset.
+async fn delivered(stream: SendStream, queued: Instant, stats: &MediaStats) -> Result<(), Error> {
+    let round_trip = Duration::from_millis(stats.rtt_ms.load(Ordering::Relaxed));
+    match tokio::time::timeout_at(queued + FRAME_DEADLINE + round_trip, stream.stopped()).await {
+        Ok(Ok(None)) => Ok(()),
+        // Their reader gave up on it: it arrived too late to play.
+        Ok(Ok(Some(_))) => Err(Error::FrameLate),
+        // The connection went: whether the frame made it is the rejoin's business, not a count.
+        Ok(Err(StoppedError::ConnectionLost(e))) => Err(e.into()),
+        Ok(Err(StoppedError::ZeroRttRejected)) => Err(Error::Protocol("a frame stream on rejected 0-RTT")),
+        Err(_) => {
+            let mut stream = stream;
+            if stream.reset(STALE_FRAME).is_err() {
+                tracing::debug!("stale frame stream already closed");
+            }
             Err(Error::FrameLate)
         }
     }
