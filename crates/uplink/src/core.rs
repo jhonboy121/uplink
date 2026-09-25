@@ -59,6 +59,7 @@ pub struct Core {
     /// stream itself and forwards through this — rather than handing the stream to whoever is
     /// answering, which had no answer for a process that starts at boot and never has a window.
     inbox: Arc<Mutex<Inbox>>,
+    sending: Sending,
     ringer: Ringer,
     /// Holding this is what keeps the endpoint bound; the handle is what everything else uses.
     node: Mutex<Option<Node>>,
@@ -232,14 +233,15 @@ struct Ledger {
     log: Option<CallLog>,
     db: Db,
     pending: Option<Pending>,
+    sending: Sending,
 }
 
 impl Ledger {
-    fn open(db: Db) -> Self {
+    fn open(db: Db, sending: Sending) -> Self {
         let log = CallLog::open(db.clone())
             .inspect_err(|e| tracing::error!("opening the call log; calls go unrecorded: {e}"))
             .ok();
-        Self { log, db, pending: None }
+        Self { log, db, pending: None, sending }
     }
 
     /// The record written, when this event ended a call.
@@ -290,7 +292,8 @@ impl Ledger {
                         sent: stats.bytes_sent.load(Ordering::Relaxed),
                         received: stats.bytes_received.load(Ordering::Relaxed),
                     }),
-                    quality: call.stats.map(|stats| Quality { target: Some(video_target()), ..stats.summary() }),
+                    // Taken, so the next call starts with nothing said about it.
+                    quality: call.stats.map(|stats| Quality { target: self.sending.lock().take(), ..stats.summary() }),
                 };
                 self.write(&record);
                 Some(record)
@@ -322,24 +325,15 @@ impl Ledger {
     }
 }
 
-/// What this build sets a call's video up to send, as the log keeps it. One setting today; when
-/// quality becomes a choice, the one in force for the call goes here instead.
-fn video_target() -> VideoTarget {
-    const BITS_PER_KBIT: i32 = 1000;
-    let unsigned = |value: i32| u32::try_from(value).unwrap_or_default();
-    VideoTarget {
-        width: unsigned(crate::VIDEO.width),
-        height: unsigned(crate::VIDEO.height),
-        fps: unsigned(crate::VIDEO.fps),
-        kbps: unsigned(crate::VIDEO.bitrate / BITS_PER_KBIT),
-    }
-}
+/// What the call in progress is set up to send, as the window last said: its quality step's
+/// picture, which changes when the network does. The log keeps the last one.
+type Sending = Arc<Mutex<Option<VideoTarget>>>;
 
 /// The one consumer of the endpoint's events, for as long as the process lives. A window gets
 /// them while it is attached; otherwise they are answered here, because a call arriving at a
 /// backgrounded app is the case this whole arrangement exists for.
-async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ringer: Ringer) {
-    let mut ledger = Ledger::open(ringer.db.clone());
+async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ringer: Ringer, sending: Sending) {
+    let mut ledger = Ledger::open(ringer.db.clone(), sending);
     while let Some(event) = events.recv().await {
         ringer.follow(&event);
         // Written before the window hears of it, so what it reads back already has this call.
@@ -415,18 +409,25 @@ impl Core {
         let (node, events) = runtime.block_on(Node::start(secret, Network::Public(settings), &app))?;
         let inbox = Arc::<Mutex<Inbox>>::default();
         let ringer = Ringer { context, db: db.clone(), app, calls: node.handle() };
-        runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone()));
+        let sending = Sending::default();
+        runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone(), Arc::clone(&sending)));
         tracing::info!(%id, "core up");
         Ok(Self {
             calls: node.handle(),
             id,
             db,
             inbox,
+            sending,
             ringer,
             node: Mutex::new(Some(node)),
             runtime,
             logging,
         })
+    }
+
+    /// What the call in progress is set up to send, for its log entry.
+    pub fn set_sending(&self, video: Option<VideoTarget>) {
+        *self.sending.lock() = video;
     }
 
     /// This build's version, as the other side of a call is told it.

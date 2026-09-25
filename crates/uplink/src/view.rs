@@ -13,6 +13,7 @@ use uplink_core::contacts::{Contact, Contacts};
 use uplink_core::media::Route as MediaRoute;
 use uplink_core::node::{Mode, RelayView};
 use uplink_core::health::Weak as CoreWeak;
+use uplink_core::preset::Preset as CorePreset;
 use uplink_core::quality::{Quality, Spread};
 use uplink_core::reach::Reach as CoreReach;
 use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
@@ -20,8 +21,8 @@ use uplink_core::relays::{self, Choice, Ranking, Region as RelayRegion};
 use crate::clock::LocalClock;
 use crate::ui::{
     Ago, App, CallDetail, CallItem, ContactDetail, ContactItem, Day, DayAgo, Ending, Group, Ipv6, Measure, Output,
-    OutputItem, Path, PathKind, Permission, Reach, Region, RelayItem, RelayUse, Route, Say, Stall, Stat, Theme,
-    Toast, Traffic, Unit, Weak,
+    OutputItem, Path, PathKind, Permission, Preset, PresetItem, Reach, Region, RelayItem, RelayUse, Route, Say,
+    Stall, Stat, Theme, Toast, Traffic, Unit, Weak,
 };
 
 /// Groups of four, the way the key is read aloud, over two even lines.
@@ -398,6 +399,35 @@ pub const fn route(route: MediaRoute) -> Route {
         MediaRoute::Unknown => Route::Unknown,
         MediaRoute::Direct => Route::Direct,
         MediaRoute::Relay => Route::Relayed,
+    }
+}
+
+/// A quality step as the Call quality page and its picker say it.
+pub fn preset_item(preset: CorePreset) -> PresetItem {
+    let video = preset.video();
+    let int = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+    PresetItem {
+        preset: match preset {
+            CorePreset::Lowest => Preset::Lowest,
+            CorePreset::Low => Preset::Low,
+            CorePreset::Balanced => Preset::Balanced,
+            CorePreset::High => Preset::High,
+            CorePreset::Highest => Preset::Highest,
+        },
+        lines: int(video.height),
+        fps: int(video.fps),
+        megabytes: int(preset.megabytes_a_minute()),
+    }
+}
+
+/// The markup's step back as the core's.
+pub const fn core_preset(preset: Preset) -> CorePreset {
+    match preset {
+        Preset::Lowest => CorePreset::Lowest,
+        Preset::Low => CorePreset::Low,
+        Preset::Balanced => CorePreset::Balanced,
+        Preset::High => CorePreset::High,
+        Preset::Highest => CorePreset::Highest,
     }
 }
 

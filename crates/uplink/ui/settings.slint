@@ -4,6 +4,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Appearance, Language, Theme } from "theme.slint";
 import { AppBar, Brand, PageTitle, Row, Tap } from "controls.slint";
+import { Preset } from "types.slint";
+import { PresetText } from "preset.slint";
 
 // A group of settings on its own inset surface. The surface does the grouping a label used
 // to, so no group is named.
@@ -120,8 +122,10 @@ export component SettingsPage inherits Rectangle {
     in property <bool> battery-unrestricted;
     in property <bool> full-screen-calls;
     in property <bool> maker-list;
+    in property <Preset> quality-now;
     callback share-diagnostics();
     callback edit-relays();
+    callback edit-quality();
     callback allow-battery();
     callback allow-full-screen-calls();
     callback open-maker-list();
@@ -208,12 +212,13 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
                 SettingsGroup {
+                    // The step for the network the phone is on now.
                     SettingsRow {
                         icon: @image-url("icons/video.svg");
                         title: @tr("Call quality");
-                        detail: @tr("Caps what the camera sends");
-                        value: "720p · 30";
-                        tappable: false;
+                        detail: @tr("The most a call sends");
+                        value: PresetText.name(root.quality-now);
+                        clicked => { root.edit-quality(); }
                     }
                     SettingsDivider { }
                     // The mode, or in manual how many: which relays is a detail for the page.

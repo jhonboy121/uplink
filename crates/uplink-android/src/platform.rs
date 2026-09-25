@@ -21,6 +21,8 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 
+use uplink_core::quality::VideoTarget;
+
 use crate::Error;
 use crate::codec::Avc;
 
@@ -344,6 +346,25 @@ impl AppContext {
             let offset = env.call_method(&zone, jni_str!("getOffset"), jni_sig!("(J)I"), &[JValue::Long(millis)])?.i()?;
             Ok(i64::from(offset) / MILLIS_PER_SECOND)
         })
+    }
+
+    /// Whether this phone can send a call's video like this: the front camera and the encoder
+    /// both manage it.
+    pub fn can_send(&self, video: VideoTarget) -> Result<bool, Error> {
+        const BPS_PER_KBPS: u32 = 1000;
+        let int = |value: u32| jint::try_from(value);
+        let args = [
+            JValue::Int(int(video.width)?),
+            JValue::Int(int(video.height)?),
+            JValue::Int(int(video.fps)?),
+            JValue::Int(int(video.kbps * BPS_PER_KBPS)?),
+        ];
+        self.with(|env, application| Ok(env.call_method(application, jni_str!("canSend"), jni_sig!("(IIII)Z"), &args)?.z()?))
+    }
+
+    /// Whether the phone is on Wi-Fi (or Ethernet) now, rather than mobile data or nothing.
+    pub fn on_wifi(&self) -> Result<bool, Error> {
+        self.ask(jni_str!("onWifi"))
     }
 
     /// Whether Telecom would take a call now. Its no is final: the call does not happen.

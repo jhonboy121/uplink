@@ -5,7 +5,7 @@
 //! makes new rings, which are handed to the running pump, so the call and codecs carry on.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use anyhow::Result;
 use tokio::runtime::Handle;
@@ -39,21 +39,24 @@ pub struct CallAudio {
     held: Arc<AtomicBool>,
     /// Muted as an output: their voice is taken off the network but not played.
     silenced: Arc<AtomicBool>,
+    /// The most our voice may take, bits a second; the pump hands a change to the encoder.
+    voice_bps: Arc<AtomicI32>,
     pub health: Arc<AudioHealth>,
 }
 
 impl CallAudio {
     /// Starts the pump; the streams follow, and a failure here is recoverable by [`Self::reopen`].
-    pub fn start(sender: AudioSender, receiver: AudioReceiver, runtime: Handle) -> Self {
+    pub fn start(sender: AudioSender, receiver: AudioReceiver, runtime: Handle, voice_bps: i32) -> Self {
         let health = Arc::<AudioHealth>::default();
         let (swap, rings) = mpsc::channel(SWAP_QUEUE);
         let (muted, held, silenced) =
             (Arc::<AtomicBool>::default(), Arc::<AtomicBool>::default(), Arc::<AtomicBool>::default());
+        let voice_bps = Arc::new(AtomicI32::new(voice_bps));
         let mut tasks = Tasks::new(runtime);
         let cancel = tasks.cancel_token();
         let quiet = Quiet { muted: Arc::clone(&muted), held: Arc::clone(&held), silenced: Arc::clone(&silenced) };
-        tasks.spawn(pump(rings, sender, receiver, quiet, cancel));
-        let mut audio = Self { tasks, streams: None, swap, muted, held, silenced, health };
+        tasks.spawn(pump(rings, sender, receiver, quiet, Arc::clone(&voice_bps), cancel));
+        let mut audio = Self { tasks, streams: None, swap, muted, held, silenced, voice_bps, health };
         if let Err(e) = audio.reopen() {
             tracing::error!("voice streams: {e:#}");
         }
@@ -78,6 +81,11 @@ impl CallAudio {
 
     pub fn held(&self) -> bool {
         self.held.load(Ordering::Relaxed)
+    }
+
+    /// A new cap for our voice, from the next frame.
+    pub fn set_voice_bps(&self, bps: i32) {
+        self.voice_bps.store(bps, Ordering::Relaxed);
     }
 
     /// Mute as an output: nothing of theirs is played until another output is chosen.
@@ -136,9 +144,12 @@ async fn pump(
     mut sender: AudioSender,
     mut receiver: AudioReceiver,
     quiet: Quiet,
+    voice_bps: Arc<AtomicI32>,
     cancel: CancellationToken,
 ) {
     let Quiet { muted, held, silenced } = quiet;
+    // What the encoder was last told; zero is no bitrate, so the first tick always tells it.
+    let mut told = 0;
     let start = Instant::now();
     let mut tick = tokio::time::interval(FRAME_DURATION);
     let mut playout: Pcm = [0; FRAME_SAMPLES];
@@ -154,6 +165,14 @@ async fn pump(
                 None => break,
             },
             _ = tick.tick() => {}
+        }
+        let wanted = voice_bps.load(Ordering::Relaxed);
+        if wanted != told {
+            match sender.set_bitrate(wanted) {
+                Ok(()) => tracing::info!(bps = wanted, "voice bitrate"),
+                Err(e) => tracing::warn!(bps = wanted, "voice bitrate: {e}"),
+            }
+            told = wanted;
         }
         let Some(Rings { microphone, speaker }) = &mut rings else { continue };
         while microphone.slots() >= FRAME_SAMPLES {

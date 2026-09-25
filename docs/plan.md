@@ -1116,3 +1116,25 @@ default); keep disk usage lean. Avoid build scripts.
   the SDK's words (`phoneCall|camera|microphone`, `singleTop`, `adjustResize`), their numbers read
   from `ActivityInfo`/`ServiceInfo`/`WindowManager.LayoutParams` by `just android-table`. The compiled
   manifest and `resources.arsc` are byte-identical to before.
+- **2026-09-25**: **call quality, locked and built** (settings canvas I and J, E's row). Not yet
+  device-tested.
+  - **Five steps** (`uplink_core::preset`), the 16:9 sizes cameras output and the rungs calling
+    ladders use: Lowest 360p·15 (350 kbps, voice 16 kbps), Low 540p·24 (900, 24), Balanced
+    720p·30 (2 Mbps, 32 — what every call sent before), High 1080p·30 (4 Mbps, 48), Highest
+    1080p·60 (6 Mbps, 48). The picker shows what a minute costs, computed from those.
+  - **Per network**, chosen separately (`quality-wifi`, `quality-mobile`); defaults High on Wi-Fi and
+    Low on mobile data (the user's call). Wi-Fi or Ethernet counts as Wi-Fi; anything else as mobile.
+  - **Only what the phone can send is offered**: Java asks the front camera (does it output that
+    size to an encoder, and is its minimum frame duration short enough for the rate) and the first
+    H.264 encoder (`areSizeAndRateSupported` and the bitrate range) — the encoder
+    `AMediaCodec_createEncoderByType` gives us, not any encoder. A chosen step it cannot send falls
+    to the highest one below it.
+  - **It is a cap**: congestion still sends less. **Mid-call** a network change (or a new choice)
+    changes over at once: the voice's Opus bitrate from its next frame, the picture through a new
+    encoder handed to the running task under the same `VideoSender` (sequence numbers carry on, the
+    first frame is a keyframe), with the camera reopened onto it at the new rate.
+  - The call log's quality summary records the step's picture that was in force (the last, if it
+    changed).
+  - Open: two camera streams at 60 fps (the self-view and the encoder) may be more than some
+    phones' cameras run together even where each alone passes the check; watch the log for a camera
+    that fails to open on Highest.

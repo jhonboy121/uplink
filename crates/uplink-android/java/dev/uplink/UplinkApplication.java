@@ -22,8 +22,16 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Icon;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
+import android.media.MediaFormat;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.media.ToneGenerator;
@@ -42,8 +50,10 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.Settings;
 import android.util.Log;
+import android.util.Size;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Locale;
 
 /**
@@ -814,6 +824,75 @@ public class UplinkApplication extends Application {
             return "mobile";
         }
         return "other";
+    }
+
+    /** H.264: what every call's video is. */
+    private static final String AVC = MediaFormat.MIMETYPE_VIDEO_AVC;
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
+
+    /**
+     * Whether this phone can send a call's video at this size, rate and bitrate: the front camera
+     * (where calls start) outputs that size to an encoder fast enough, and the encoder the app
+     * gets for H.264 takes it. A step that fails either is not offered.
+     */
+    boolean canSend(int width, int height, int fps, int bitrate) {
+        return cameraCanSend(width, height, fps) && encoderCanSend(width, height, fps, bitrate);
+    }
+
+    private boolean cameraCanSend(int width, int height, int fps) {
+        CameraManager cameras = getSystemService(CameraManager.class);
+        if (cameras == null) {
+            return false;
+        }
+        try {
+            for (String id : cameras.getCameraIdList()) {
+                CameraCharacteristics camera = cameras.getCameraCharacteristics(id);
+                Integer facing = camera.get(CameraCharacteristics.LENS_FACING);
+                StreamConfigurationMap streams = camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                if (facing == null || facing != CameraCharacteristics.LENS_FACING_FRONT || streams == null) {
+                    continue;
+                }
+                Size[] sizes = streams.getOutputSizes(MediaCodec.class);
+                for (Size size : sizes != null ? sizes : new Size[0]) {
+                    if (size.getWidth() == width && size.getHeight() == height) {
+                        // Stricter than the fps ranges: how often this size can come out at all.
+                        long frame = streams.getOutputMinFrameDuration(MediaCodec.class, size);
+                        return frame * fps <= NANOS_PER_SECOND;
+                    }
+                }
+                return false;
+            }
+        } catch (CameraAccessException | RuntimeException e) {
+            log(Log.WARN, "reading the camera's sizes: " + e);
+        }
+        return false;
+    }
+
+    /** The first H.264 encoder in the list: the one `AMediaCodec_createEncoderByType` gives us. */
+    private static boolean encoderCanSend(int width, int height, int fps, int bitrate) {
+        for (MediaCodecInfo codec : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (!codec.isEncoder() || !Arrays.asList(codec.getSupportedTypes()).contains(AVC)) {
+                continue;
+            }
+            MediaCodecInfo.VideoCapabilities video = codec.getCapabilitiesForType(AVC).getVideoCapabilities();
+            return video != null
+                    && video.areSizeAndRateSupported(width, height, fps)
+                    && video.getBitrateRange().contains(bitrate);
+        }
+        return false;
+    }
+
+    /**
+     * Whether the default network is Wi-Fi (or Ethernet): what decides a call's quality preset.
+     * Anything else, or none, counts as mobile data, the one that costs.
+     */
+    boolean onWifi() {
+        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+        Network active = connectivity != null ? connectivity.getActiveNetwork() : null;
+        NetworkCapabilities capabilities = active != null ? connectivity.getNetworkCapabilities(active) : null;
+        return capabilities != null
+                && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
     }
 
     /** Before the core is up there is nothing to tell: {@link #ensureCore} says what is current. */

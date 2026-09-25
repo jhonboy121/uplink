@@ -1,0 +1,156 @@
+// Call quality: the most a call sends, per network. Drawn on the settings canvas as artboard I;
+// each row opens the picker, artboard J.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PresetItem } from "types.slint";
+import { AppBar, Brand, PageTitle, Row, Tap } from "controls.slint";
+import { SettingsDivider, SettingsGroup } from "settings.slint";
+import { Chip } from "relays.slint";
+import { PresetText } from "preset.slint";
+
+// One network: its tile, its name (and "now" if the phone is on it), the step's picture under
+// it, and the step's name on the end side.
+component NetworkRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <bool> now;
+    in property <PresetItem> step;
+    callback clicked();
+    height: Theme.setting-height;
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-description: PresetText.picture(root.step);
+    accessible-value: PresetText.name(root.step.preset);
+    accessible-action-default => { root.clicked(); }
+    touch := Tap {
+        tapped => { root.clicked(); }
+    }
+    background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+    animate background { duration: Theme.feedback; easing: ease-out; }
+    Row {
+        padding-left: Theme.setting-pad;
+        padding-right: Theme.setting-pad;
+        spacing: Theme.setting-gap;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.setting-tile;
+                height: self.width;
+                border-radius: Theme.setting-tile-radius;
+                background: Theme.raised;
+                Image {
+                    source: root.icon;
+                    width: Theme.setting-icon;
+                    height: self.width;
+                    colorize: Theme.beacon;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Row {
+                spacing: Theme.relay-chip-gap;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: 1rem;
+                    font-weight: 700;
+                    height: Theme.setting-title-box;
+                    vertical-alignment: center;
+                    horizontal-alignment: Theme.start;
+                }
+                if root.now : VerticalLayout {
+                    alignment: center;
+                    Chip {
+                        text: @tr("NOW");
+                        ink: Theme.good;
+                        edge: Theme.good.with-alpha(0.4);
+                    }
+                }
+            }
+            Text {
+                text: PresetText.picture(root.step);
+                color: Theme.muted;
+                font-size: 0.8125rem;
+                height: Theme.setting-detail-box;
+                vertical-alignment: center;
+                horizontal-alignment: Theme.start;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: PresetText.name(root.step.preset);
+                color: Theme.beacon;
+                font-size: 0.908rem;
+                font-family: Theme.mono;
+                height: self.font-size * Theme.line-box;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component QualityPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    in property <PresetItem> wifi;
+    in property <PresetItem> mobile;
+    in property <bool> on-wifi;
+    callback pick-wifi();
+    callback pick-mobile();
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: @tr("Call quality");
+                horizontal-stretch: 1;
+            }
+            Brand { }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-left: Theme.group-edge;
+                padding-right: Theme.group-edge;
+                padding-bottom: root.bottom-inset + Theme.group-edge;
+                spacing: Theme.group-gap;
+                SettingsGroup {
+                    NetworkRow {
+                        icon: @image-url("icons/wifi.svg");
+                        title: @tr("On Wi-Fi");
+                        now: root.on-wifi;
+                        step: root.wifi;
+                        clicked => { root.pick-wifi(); }
+                    }
+                    SettingsDivider { }
+                    NetworkRow {
+                        icon: @image-url("icons/mobile-data.svg");
+                        title: @tr("On mobile data");
+                        now: !root.on-wifi;
+                        step: root.mobile;
+                        clicked => { root.pick-mobile(); }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: Theme.quality-note-inset;
+                    padding-right: Theme.quality-note-inset;
+                    Text {
+                        text: @tr("The most a call sends, picture and voice together. It sends less on its own when the network struggles, and changes over when you move between Wi-Fi and mobile data mid-call.");
+                        color: Theme.muted;
+                        font-size: 0.8125rem;
+                        wrap: word-wrap;
+                        horizontal-alignment: Theme.start;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -20,6 +20,8 @@ use crate::tasks::Tasks;
 
 const REMOTE_MAX_IMAGES: i32 = 4;
 const KEYFRAME_QUEUE: usize = 1;
+/// One change of quality at a time; a second waits for the task to take the first.
+const SWAP_QUEUE: usize = 1;
 
 /// The video half of a call's [`uplink_core::media::MediaSession`].
 pub struct VideoParts {
@@ -34,6 +36,7 @@ pub struct CallVideo {
     tasks: Tasks,
     /// Our own ask for a keyframe: the camera coming back on after being off.
     keyframe: mpsc::Sender<()>,
+    swap: mpsc::Sender<(Encoder, Events)>,
     pub shown: Option<Image>,
     pub remote: ImageReader,
     encoder_window: NativeWindow,
@@ -75,8 +78,19 @@ impl CallVideo {
         tasks.spawn(decode(decoder, decoder_events, incoming_video, Arc::clone(&remote_turns), cancel.clone()));
         let (keyframe, ours) = mpsc::channel(KEYFRAME_QUEUE);
         let asks = Asks { theirs: keyframe_requests, ours };
-        tasks.spawn(encode(encoder, encoder_events, sender, asks, Arc::clone(&local_turns), cancel));
-        Ok(Self { tasks, keyframe, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+        let (swap, swaps) = mpsc::channel(SWAP_QUEUE);
+        tasks.spawn(encode(encoder, encoder_events, sender, asks, swaps, Arc::clone(&local_turns), cancel));
+        Ok(Self { tasks, keyframe, swap, shown: None, remote, encoder_window, local_turns, remote_turns, stats })
+    }
+
+    /// Sends from here on at another size, rate or bitrate: a new encoder replaces the old one
+    /// under the same sender. The camera has to be pointed at [`Self::encoder_window`] again.
+    pub fn reconfigure(&mut self, avc: &Avc, video: VideoConfig) -> Result<()> {
+        let (encoder, events) = Encoder::new(avc, video).context("the new encoder")?;
+        let window = encoder.window().clone();
+        self.swap.try_send((encoder, events)).map_err(|_| anyhow::anyhow!("the encoder task is not taking a new encoder"))?;
+        self.encoder_window = window;
+        Ok(())
     }
 
     /// The next frame is a keyframe, so the peer's decoder has something to start again from.
@@ -130,17 +144,28 @@ struct Asks {
     ours: mpsc::Receiver<()>,
 }
 
+/// A new encoder for a new quality, handed to the running task so the call's sender, and its
+/// sequence numbers, carry on.
+type Swaps = mpsc::Receiver<(Encoder, Events)>;
+
 async fn encode(
     mut encoder: Encoder,
     mut events: Events,
     mut sender: VideoSender,
     mut asks: Asks,
+    mut swaps: Swaps,
     turns: Arc<AtomicU8>,
     cancel: CancellationToken,
 ) {
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
+            // The old one stops here; the new one's first frame is a keyframe by nature.
+            Some((fresh, fresh_events)) = swaps.recv() => {
+                encoder = fresh;
+                events = fresh_events;
+                tracing::info!("encoder swapped");
+            }
             Some(()) = asks.theirs.recv() => {
                 match encoder.request_keyframe() {
                     Ok(()) => tracing::debug!("keyframe requested by peer"),

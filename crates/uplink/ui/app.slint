@@ -16,24 +16,28 @@ import "fonts/IBMPlexMono-Medium.ttf";
 import { Appearance, Language, Theme } from "theme.slint";
 import {
     AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, OutputItem,
-    PermissionItem, Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch, Weak,
+    PermissionItem, Preset, PresetItem, QualitySheet, Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch,
+    Weak,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
-import { AddRelaySheet, AudioSheet, ConfirmSheet, NameSheet, NoticeSheet, ToastCard, VideoAskSheet } from "sheets.slint";
+import {
+    AddRelaySheet, AudioSheet, ConfirmSheet, NameSheet, NoticeSheet, PresetSheet, ToastCard, VideoAskSheet,
+} from "sheets.slint";
 import { ContactPage, PeoplePage } from "people.slint";
 import { CallPage, CallsPage } from "calls.slint";
 import { ConnectPage, ScanPage } from "connect.slint";
 import { SettingsPage } from "settings.slint";
 import { RelaysPage } from "relays.slint";
+import { QualityPage } from "quality.slint";
 import { CallScreen, MiniCall } from "call.slint";
 
 export { Appearance, Language, Theme } from "theme.slint";
 export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
     DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Output, OutputItem, Path, PathKind, Permission,
-    PermissionItem, Reach, Region, RelayItem, RelayUse, Route, Say, Screen, Stall, Stat, Toast, Traffic, Unit,
-    Weak,
+    PermissionItem, Preset, PresetItem, QualitySheet, Reach, Region, RelayItem, RelayUse, Route, Say, Screen,
+    Stall, Stat, Toast, Traffic, Unit, Weak,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -200,6 +204,16 @@ export component App inherits Window {
     in property <int> relays-on;
     in-out property <bool> relays-open: false;
     in-out property <bool> adding-relay: false;
+    // Call quality: the step each network sends at (what this phone can send of what was
+    // chosen), the steps it can send at all, and which network the phone is on.
+    in property <PresetItem> quality-wifi;
+    in property <PresetItem> quality-mobile;
+    in property <[PresetItem]> quality-steps;
+    in property <bool> on-wifi: true;
+    in-out property <bool> quality-open: false;
+    in-out property <QualitySheet> quality-sheet: QualitySheet.none;
+    callback open-quality();
+    callback choose-quality(bool, Preset);
     // Read from Android on start and on every return to the front, since each of them is
     // changed in a system screen the app sends the user to. Assumed fine until read.
     in property <bool> battery-unrestricted: true;
@@ -250,6 +264,7 @@ export component App inherits Window {
         && root.call-state == CallState.idle
         && root.confirming == Confirm.none
         && !root.adding-relay
+        && root.quality-sheet == QualitySheet.none
         && !root.scanning
         && root.pending-key.length == 0;
     changed bars-light => { root.bars-changed(self.bars-light); }
@@ -348,8 +363,13 @@ export component App inherits Window {
                     battery-unrestricted: root.battery-unrestricted;
                     full-screen-calls: root.full-screen-calls;
                     maker-list: root.maker-list;
+                    quality-now: root.on-wifi ? root.quality-wifi.preset : root.quality-mobile.preset;
                     share-diagnostics => { root.share-diagnostics(); }
                     edit-relays => { root.relays-open = true; }
+                    edit-quality => {
+                        root.open-quality();
+                        root.quality-open = true;
+                    }
                     allow-battery => { root.allow-battery(); }
                     allow-full-screen-calls => { root.allow-full-screen-calls(); }
                     open-maker-list => { root.open-maker-list(); }
@@ -489,6 +509,28 @@ export component App inherits Window {
             tick(url, on) => { root.tick-relay(url, on); }
             add => { root.adding-relay = true; }
             remove(url) => { root.remove-relay(url); }
+        }
+
+        // Call quality takes the window like the relay page, and its picker sits over it.
+        if root.quality-open : QualityPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            wifi: root.quality-wifi;
+            mobile: root.quality-mobile;
+            on-wifi: root.on-wifi;
+            pick-wifi => { root.quality-sheet = QualitySheet.wifi; }
+            pick-mobile => { root.quality-sheet = QualitySheet.mobile; }
+        }
+
+        if root.quality-sheet != QualitySheet.none : PresetSheet {
+            wifi: root.quality-sheet == QualitySheet.wifi;
+            steps: root.quality-steps;
+            current: root.quality-sheet == QualitySheet.wifi ? root.quality-wifi.preset : root.quality-mobile.preset;
+            choose(preset) => {
+                root.choose-quality(root.quality-sheet == QualitySheet.wifi, preset);
+                root.quality-sheet = QualitySheet.none;
+            }
+            closed => { root.quality-sheet = QualitySheet.none; }
         }
 
         if root.adding-relay : AddRelaySheet {

@@ -3,8 +3,9 @@
 
 import { LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { AddError, AddProblem, Mismatch, Output, OutputItem, Say, Toast } from "types.slint";
+import { AddError, AddProblem, Mismatch, Output, OutputItem, Preset, PresetItem, Say, Toast } from "types.slint";
 import { Line, Prose, Row, SheetTitle, Tap, Wide } from "controls.slint";
+import { PresetText } from "preset.slint";
 
 // A card over a dimmed window. Centred in what the keyboard leaves rather than in the window, so
 // a field the sheet exists for is never the part that ends up underneath it.
@@ -206,6 +207,84 @@ export component AudioSheet inherits Sheet {
             picked: root.silenced;
             rule: root.outputs.length > 0 ? Theme.hairline : transparent;
             tapped => { root.silence(); }
+        }
+    }
+}
+
+// One step in the picker: its tick tile, its name, and what it sends and costs.
+component PresetRow inherits Rectangle {
+    in property <PresetItem> item;
+    in property <bool> picked;
+    in property <color> rule: transparent;
+    callback tapped();
+    height: Theme.preset-row;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: root.rule;
+    }
+    accessible-role: checkbox;
+    accessible-checked: root.picked;
+    accessible-label: PresetText.name(root.item.preset);
+    accessible-description: PresetText.detail(root.item);
+    accessible-action-default => { root.tapped(); }
+    Tap {
+        tapped => { root.tapped(); }
+    }
+    HorizontalLayout {
+        spacing: Theme.setting-gap;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.setting-tile;
+                height: self.width;
+                border-radius: Theme.setting-tile-radius;
+                background: root.picked ? Theme.raised : transparent;
+                border-width: root.picked ? 0 : Theme.tick-edge-width;
+                border-color: Theme.tick-edge;
+                if root.picked : Image {
+                    source: @image-url("icons/tick.svg");
+                    width: Theme.setting-icon;
+                    height: self.width;
+                    colorize: Theme.beacon;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Line {
+                text: PresetText.name(root.item.preset);
+                color: Theme.text;
+                font-size: 1rem;
+                font-weight: 700;
+            }
+            Line {
+                text: PresetText.detail(root.item);
+                color: Theme.muted;
+                font-size: 0.8125rem;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// A network's quality step, from the steps this phone can send. A tap chooses and closes;
+// Back or a tap outside closes without changing anything.
+export component PresetSheet inherits Sheet {
+    in property <bool> wifi;
+    in property <[PresetItem]> steps;
+    in property <Preset> current;
+    callback choose(Preset);
+    outside-closes: true;
+
+    SheetTitle { text: root.wifi ? @tr("On Wi-Fi") : @tr("On mobile data"); }
+    VerticalLayout {
+        for item[index] in root.steps : PresetRow {
+            item: item;
+            picked: item.preset == root.current;
+            rule: index > 0 ? Theme.hairline : transparent;
+            tapped => { root.choose(item.preset); }
         }
     }
 }

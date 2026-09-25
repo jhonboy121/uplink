@@ -23,6 +23,7 @@ pub const FRAME_DURATION: Duration = Duration::from_millis(20);
 pub const FRAME_SAMPLES: usize = 960;
 pub type Pcm = [i16; FRAME_SAMPLES];
 
+/// Until [`AudioSender::set_bitrate`] says otherwise: Balanced's, what calls always sent.
 const BITRATE: i32 = 32_000;
 /// Loss the encoder plans FEC for until rate control measures the real figure.
 const EXPECTED_LOSS_PERCENT: i32 = 10;
@@ -138,6 +139,11 @@ pub struct AudioSender {
 }
 
 impl AudioSender {
+    /// The most the voice may take, in bits a second, from the next frame on.
+    pub fn set_bitrate(&self, bps: i32) -> Result<(), Error> {
+        self.encoder.ctl(ffi::OPUS_SET_BITRATE_REQUEST, bps)
+    }
+
     /// A full datagram buffer drops the frame: late audio is worse than lost audio. So does a lost
     /// connection: whether the call is over is the call's to decide, and it may yet rejoin.
     pub fn send(&mut self, pcm: &Pcm, capture_micros: u64) -> Result<(), Error> {

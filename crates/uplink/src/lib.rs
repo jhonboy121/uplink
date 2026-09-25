@@ -25,7 +25,7 @@ use ndk::native_window::NativeWindow;
 use rustc_hash::FxHashSet;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
-use slint::{ComponentHandle, Model as _, ModelRc, RenderingState, Timer, TimerMode};
+use slint::{ComponentHandle, Model as _, ModelRc, RenderingState, Timer, TimerMode, VecModel};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{Dispatch, Level};
@@ -42,6 +42,7 @@ use uplink_core::health::{Health, Weak};
 use uplink_core::logs;
 use uplink_core::reach::Reach as CoreReach;
 use uplink_core::settings::{self, Settings};
+use uplink_core::preset::{Network as PresetNetwork, Preset};
 use uplink_core::qr;
 use uplink_core::relays::{self, Choice, Ranking, Source};
 use uplink_core::media::{MediaSession, MediaStats, Route};
@@ -53,8 +54,8 @@ use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem, RelayItem,
-    Say, Screen, Theme, Toast,
+    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem,
+    QualitySheet, RelayItem, Say, Screen, Theme, Toast,
 };
 use crate::video::{CallVideo, VideoParts};
 use crate::view::{maybe, none, one, toast};
@@ -84,15 +85,20 @@ const ARABIC: &str = "ar";
 const SCAN_WIDTH: i32 = 960;
 const SCAN_HEIGHT: i32 = 720;
 const SCAN_MAX_IMAGES: i32 = 2;
-const VIDEO_BITRATE: i32 = 2_000_000;
 const KEYFRAME_INTERVAL_SECS: i32 = 2;
-const VIDEO: VideoConfig = VideoConfig {
-    width: CAPTURE_WIDTH,
-    height: CAPTURE_HEIGHT,
-    fps: CAPTURE_FPS,
-    bitrate: VIDEO_BITRATE,
-    keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
-};
+const BPS_PER_KBPS: u32 = 1000;
+
+/// What the encoder is set up with for a preset: its size, rate and bitrate cap.
+const fn video_config(preset: Preset) -> VideoConfig {
+    let video = preset.video();
+    VideoConfig {
+        width: video.width.cast_signed(),
+        height: video.height.cast_signed(),
+        fps: video.fps.cast_signed(),
+        bitrate: (video.kbps * BPS_PER_KBPS).cast_signed(),
+        keyframe_interval_secs: KEYFRAME_INTERVAL_SECS,
+    }
+}
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 /// The markup's "Android has not said which output yet".
 const NO_OUTPUT: i32 = -1;
@@ -162,6 +168,10 @@ struct State {
     /// What the screen and the small window's output button were last told, so each is told
     /// again only when it changes.
     chrome: Option<Chrome>,
+    /// The quality steps this phone's camera and encoder manage, asked once per window.
+    presets: Option<Vec<Preset>>,
+    /// The step the call in progress sends at.
+    sending: Option<Preset>,
     /// The call's counters, voice or video: a voice call has no codecs to hold them.
     media: Option<Arc<MediaStats>>,
     /// The chip's answer, which also says whose side a stalled call is on.
@@ -256,7 +266,12 @@ impl State {
         let facing = if self.scanning { Facing::Back } else { self.facing };
         // The encoder's surface is one of the targets during a call, and the HAL has to be told.
         let intent = if self.call.is_some() { Intent::Record } else { Intent::Preview };
-        let camera = Camera::open(facing, &windows, CAPTURE_FPS, intent)?;
+        // In a call the camera runs at the rate the preset sends; otherwise it is only a preview.
+        let fps = match (&self.call, self.sending) {
+            (Some(_), Some(preset)) => video_config(preset).fps,
+            _ => CAPTURE_FPS,
+        };
+        let camera = Camera::open(facing, &windows, fps, intent)?;
         Ok(Session { shown: None, camera, reader, _scanner: scanner })
     }
 
@@ -322,7 +337,8 @@ impl State {
             // Fails only once the event loop has quit; nothing left to redraw then.
             let _ = ui.upgrade_in_event_loop(|ui| ui.window().request_redraw());
         };
-        match CallVideo::start(parts, &self.avc, VIDEO, self.runtime.clone(), on_remote_frame) {
+        let video = video_config(self.sending.unwrap_or(Preset::Balanced));
+        match CallVideo::start(parts, &self.avc, video, self.runtime.clone(), on_remote_frame) {
             Ok(call) => self.call = Some(call),
             Err(e) => {
                 // Loud on both ends of the report: in the log with the reason, and on the call
@@ -396,7 +412,8 @@ impl State {
 
     /// Starts the microphone and speaker; the call keeps running without them.
     fn start_audio(&mut self, sender: AudioSender, receiver: AudioReceiver) {
-        self.audio = Some(CallAudio::start(sender, receiver, self.runtime.clone()));
+        let voice = self.sending.unwrap_or(Preset::Balanced).voice_bps();
+        self.audio = Some(CallAudio::start(sender, receiver, self.runtime.clone(), voice));
     }
 
     /// Reopens voice streams that AAudio disconnected (re-routing, headphones). Runs on the UI
@@ -795,6 +812,11 @@ fn went_back(ui: &App) -> bool {
         ui.set_new_relay_url(Default::default());
     } else if ui.get_relays_open() {
         ui.set_relays_open(false);
+    } else if ui.get_quality_sheet() != QualitySheet::None {
+        // Back out of the picker changes nothing.
+        ui.set_quality_sheet(QualitySheet::None);
+    } else if ui.get_quality_open() {
+        ui.set_quality_open(false);
     } else if ui.get_pending_key().row_count() > 0 {
         forget_pending_key(ui);
     } else if ui.get_open_contact().row_count() > 0 {
@@ -1166,6 +1188,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         reconnecting: false,
         telecom: TelecomState::default(),
         chrome: None,
+        presets: None,
+        sending: None,
         media: None,
         reach: CoreReach::Connecting,
         network_moved: None,
@@ -1714,6 +1738,28 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_silence(move || silence(&s, &weak, true));
 
+    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
+    ui.on_open_quality(move || {
+        if let Some(ui) = weak.upgrade() {
+            show_quality(&s, &ui, &p);
+        }
+    });
+    // Chosen from the page; a call in progress changes over at once.
+    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
+    ui.on_choose_quality(move |wifi, preset| {
+        let network = if wifi { PresetNetwork::Wifi } else { PresetNetwork::Mobile };
+        let preset = view::core_preset(preset);
+        if let Some(Err(e)) = with_state_value(&s, |state| preset.choose(&state.settings, network)) {
+            tracing::warn!(?network, ?preset, "saving the call quality: {e}");
+        }
+        tracing::info!(?network, ?preset, "call quality chosen");
+        if let Some(ui) = weak.upgrade() {
+            show_quality(&s, &ui, &p);
+        }
+        requalify(&s, &p);
+    });
+    show_quality(&state, &ui, &platform);
+
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -2202,6 +2248,104 @@ const fn peer_of(event: &Event) -> Option<EndpointId> {
     }
 }
 
+/// The quality steps this phone's front camera and encoder can send, asked once per window: the
+/// answers do not change while it runs, and each takes a trip through the camera service.
+fn sendable(state: &Rc<RefCell<State>>, platform: &Platform) -> Vec<Preset> {
+    if let Some(known) = with_state_value(state, |s| s.presets.clone()).flatten() {
+        return known;
+    }
+    let context = platform.context();
+    let steps: Vec<Preset> = Preset::ALL
+        .into_iter()
+        .filter(|preset| {
+            context.can_send(preset.video()).unwrap_or_else(|e| {
+                tracing::warn!(?preset, "asking whether this phone can send it: {e}");
+                false
+            })
+        })
+        .collect();
+    tracing::info!(?steps, "quality steps this phone can send");
+    with_state(state, |s| s.presets = Some(steps.clone()));
+    steps
+}
+
+/// The network the phone is on, as the presets divide them.
+fn preset_network(platform: &Platform) -> PresetNetwork {
+    match platform.context().on_wifi() {
+        Ok(true) => PresetNetwork::Wifi,
+        Ok(false) => PresetNetwork::Mobile,
+        Err(e) => {
+            tracing::warn!("asking which network this is: {e}");
+            PresetNetwork::Mobile
+        }
+    }
+}
+
+/// The step a call sends at now: the one chosen for this network, or the nearest below it this
+/// phone can send.
+fn preset_now(state: &Rc<RefCell<State>>, platform: &Platform) -> Preset {
+    let network = preset_network(platform);
+    let steps = sendable(state, platform);
+    let chosen = with_state_value(state, |s| Preset::chosen(&s.settings, network)).unwrap_or(network.default_preset());
+    chosen.within(&steps)
+}
+
+/// Sets the call's step, and tells the core, which writes it into the call's log.
+fn send_at(state: &Rc<RefCell<State>>, preset: Preset) {
+    with_state(state, |s| {
+        s.sending = Some(preset);
+        if let Some(core) = &s.core {
+            core.set_sending(Some(preset.video()));
+        }
+    });
+}
+
+/// The network changed, or the choice did, mid-call: a different step changes over at once. The
+/// voice from its next frame; the picture through a new encoder under the same sender, the
+/// camera pointed at it, and a keyframe by nature.
+fn requalify(state: &Rc<RefCell<State>>, platform: &Platform) {
+    let Some(before) = with_state_value(state, |s| s.sending).flatten() else { return };
+    let now = preset_now(state, platform);
+    if now == before {
+        return;
+    }
+    tracing::info!(?before, ?now, "call quality changes over");
+    send_at(state, now);
+    with_state(state, |s| {
+        if let Some(audio) = &s.audio {
+            audio.set_voice_bps(now.voice_bps());
+        }
+        let swapped = match &mut s.call {
+            Some(call) => match call.reconfigure(&s.avc, video_config(now)) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!("changing the call's video over: {e:#}");
+                    false
+                }
+            },
+            None => false,
+        };
+        if swapped && s.session.is_some() {
+            s.start_camera();
+        }
+    });
+}
+
+/// The Call quality page and Settings' row: each network's step (what this phone can send of
+/// what was chosen), the steps it can send at all, and which network it is on.
+fn show_quality(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
+    let steps = sendable(state, platform);
+    let effective = |network: PresetNetwork| {
+        let chosen =
+            with_state_value(state, |s| Preset::chosen(&s.settings, network)).unwrap_or(network.default_preset());
+        view::preset_item(chosen.within(&steps))
+    };
+    ui.set_quality_wifi(effective(PresetNetwork::Wifi));
+    ui.set_quality_mobile(effective(PresetNetwork::Mobile));
+    ui.set_quality_steps(ModelRc::new(VecModel::from(steps.into_iter().map(view::preset_item).collect::<Vec<_>>())));
+    ui.set_on_wifi(preset_network(platform) == PresetNetwork::Wifi);
+}
+
 /// Starts the codecs, then the camera with the encoder as a second output.
 fn start_call_video(state: &Rc<RefCell<State>>, platform: &Rc<Platform>, parts: VideoParts) {
     with_state(state, |s| s.start_video(parts));
@@ -2354,13 +2498,21 @@ async fn handle_node_events(
                 with_state(&state, |s| s.reach = reach);
                 ui.set_reach(view::reach(reach));
             }
-            Event::Network(_) => with_state(&state, |s| s.network_moved = Some(Instant::now())),
+            Event::Network(_) => {
+                with_state(&state, |s| s.network_moved = Some(Instant::now()));
+                // Which network is "now" on the page, and which step a call sends at.
+                show_quality(&state, &ui, &platform);
+                requalify(&state, &platform);
+            }
             Event::Connected { media, mode, .. } => {
                 with_state(&state, |s| {
                     s.connected_at = Some(Instant::now());
                     s.mode = mode;
                     s.health = Health::default();
                 });
+                let preset = preset_now(&state, &platform);
+                tracing::info!(?preset, network = ?preset_network(&platform), "call quality");
+                send_at(&state, preset);
                 let MediaSession { video, incoming_video, keyframe_requests, audio, incoming_audio, stats } = *media;
                 with_state(&state, |s| s.media = Some(Arc::clone(&stats)));
                 let parts =
@@ -2393,6 +2545,7 @@ async fn handle_node_events(
                 let answered = with_state_value(&state, |s| {
                     let answered = s.connected_at.is_some();
                     s.connected_at = None;
+                    s.sending = None;
                     s.media = None;
                     s.reconnecting = false;
                     s.end_call();

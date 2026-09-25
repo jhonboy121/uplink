@@ -15,6 +15,7 @@ pub mod node;
 pub mod qr;
 pub mod quality;
 mod pilot;
+pub mod preset;
 pub mod relays;
 mod protocol;
 pub mod reach;

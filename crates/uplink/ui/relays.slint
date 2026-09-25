@@ -18,8 +18,8 @@ component Caption inherits Text {
     horizontal-alignment: Theme.start;
 }
 
-// What a relay is doing, beside its name.
-component Chip inherits Rectangle {
+// What a relay is doing, beside its name; the Call quality page's "now" is the same pill.
+export component Chip inherits Rectangle {
     in property <string> text;
     in property <color> ink;
     in property <color> edge;

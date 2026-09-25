@@ -968,8 +968,8 @@ msgid "Call quality"
 msgstr "جودة المكالمة"
 
 msgctxt "SettingsPage"
-msgid "Caps what the camera sends"
-msgstr "حدّ أقصى لما ترسله الكاميرا"
+msgid "The most a call sends"
+msgstr "أقصى ما ترسله المكالمة"
 
 msgctxt "SettingsPage"
 msgid "Dark"
@@ -1359,3 +1359,59 @@ msgstr "⁨{}⁩ في مكالمة هاتفية"
 msgctxt "AudioSheet"
 msgid "Mute"
 msgstr "كتم الصوت"
+
+msgctxt "NetworkRow"
+msgid "NOW"
+msgstr "الآن"
+
+msgctxt "PresetSheet"
+msgid "On Wi-Fi"
+msgstr "على Wi-Fi"
+
+msgctxt "PresetSheet"
+msgid "On mobile data"
+msgstr "على بيانات الجوال"
+
+msgctxt "PresetText"
+msgid "Lowest"
+msgstr "الأدنى"
+
+msgctxt "PresetText"
+msgid "Low"
+msgstr "منخفضة"
+
+msgctxt "PresetText"
+msgid "Balanced"
+msgstr "متوازنة"
+
+msgctxt "PresetText"
+msgid "High"
+msgstr "عالية"
+
+msgctxt "PresetText"
+msgid "Highest"
+msgstr "الأعلى"
+
+msgctxt "PresetText"
+msgid "{0}p · {1} fps"
+msgstr "⁨{0}p⁩ · ⁨{1}⁩ إطار/ث"
+
+msgctxt "PresetText"
+msgid "{0}p · {1} fps · about {2} MB a minute"
+msgstr "⁨{0}p⁩ · ⁨{1}⁩ إطار/ث · نحو ⁨{2}⁩ ميغابايت في الدقيقة"
+
+msgctxt "QualityPage"
+msgid "Call quality"
+msgstr "جودة المكالمة"
+
+msgctxt "QualityPage"
+msgid "On Wi-Fi"
+msgstr "على Wi-Fi"
+
+msgctxt "QualityPage"
+msgid "On mobile data"
+msgstr "على بيانات الجوال"
+
+msgctxt "QualityPage"
+msgid "The most a call sends, picture and voice together. It sends less on its own when the network struggles, and changes over when you move between Wi-Fi and mobile data mid-call."
+msgstr "أقصى ما ترسله المكالمة، الصورة والصوت معًا. ترسل أقل من تلقاء نفسها حين تتعثّر الشبكة، وتتبدّل حين تنتقل بين Wi-Fi وبيانات الجوال أثناء المكالمة."

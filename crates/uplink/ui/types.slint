@@ -28,6 +28,21 @@ export enum Stall { reconnecting, offline, waiting }
 // A call that works but struggles, and on whose side: the weak pill.
 export enum Weak { none, ours, theirs }
 
+// How much a call sends, lowest to highest.
+export enum Preset { lowest, low, balanced, high, highest }
+
+// A step as the Call quality page and its picker say it: the picture's lines and frame rate,
+// and what a minute of it costs. Facts from Rust; the words are the markup's.
+export struct PresetItem {
+    preset: Preset,
+    lines: int,
+    fps: int,
+    megabytes: int,
+}
+
+// Which network's picker is open, if either.
+export enum QualitySheet { none, wifi, mobile }
+
 // Where a call's sound goes, as Android offers it.
 export enum Output { phone, speaker, bluetooth, wired }
 

@@ -1,0 +1,24 @@
+// A quality step said in words, wherever it appears: Settings' row, the Call quality page, and
+// its picker.
+
+import { Preset, PresetItem } from "types.slint";
+
+export global PresetText {
+    pure public function name(preset: Preset) -> string {
+        return preset == Preset.lowest ? @tr("Lowest")
+            : preset == Preset.low ? @tr("Low")
+            : preset == Preset.balanced ? @tr("Balanced")
+            : preset == Preset.high ? @tr("High")
+            : @tr("Highest");
+    }
+
+    // "1080p · 30 fps": what the page puts under each network.
+    pure public function picture(item: PresetItem) -> string {
+        return @tr("{0}p · {1} fps", item.lines, item.fps);
+    }
+
+    // With what a minute costs: what the picker puts under each step.
+    pure public function detail(item: PresetItem) -> string {
+        return @tr("{0}p · {1} fps · about {2} MB a minute", item.lines, item.fps, item.megabytes);
+    }
+}
