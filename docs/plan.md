@@ -960,3 +960,8 @@ default); keep disk usage lean. Avoid build scripts.
   - **Still to do:** log the nameservers iroh actually uses (`n0_dns_resolver` at trace, or our own
     line on each network change), then a night on mobile data. The beat's `elapsed_s` uses a clock
     that stops in deep sleep, so it always reads 300. It needs a boot-time or wall clock.
+  - **The Online chip lied after a headless start.** The core only forwards events while a window is
+    attached. A relay that answers before the window opens (24 ms to `relay-in`, while a boot or the
+    listening service starts the core long before any window) sent Online to nobody, and the chip
+    stays at its default, Offline, until the connection next changes. The inbox now keeps the last
+    reachability, and `attach` replays it first, the same way it replays the relays and a ringing call.

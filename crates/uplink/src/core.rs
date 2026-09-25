@@ -81,6 +81,9 @@ struct Inbox {
     ringing: Option<(EndpointId, Mode)>,
     /// The relays as last reported, for a window that opens after the report.
     relays: Option<RelayView>,
+    /// Reachability as last reported. A relay can answer before the window exists, and nothing
+    /// says it again until the connection changes.
+    online: bool,
 }
 
 /// Rings for an incoming call, plays ringback for an outgoing one, and stops either when the call
@@ -298,6 +301,8 @@ async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ri
                 Event::Incoming { peer, mode } => inbox.ringing = Some((*peer, *mode)),
                 Event::Connected { .. } | Event::Ended { .. } => inbox.ringing = None,
                 Event::Relays(view) => inbox.relays = Some(view.clone()),
+                Event::Online => inbox.online = true,
+                Event::Offline => inbox.online = false,
                 _ => {}
             }
             inbox.window.clone()
@@ -405,7 +410,8 @@ impl Core {
     pub fn attach(&self) -> mpsc::Receiver<Event> {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
         let mut inbox = self.inbox.lock();
-        // A new channel with room in it for both; there is no way for these to fail.
+        // A new channel with room in it for all three; there is no way for these to fail.
+        drop(sender.try_send(if inbox.online { Event::Online } else { Event::Offline }));
         if let Some(view) = inbox.relays.clone() {
             drop(sender.try_send(Event::Relays(view)));
         }
