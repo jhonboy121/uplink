@@ -137,7 +137,7 @@ component Flag inherits Rectangle {
 }
 
 // Three dots that pulse in turn while the call tries to come back.
-// Our camera is off: said, rather than holding the last frame.
+// A camera is off: said, rather than holding the last frame.
 component CameraOff inherits Rectangle {
     background: Theme.video-raised;
     Image {
@@ -325,6 +325,8 @@ export component CallScreen inherits Rectangle {
             image-fit: cover;
         }
         if !root.camera-on && !root.swapped : CameraOff { }
+        // Theirs, when they are the one in the card.
+        if root.peer-away && root.swapped : CameraOff { }
         if !root.swapped : Rectangle {
             // Inside the card's border, as the design draws it.
             x: 1px;
