@@ -23,6 +23,8 @@ llvm_profdata := env("LLVM_PROFDATA", "/usr/bin/llvm-profdata")
 coverage_dir := "target/coverage"
 # The design's frame in dp: 360 wide at the mockup's 9/19.3, which is what `just ui-diff` renders.
 design_size := "360x772"
+# The TUI's log, where `just cli` puts it.
+cli_log := env("UPLINK_CLI_LOG", "target/cli.log")
 java_release := "8"
 # google-java-format's all-deps jar; 1.28.0 is the last that runs on JDK 17.
 google_java_format := env("GOOGLE_JAVA_FORMAT", home_directory() / ".local/share/java/google-java-format.jar")
@@ -175,10 +177,10 @@ add-contact key name="CLI":
 The call TUI: a phone in the terminal (uplink-core over iroh), e.g.
 `just cli --video ~/uplink-media/clip.mp4 --record target/rec.mp4`. Two with different --dir can call
 each other; `just cli --dir /tmp/a id` / `add <name> <key>` / `contacts` manage who it can call.
-Built with the `opt` profile: it encodes live, which a debug build cannot keep up with. Its log is <dir>/uplink.log.
+Built with the `opt` profile: it encodes live, which a debug build cannot keep up with. Its log is target/cli.log ($UPLINK_CLI_LOG).
 ''')]
 cli *args:
-    nice cargo run -q --profile opt -p uplink-cli -- {{args}}
+    UPLINK_CLI_LOG={{cli_log}} nice cargo run -q --profile opt -p uplink-cli -- {{args}}
 
 [doc('''
 Render every screen of the UI to target/ui-preview with Slint's software renderer.

@@ -1203,3 +1203,10 @@ default); keep disk usage lean. Avoid build scripts.
   - Logs go to `<dir>/uplink.log` and the log pane.
   - App: the ringing notification said "Incoming video call" for voice calls too; it now follows
     the call's video state.
+- **2026-09-25**: **the folded call stays over every page.** The relays, call quality, call-log and
+  contact pages were declared after the `MiniCall` in `app.slint` (later siblings draw on top), so
+  opening one hid the folded call, and the video-ask sheet with it. They now sit under everything
+  the call draws and over the tabs; the sheets they open and the toast stay on top; the scanner,
+  a full-screen viewfinder, still covers the card. Device-tested. The TUI's log is `target/cli.log`
+  again under `just cli` (`$UPLINK_CLI_LOG`). TUI to phone at Highest measured 59.4 fps and
+  ~6.1 Mbps received, nothing late or dropped.

@@ -1,9 +1,10 @@
 //! Where the TUI's logs go: stderr would scribble over the screen, so every line goes to a file
-//! in the data dir (the app's `files/uplink.log`, on a phone) and to the log pane.
+//! and to the log pane. The file is `$UPLINK_CLI_LOG` (`just cli` makes it target/cli.log), or
+//! else `uplink.log` in the data dir, as the app keeps `files/uplink.log` on a phone.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -11,6 +12,7 @@ use tokio::sync::mpsc;
 use tracing_subscriber::fmt::MakeWriter;
 
 pub const FILE: &str = "uplink.log";
+pub const PATH_VAR: &str = "UPLINK_CLI_LOG";
 
 #[derive(Clone)]
 pub struct Sink {
@@ -21,8 +23,10 @@ pub struct Sink {
 impl Sink {
     /// The sink, and the log pane's end of it.
     pub fn open(dir: &Path) -> Result<(Self, mpsc::UnboundedReceiver<String>)> {
-        std::fs::create_dir_all(dir)?;
-        let path = dir.join(FILE);
+        let path = std::env::var_os(PATH_VAR).map_or_else(|| dir.join(FILE), PathBuf::from);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)

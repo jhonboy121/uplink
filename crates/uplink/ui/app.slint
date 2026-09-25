@@ -381,6 +381,64 @@ export component App inherits Window {
             }
         }
 
+        // The pages that take the window, over the tabs: under the call and its folded card,
+        // which stay in reach from any of them, and under the sheets they open.
+        // The relay page takes the window, over the tabs, like a contact does. Under the toast,
+        // which is how an address that is not a relay's gets said.
+        if root.relays-open : RelaysPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            auto: root.relays-auto;
+            checked: root.relays-checked;
+            uplink: root.uplink-relays;
+            n0: root.n0-relays;
+            yours: root.your-relays;
+            set-auto(on) => { root.set-relays-auto(on); }
+            check => { root.check-relays(); }
+            tick(url, on) => { root.tick-relay(url, on); }
+            add => { root.adding-relay = true; }
+            remove(url) => { root.remove-relay(url); }
+        }
+
+        // Call quality takes the window like the relay page, and its picker sits over it.
+        if root.quality-open : QualityPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            wifi: root.quality-wifi;
+            mobile: root.quality-mobile;
+            on-wifi: root.on-wifi;
+            pick-wifi => { root.quality-sheet = QualitySheet.wifi; }
+            pick-mobile => { root.quality-sheet = QualitySheet.mobile; }
+        }
+
+        // One call from the log, over the tabs. Under the naming sheet, which Add opens, and
+        // under the confirm sheet, which Remove opens.
+        for call in root.open-call : CallPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            call: call;
+            call-back(voice) => {
+                root.call(call.peer, voice);
+                root.open-call = [];
+            }
+            add => { root.pending-key = [call.peer]; }
+            remove => { root.confirming = Confirm.remove-call; }
+            close => { root.open-call = []; }
+        }
+
+        // A contact takes the window, over the tabs, until it is dismissed.
+        for contact in root.open-contact : ContactPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            contact: contact;
+            draft <=> root.new-name;
+            call(voice) => { root.call(contact.id, voice); }
+            toggle-favourite => { root.set-favourite(contact.id, !contact.favourite); }
+            rename(name) => { root.rename-contact(contact.id, name); }
+            remove => { root.confirming = Confirm.remove-contact; }
+            close => { root.open-contact = []; }
+        }
+
         // Shrunk by the system: the remote picture fills the window and nothing else is
         // drawn, because the system draws the buttons over it and there is room for no more.
         if root.call-pip : Rectangle {
@@ -494,34 +552,6 @@ export component App inherits Window {
             }
         }
 
-        // The relay page takes the window, over the tabs, like a contact does. Under the toast,
-        // which is how an address that is not a relay's gets said.
-        if root.relays-open : RelaysPage {
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            auto: root.relays-auto;
-            checked: root.relays-checked;
-            uplink: root.uplink-relays;
-            n0: root.n0-relays;
-            yours: root.your-relays;
-            set-auto(on) => { root.set-relays-auto(on); }
-            check => { root.check-relays(); }
-            tick(url, on) => { root.tick-relay(url, on); }
-            add => { root.adding-relay = true; }
-            remove(url) => { root.remove-relay(url); }
-        }
-
-        // Call quality takes the window like the relay page, and its picker sits over it.
-        if root.quality-open : QualityPage {
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            wifi: root.quality-wifi;
-            mobile: root.quality-mobile;
-            on-wifi: root.on-wifi;
-            pick-wifi => { root.quality-sheet = QualitySheet.wifi; }
-            pick-mobile => { root.quality-sheet = QualitySheet.mobile; }
-        }
-
         if root.quality-sheet != QualitySheet.none : PresetSheet {
             wifi: root.quality-sheet == QualitySheet.wifi;
             steps: root.quality-steps;
@@ -558,21 +588,6 @@ export component App inherits Window {
             width: min(parent.width - Theme.edge * 2, Theme.sheet-width);
         }
 
-        // One call from the log, over the tabs. Under the naming sheet, which Add opens, and
-        // under the confirm sheet, which Remove opens.
-        for call in root.open-call : CallPage {
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            call: call;
-            call-back(voice) => {
-                root.call(call.peer, voice);
-                root.open-call = [];
-            }
-            add => { root.pending-key = [call.peer]; }
-            remove => { root.confirming = Confirm.remove-call; }
-            close => { root.open-call = []; }
-        }
-
         // A key that has arrived and has no name yet, over everything below it.
         for key in root.pending-key : NameSheet {
             key: key;
@@ -585,19 +600,6 @@ export component App inherits Window {
                 root.new-name = "";
                 root.add-problem = [];
             }
-        }
-
-        // A contact takes the window, over the tabs, until it is dismissed.
-        for contact in root.open-contact : ContactPage {
-            top-inset: root.safe-area-insets.top;
-            bottom-inset: root.safe-area-insets.bottom;
-            contact: contact;
-            draft <=> root.new-name;
-            call(voice) => { root.call(contact.id, voice); }
-            toggle-favourite => { root.set-favourite(contact.id, !contact.favourite); }
-            rename(name) => { root.rename-contact(contact.id, name); }
-            remove => { root.confirming = Confirm.remove-contact; }
-            close => { root.open-contact = []; }
         }
 
         // Nothing here happens on the tap that asked for it. Above every page and sheet that

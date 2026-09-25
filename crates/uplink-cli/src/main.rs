@@ -30,7 +30,7 @@ const APP: &str = concat!("cli ", env!("CARGO_PKG_VERSION"));
 #[derive(Parser)]
 #[command(name = "uplink", about = "uplink peer-to-peer calls from the terminal; without a command, the call TUI")]
 struct Args {
-    /// Data dir (identity, contacts, settings, uplink.log) [default: ~/.local/share/uplink]
+    /// Data dir (identity, contacts, settings; the log too, without $UPLINK_CLI_LOG) [default: ~/.local/share/uplink]
     #[arg(long, env = "UPLINK_DIR", global = true)]
     dir: Option<PathBuf>,
     /// tracing filter for the log
