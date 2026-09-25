@@ -2,7 +2,7 @@
 // app can be used.
 
 import { Theme } from "theme.slint";
-import { CallState, Output, OutputItem, Route, Stall, Weak } from "types.slint";
+import { CallCapture, CallState, Output, OutputItem, Route, Stall, Weak } from "types.slint";
 import { BigAvatar, DragTap, Key, Line, Row, Tap } from "controls.slint";
 
 // A label on the call's scrim: how the call is set up.
@@ -233,6 +233,7 @@ export component CallScreen inherits Rectangle {
     in property <Stall> stall;
     // Still working, but struggling: whose side.
     in property <Weak> weak;
+    in property <CallCapture> capture;
     // We asked to switch to video and have no answer yet.
     in property <bool> asking;
     // They answered our ask by keeping it voice; said until we ask again.
@@ -741,7 +742,7 @@ export component CallScreen inherits Rectangle {
     // view's. The route, because a relayed call explains a bad one; the encryption is not said,
     // being always the same. Our own weak pill over it, on our side of the screen, so it is never
     // read as theirs. The open question to switch to video takes this spot while it shows.
-    if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours || root.weak-shown == Weak.both) : VerticalLayout {
+    if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours || root.weak-shown == Weak.both || root.capture != CallCapture.none) : VerticalLayout {
         x: Theme.rtl ? parent.width - self.width - Theme.self-view-edge : Theme.self-view-edge;
         y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
         width: self.preferred-width;
@@ -763,6 +764,26 @@ export component CallScreen inherits Rectangle {
                 fill: #58B6FF29;
                 edge: #58B6FF4C;
                 ink: Theme.on-video-accent;
+            }
+        }
+        // This call cannot be captured on their phone, in the route chip's style: a fact about
+        // the call, not a warning.
+        if root.capture == CallCapture.blocked : HorizontalLayout {
+            alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            Chip {
+                text: @tr("No screenshots");
+                fill: #58B6FF29;
+                edge: #58B6FF4C;
+                ink: Theme.on-video-accent;
+            }
+        }
+        // Asked, and their app never said it could: an older build.
+        if root.capture == CallCapture.unsupported : HorizontalLayout {
+            alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
+            Flag {
+                icon: @image-url("icons/camera-off.svg");
+                icon-size: Theme.weak-icon;
+                text: @tr("{}'s app can't block screenshots", root.peer-name);
             }
         }
     }

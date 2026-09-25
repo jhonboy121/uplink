@@ -55,8 +55,8 @@ use crate::core::Core;
 
 use crate::audio::CallAudio;
 use crate::ui::{
-    AddError, AddProblem, App, Appearance, CallState, Confirm, Grant, Language, Mismatch, PermissionItem, QualitySheet,
-    RelayItem, Say, Screen, Theme, Toast,
+    AddError, AddProblem, App, Appearance, CallCapture, CallState, Confirm, Grant, Language, Mismatch, PermissionItem,
+    QualitySheet, RelayItem, Say, Screen, Theme, Toast,
 };
 use crate::video::{CallVideo, VideoParts};
 use crate::view::{maybe, none, one, toast};
@@ -113,6 +113,41 @@ const NO_OUTPUT: i32 = -1;
 /// How long after our own network changes a stalled call is put down to us rather than them: a
 /// switch between wifi and mobile data takes about a second, and the relay a moment more.
 const UNSETTLED: Duration = Duration::from_secs(5);
+/// How long a call waits for the other phone to say its screen is blocked, once asked, before
+/// the call screen says their app cannot: a build that knows the ask answers within a second.
+const CAPTURE_ANSWER: Duration = Duration::from_secs(5);
+
+/// Who wants this phone's screen kept from screenshots and recordings, and what the other side
+/// of the call said about theirs.
+#[derive(Clone, Copy, Default)]
+struct Capture {
+    /// Settings: always, on this phone.
+    block: bool,
+    /// Settings: every call asks the other phone to.
+    ask: bool,
+    /// This call's other side asks us to.
+    peer_asked: bool,
+    /// This call's other side says its screen is kept from capture.
+    peer_blocked: bool,
+}
+
+impl Capture {
+    const fn secure(self) -> bool {
+        self.block || self.peer_asked
+    }
+
+    /// What the call screen says: blocked on their side (which we asked for, or they asked of
+    /// us), or asked of an app that has not said it can.
+    fn shown(self, connected_for: Option<Duration>) -> CallCapture {
+        if (self.ask && self.peer_blocked) || self.peer_asked {
+            CallCapture::Blocked
+        } else if self.ask && connected_for.is_some_and(|connected| connected >= CAPTURE_ANSWER) {
+            CallCapture::Unsupported
+        } else {
+            CallCapture::None
+        }
+    }
+}
 const SECONDS_PER_MINUTE: u64 = 60;
 /// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
 const FRESH_FOR: Duration = Duration::from_millis(3200);
@@ -201,6 +236,7 @@ struct State {
     /// belongs to the process and outlives every window it is shown in.
     core: Option<Arc<Core>>,
     settings: Settings,
+    capture: Capture,
     /// The relays as the endpoint last reported them: the survey, the map, the home relay.
     relays: Option<RelayView>,
 }
@@ -394,7 +430,13 @@ impl State {
     /// What the other side is told about our mic, our camera and our hold.
     fn media_state(&self) -> MediaState {
         let mic_off = self.audio.as_ref().is_some_and(CallAudio::muted);
-        MediaState { mic_off, camera_off: !self.camera_on, held: self.telecom.held }
+        MediaState {
+            mic_off,
+            camera_off: !self.camera_on,
+            held: self.telecom.held,
+            capture_asked: self.capture.ask,
+            capture_blocked: self.capture.secure(),
+        }
     }
 
     /// A phone call took this one over, or gave it back. The voice streams let go of the audio
@@ -1237,6 +1279,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         stats: Arc::default(),
         core: None,
         settings: settings.clone(),
+        capture: Capture {
+            block: settings.flag(settings::BLOCK_CAPTURE),
+            ask: settings.flag(settings::ASK_BLOCK_CAPTURE),
+            ..Capture::default()
+        },
         relays: None,
     }));
 
@@ -1797,6 +1844,21 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
     show_quality(&state, &ui, &platform);
 
+    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
+    ui.on_toggle_block_capture(move || {
+        if let Some(ui) = weak.upgrade() {
+            toggle_capture(&s, &p, &ui, settings::BLOCK_CAPTURE);
+        }
+    });
+    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
+    ui.on_toggle_ask_block_capture(move || {
+        if let Some(ui) = weak.upgrade() {
+            toggle_capture(&s, &p, &ui, settings::ASK_BLOCK_CAPTURE);
+        }
+    });
+    show_capture(&state, &ui);
+    apply_capture(&state, &platform);
+
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -2029,6 +2091,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 ui.set_call_reconnecting(state.reconnecting || stalled);
                 ui.set_call_stall(view::stall(state.reach, moved));
                 ui.set_call_weak(view::weak(weak));
+                ui.set_call_capture(state.capture.shown(state.connected_at.map(|at| at.elapsed())));
             }
         });
         // A call starting, ending, turning video or going on hold: within the second.
@@ -2248,6 +2311,39 @@ fn follow_telecom(state: &Rc<RefCell<State>>, ui: &App, platform: &Platform) {
     if now.muted != before.muted && now.muted == ui.get_mic_on() {
         ui.invoke_toggle_mic();
     }
+}
+
+/// Tells Java whether our windows may be captured: the user's choice, or the call's ask.
+fn apply_capture(state: &Rc<RefCell<State>>, platform: &Platform) {
+    let Some(secure) = with_state_value(state, |s| s.capture.secure()) else { return };
+    if let Err(e) = platform.context().set_secure(secure) {
+        tracing::warn!(secure, "screen capture: {e}");
+    }
+}
+
+/// The two privacy rows, as the store has them.
+fn show_capture(state: &Rc<RefCell<State>>, ui: &App) {
+    if let Some(capture) = with_state_value(state, |s| s.capture) {
+        ui.set_block_capture(capture.block);
+        ui.set_ask_block_capture(capture.ask);
+    }
+}
+
+/// Flips one of the two privacy switches, saves it, and puts it in force at once, mid-call too.
+fn toggle_capture(state: &Rc<RefCell<State>>, platform: &Platform, ui: &App, key: &'static str) {
+    let saved = with_state_value(state, |s| {
+        let on = if key == settings::BLOCK_CAPTURE { &mut s.capture.block } else { &mut s.capture.ask };
+        *on = !*on;
+        let now = *on;
+        tracing::info!(key, on = now, "screen capture choice");
+        s.settings.set_flag(key, now)
+    });
+    if let Some(Err(e)) = saved {
+        tracing::warn!(key, "saving the screen capture choice: {e}");
+    }
+    apply_capture(state, platform);
+    show_capture(state, ui);
+    tell_media(state, &ui.as_weak());
 }
 
 /// Tells the other side what our mic and camera are doing now.
@@ -2500,12 +2596,33 @@ async fn handle_node_events(
                     s.camera_on = true;
                     s.reconnecting = false;
                     s.telecom = TelecomState::default();
+                    (s.capture.peer_asked, s.capture.peer_blocked) = (false, false);
                 });
+                ui.set_call_capture(CallCapture::None);
+                apply_capture(&state, &platform);
+                // The ask goes with the call from the start: the core tells it on connecting.
+                tell_media(&state, &ui.as_weak());
             }
             Event::PeerMedia(theirs) => {
                 ui.set_peer_mic_off(theirs.mic_off);
                 ui.set_peer_camera_off(theirs.camera_off);
                 ui.set_peer_held(theirs.held);
+                let asked_now = with_state_value(&state, |s| {
+                    let before = s.capture.peer_asked;
+                    (s.capture.peer_asked, s.capture.peer_blocked) = (theirs.capture_asked, theirs.capture_blocked);
+                    before != theirs.capture_asked
+                });
+                if asked_now == Some(true) {
+                    tracing::info!(asked = theirs.capture_asked, "they ask for no screen capture");
+                    apply_capture(&state, &platform);
+                    // Our screen's answer: blocked now, or not any more.
+                    tell_media(&state, &ui.as_weak());
+                }
+                if let Some(shown) =
+                    with_state_value(&state, |s| s.capture.shown(s.connected_at.map(|at| at.elapsed())))
+                {
+                    ui.set_call_capture(shown);
+                }
             }
             Event::VideoAsked(asking) => ui.set_video_asked(*asking),
             Event::VideoDeclined => {
@@ -2606,8 +2723,11 @@ async fn handle_node_events(
                     s.media = None;
                     s.reconnecting = false;
                     s.end_call();
+                    (s.capture.peer_asked, s.capture.peer_blocked) = (false, false);
                     answered
                 });
+                ui.set_call_capture(CallCapture::None);
+                apply_capture(&state, &platform);
                 // A call the network ended stays on screen a moment to say so, as a call that
                 // never connected would; Close or Call again, or it goes by itself.
                 if answered == Some(true) && matches!(reason, EndReason::ConnectionLost) {

@@ -23,6 +23,10 @@ pub const RELAYS_TICKED: &str = "relays-ticked";
 pub const RELAYS_CUSTOM: &str = "relays-custom";
 /// The last survey: its unix time, then `<url> <rtt ms>` best first.
 pub const RELAYS_RANKING: &str = "relays-ranking";
+/// Set when this phone's screen is kept from screenshots and recordings, always.
+pub const BLOCK_CAPTURE: &str = "block-capture";
+/// Set when every call asks the other phone to keep its screen from them, for that call.
+pub const ASK_BLOCK_CAPTURE: &str = "ask-block-capture";
 
 const TRUE: &str = "1";
 

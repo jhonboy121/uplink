@@ -116,6 +116,10 @@ fn call_lines(tui: &Tui) -> Vec<Line<'static>> {
             on_off(!call.theirs.camera_off),
             Span::raw("  hold "),
             on_off(call.theirs.held),
+            Span::raw("  asks no capture "),
+            on_off(call.theirs.capture_asked),
+            Span::raw("  screen blocked "),
+            on_off(call.theirs.capture_blocked),
         ]),
     ];
     if call.asked_us {

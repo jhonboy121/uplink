@@ -387,12 +387,31 @@ impl Drop for Core {
     }
 }
 
+/// The identity kept by the Android Keystore: the file in the data dir is only ever sealed.
+struct Keystore<'a>(&'a AppContext);
+
+const SEALED_FILE: &str = "secret.key.sealed";
+
+impl identity::Vault for Keystore<'_> {
+    fn file(&self) -> &'static str {
+        SEALED_FILE
+    }
+
+    fn seal(&self, secret: &[u8]) -> Result<Vec<u8>, uplink_core::Error> {
+        self.0.seal_identity(secret).map_err(|e| uplink_core::Error::Vault(e.to_string()))
+    }
+
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, uplink_core::Error> {
+        self.0.open_identity(sealed).map_err(|e| uplink_core::Error::Vault(e.to_string()))
+    }
+}
+
 impl Core {
     /// Binds the endpoint and opens the database. Blocks until the endpoint is up, because until
     /// it is there is nothing to answer a call with.
     pub fn start(logging: Logging, data_dir: &Path, context: AppContext) -> Result<Self> {
         let runtime = uplink_core::runtime::build(logging.dispatch())?;
-        let secret = runtime.block_on(identity::load_or_create(data_dir))?;
+        let secret = runtime.block_on(identity::load_or_create(data_dir, &Keystore(&context)))?;
         let id = secret.public();
         let db = Db::open(data_dir)?;
         let settings = Settings::open(db.clone())?;

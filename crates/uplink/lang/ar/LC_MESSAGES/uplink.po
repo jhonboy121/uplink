@@ -1419,3 +1419,35 @@ msgstr "على بيانات الجوال"
 msgctxt "QualityPage"
 msgid "The most a call sends, picture and voice together. It sends less on its own when the network struggles, and changes over when you move between Wi-Fi and mobile data mid-call."
 msgstr "أقصى ما ترسله المكالمة، الصورة والصوت معًا. ترسل أقل من تلقاء نفسها حين تتعثّر الشبكة، وتتبدّل حين تنتقل بين Wi-Fi وبيانات الجوال أثناء المكالمة."
+
+msgctxt "CallScreen"
+msgid "No screenshots"
+msgstr "بلا لقطات شاشة"
+
+msgctxt "CallScreen"
+msgid "{}'s app can't block screenshots"
+msgstr "تطبيق {} لا يستطيع منع لقطات الشاشة"
+
+msgctxt "SettingsPage"
+msgid "Block screenshots"
+msgstr "منع لقطات الشاشة"
+
+msgctxt "SettingsPage"
+msgid "Screenshots and recordings come out black"
+msgstr "تظهر لقطات الشاشة والتسجيلات سوداء"
+
+msgctxt "SettingsPage"
+msgid "Ask them to block"
+msgstr "اطلب منهم المنع"
+
+msgctxt "SettingsPage"
+msgid "Their screen during your calls"
+msgstr "شاشتهم أثناء مكالماتكما"
+
+msgctxt "SettingsPage"
+msgid "On"
+msgstr "مفعّل"
+
+msgctxt "SettingsPage"
+msgid "Off"
+msgstr "متوقف"

@@ -226,7 +226,7 @@ async fn the_other_side_hears_when_the_mic_or_camera_changes() -> Result<()> {
     let lookup = MemoryLookup::new();
     let (mut alice, mut bob) = (Peer::start(&lookup).await?, Peer::start(&lookup).await?);
     connect(&mut alice, &mut bob).await?;
-    let state = MediaState { mic_off: true, camera_off: true, held: true };
+    let state = MediaState { mic_off: true, camera_off: true, held: true, ..MediaState::default() };
     alice.node.send(Command::Media(state)).await?;
     let heard = bob.expect("their media", |e| matches!(e, Event::PeerMedia(_))).await?;
     assert!(matches!(heard, Event::PeerMedia(theirs) if theirs == state));

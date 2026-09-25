@@ -278,6 +278,34 @@ impl AppContext {
         self.call(jni_str!("ringback"))
     }
 
+    /// Keeps our windows from screenshots, recordings and the recents thumbnail, or lets them be
+    /// captured again. Java holds it for windows made later too.
+    pub fn set_secure(&self, on: bool) -> Result<(), Error> {
+        self.with(|env, application| {
+            env.call_method(application, jni_str!("setSecure"), jni_sig!("(Z)V"), &[JValue::Bool(on)])?;
+            Ok(())
+        })
+    }
+
+    /// `secret` sealed with the Keystore's identity key, which Java makes on first use and
+    /// which never leaves the Keystore (see `UplinkKeystore`).
+    pub fn seal_identity(&self, secret: &[u8]) -> Result<Vec<u8>, Error> {
+        self.identity(jni_str!("sealIdentity"), secret)
+    }
+
+    /// A sealed identity opened again; an error on a phone whose Keystore has no key for it.
+    pub fn open_identity(&self, sealed: &[u8]) -> Result<Vec<u8>, Error> {
+        self.identity(jni_str!("openIdentity"), sealed)
+    }
+
+    fn identity(&self, method: &JNIStr, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        self.with(|env, application| {
+            let bytes = env.byte_array_from_slice(bytes)?;
+            let out = env.call_method(application, method, jni_sig!("([B)[B"), &[JValue::Object(&bytes)])?.l()?;
+            Ok(env.convert_byte_array(env.cast_local::<JByteArray>(out)?)?)
+        })
+    }
+
     /// This build's version as people see it (the manifest's versionName).
     pub fn app_version(&self) -> Result<String, Error> {
         self.with(|env, application| {

@@ -66,7 +66,7 @@ This is the source of truth for decisions. Changes go in as dated entries in [Re
 - To do:
   - **Verification UX:** a short fingerprint/safety code to compare; in-person QR scan is the strong path; warn when a
     contact's key changes.
-  - **Key at rest:** the iroh secret key is encrypted with an Android Keystore key, never stored in plaintext.
+  - ~~**Key at rest:**~~ done: the iroh secret key is sealed with an Android Keystore key, never stored in plaintext (see Revisions).
   - ~~**Post-quantum**~~ done: aws-lc-rs provider, peer connections must negotiate `X25519MLKEM768` (see Revisions).
   - **Metadata:** relays and discovery see who/when/how much (never content). Self-hosting reduces third-party exposure.
 - Not needed yet: X3DH/Double Ratchet (only for offline stored messages; we store nothing server-side). SFrame
@@ -1240,3 +1240,23 @@ default); keep disk usage lean. Avoid build scripts.
     were bad, and theirs was only judged while ours was healthy. One phone cannot place a
     bottleneck that slows both ways, so that is now `Weak::Both`, "Weak connection" (user's call;
     a third state beyond the locked design's two), in ours' place; ours and theirs alone as before.
+- **2026-09-26**: **the identity key is sealed by the Keystore.** `UplinkKeystore` (Java) makes an
+  AES-256-GCM key in AndroidKeyStore, StrongBox where the phone has one (the S24: yes), no user
+  auth (the app starts headless); `identity::Vault` in core takes it over JNI, and the data dir
+  holds only `secret.key.sealed` (format byte, IV, ciphertext + tag: 61 bytes). The host CLI
+  keeps `identity::Plain`. A sealed identity this phone cannot open is an error, never a new
+  identity, and `allowBackup` is off, since a restored copy could not be opened elsewhere.
+  - **No migration** (the user's call): the first start of this build makes a new identity and
+    removes the old plaintext `secret.key`; both phones re-add each other. Device-tested.
+- **2026-09-26**: **screenshots and recordings, blocked here and asked of the other phone.** Two
+  switches in Settings (a new group; the user's call), both off by default:
+  - **Block screenshots:** the whole app is `FLAG_SECURE`, always: screenshots and recordings
+    come out black, the recents thumbnail too. Java (`UplinkApplication.setSecure`) keeps the
+    choice and applies it to every activity window, including ones made later.
+  - **Ask them to block:** every call asks the other phone, in `MediaState` (tag 4
+    `capture_asked`); their app blocks for that call whatever its own switch, and says so (tag 5
+    `capture_blocked`). The call screen shows "No screenshots" in the route chip's style, or,
+    5 s after connecting with no answer, "{name}'s app can't block screenshots" (an older build
+    skips the field; the host CLI answers honestly that a terminal cannot).
+  - A cooperative block, not a guarantee: a second camera or a modified app gets around it.
+    Detecting captures (Android 14+ screenshots, 15+ recordings) is left out: the Huawei is 12.

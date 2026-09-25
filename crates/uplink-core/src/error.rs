@@ -48,6 +48,8 @@ pub enum Error {
     Qr(String),
     #[error("identity card: {0}")]
     Card(String),
+    #[error("identity vault: {0}")]
+    Vault(String),
     #[error("node command queue is full")]
     CommandQueueFull,
     #[error("node stopped")]

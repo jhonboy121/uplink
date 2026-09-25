@@ -50,9 +50,13 @@ import android.os.Vibrator;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Size;
+import android.view.WindowManager;
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Everything the app can do with only a `Context`, which is everything that still matters when
@@ -358,6 +362,16 @@ public class UplinkApplication extends Application {
    * This build's version as people see it — the manifest's versionName. It goes to the other side
    * of every call, so whichever phone is too old for the other can say so with both.
    */
+  /** The identity key sealed by the Keystore, for the data dir. Called from Rust. */
+  byte[] sealIdentity(byte[] secret) throws GeneralSecurityException, IOException {
+    return UplinkKeystore.seal(secret);
+  }
+
+  /** A sealed identity opened again. Called from Rust; throws if this phone cannot open it. */
+  byte[] openIdentity(byte[] sealed) throws GeneralSecurityException, IOException {
+    return UplinkKeystore.open(sealed);
+  }
+
   String appVersion() {
     try {
       String name = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
@@ -1032,7 +1046,10 @@ public class UplinkApplication extends Application {
         }
 
         @Override
-        public void onActivityCreated(Activity activity, Bundle state) {}
+        public void onActivityCreated(Activity activity, Bundle state) {
+          alive.add(activity);
+          applySecure(activity);
+        }
 
         @Override
         public void onActivityStarted(Activity activity) {}
@@ -1044,8 +1061,47 @@ public class UplinkApplication extends Application {
         public void onActivitySaveInstanceState(Activity activity, Bundle state) {}
 
         @Override
-        public void onActivityDestroyed(Activity activity) {}
+        public void onActivityDestroyed(Activity activity) {
+          alive.remove(activity);
+        }
       };
+
+  // ---- Screen capture --------------------------------------------------------------------------
+
+  /**
+   * Whether our windows are kept from screenshots, recordings and the recents thumbnail: the user's
+   * choice, or the other side of a call asking. Kept here, not on a window, because a window made
+   * later (the activity recreated, or opened for a call) must start that way.
+   */
+  private boolean secure;
+
+  private final Set<Activity> alive = new HashSet<>();
+
+  /** From Rust whenever it changes. Main thread from here on. */
+  void setSecure(final boolean on) {
+    main.post(
+        new Runnable() {
+          @Override
+          public void run() {
+            if (on == secure) {
+              return;
+            }
+            secure = on;
+            log(Log.INFO, "screen capture " + (on ? "blocked" : "allowed"));
+            for (Activity activity : alive) {
+              applySecure(activity);
+            }
+          }
+        });
+  }
+
+  private void applySecure(Activity activity) {
+    if (secure) {
+      activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    } else {
+      activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+  }
 
   // ---- Staying reachable ---------------------------------------------------------------------
 

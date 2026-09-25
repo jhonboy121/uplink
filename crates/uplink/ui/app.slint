@@ -17,7 +17,7 @@ import { Appearance, Language, Theme } from "theme.slint";
 import {
     AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, OutputItem,
     PermissionItem, Preset, PresetItem, QualitySheet, Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch,
-    Weak,
+    Weak, CallCapture,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
@@ -37,7 +37,7 @@ export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
     DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Output, OutputItem, Path, PathKind, Permission,
     PermissionItem, Preset, PresetItem, QualitySheet, Reach, Region, RelayItem, RelayUse, Route, Say, Screen,
-    Stall, Stat, Toast, Traffic, Unit, Weak,
+    Stall, Stat, Toast, Traffic, Unit, Weak, CallCapture,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -163,6 +163,7 @@ export component App inherits Window {
     in property <bool> call-reconnecting: false;
     in property <Stall> call-stall;
     in property <Weak> call-weak;
+    in property <CallCapture> call-capture;
     in-out property <bool> video-asking: false;
     in-out property <bool> video-asked: false;
     in property <bool> kept-voice: false;
@@ -218,6 +219,11 @@ export component App inherits Window {
     // changed in a system screen the app sends the user to. Assumed fine until read.
     in property <bool> battery-unrestricted: true;
     in property <bool> full-screen-calls: true;
+    // Privacy: screenshots and recordings.
+    in property <bool> block-capture;
+    in property <bool> ask-block-capture;
+    callback toggle-block-capture();
+    callback toggle-ask-block-capture();
     in property <bool> maker-list: false;
     callback allow-battery();
     callback allow-full-screen-calls();
@@ -362,6 +368,10 @@ export component App inherits Window {
                     relays-auto: root.relays-auto;
                     battery-unrestricted: root.battery-unrestricted;
                     full-screen-calls: root.full-screen-calls;
+                    block-capture: root.block-capture;
+                    ask-block-capture: root.ask-block-capture;
+                    toggle-block-capture => { root.toggle-block-capture(); }
+                    toggle-ask-block-capture => { root.toggle-ask-block-capture(); }
                     maker-list: root.maker-list;
                     quality-now: root.on-wifi ? root.quality-wifi.preset : root.quality-mobile.preset;
                     share-diagnostics => { root.share-diagnostics(); }
@@ -480,6 +490,7 @@ export component App inherits Window {
             reconnecting: root.call-reconnecting;
             stall: root.call-stall;
             weak: root.call-weak;
+            capture: root.call-capture;
             asking: root.video-asking;
             kept-voice: root.kept-voice;
             top-inset: root.safe-area-insets.top;

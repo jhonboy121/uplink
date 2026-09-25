@@ -71,7 +71,13 @@ impl Call {
             phase,
             key_exchange: None,
             connected_at: None,
-            theirs: MediaState { mic_off: false, camera_off: false, held: false },
+            theirs: MediaState {
+                mic_off: false,
+                camera_off: false,
+                held: false,
+                capture_asked: false,
+                capture_blocked: false,
+            },
             asked_us: false,
             we_asked: false,
             live: None,
@@ -116,7 +122,8 @@ pub async fn run(
     let contacts = Contacts::open(db.clone())?;
     let settings = Settings::open(db)?;
     let (node, events) =
-        Node::start(identity::load_or_create(dir).await?, Network::Public(settings.clone()), APP).await?;
+        Node::start(identity::load_or_create(dir, &identity::Plain).await?, Network::Public(settings.clone()), APP)
+            .await?;
     let tui = Tui {
         node,
         contacts,
@@ -229,7 +236,12 @@ impl Tui {
 
     fn media_state(&self) -> MediaState {
         let video = self.call.as_ref().is_some_and(|call| call.mode == Mode::Video);
-        MediaState { mic_off: !self.mic_on, camera_off: !(self.camera_on && video), held: self.held }
+        MediaState {
+            mic_off: !self.mic_on,
+            camera_off: !(self.camera_on && video),
+            held: self.held,
+            ..MediaState::default()
+        }
     }
 
     fn plan(&self) -> Option<Plan> {

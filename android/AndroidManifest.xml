@@ -56,7 +56,9 @@
     </queries>
 
     <!-- Our own Application: it exists before any activity, service or receiver, which makes it
-         the one thing the app can be driven through when nobody is looking at the screen. -->
+         the one thing the app can be driven through when nobody is looking at the screen.
+         No backup: the identity is sealed by a Keystore key that never leaves this phone, so a
+         restored copy could not be opened anywhere else. -->
     <application
         android:name="dev.uplink.UplinkApplication"
         android:label="uplink"
@@ -65,7 +67,8 @@
         android:theme="@style/Theme.Uplink"
         android:hasCode="true"
         android:debuggable="${debuggable}"
-        android:hardwareAccelerated="true">
+        android:hardwareAccelerated="true"
+        android:allowBackup="false">
 
         <!-- configChanges: the native side handles these rather than being restarted.
              windowSoftInputMode adjustResize: under the enforced edge-to-edge of recent target

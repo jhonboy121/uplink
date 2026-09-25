@@ -93,7 +93,7 @@ fn main() -> Result<()> {
 
 async fn run(dir: &Path, cli: Cli) -> Result<()> {
     match cli {
-        Cli::Id => println!("{}", identity::load_or_create(dir).await?.public()),
+        Cli::Id => println!("{}", identity::load_or_create(dir, &identity::Plain).await?.public()),
         Cli::Contacts => {
             for contact in Contacts::open(Db::open(dir)?)?.iter() {
                 let mark = if contact.favourite { "*" } else { " " };

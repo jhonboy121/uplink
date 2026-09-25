@@ -121,6 +121,10 @@ export component SettingsPage inherits Rectangle {
     in property <bool> relays-auto;
     in property <bool> battery-unrestricted;
     in property <bool> full-screen-calls;
+    in property <bool> block-capture;
+    in property <bool> ask-block-capture;
+    callback toggle-block-capture();
+    callback toggle-ask-block-capture();
     in property <bool> maker-list;
     in property <Preset> quality-now;
     callback share-diagnostics();
@@ -228,6 +232,26 @@ export component SettingsPage inherits Rectangle {
                         detail: @tr("When a direct path won't form");
                         value: root.relays-auto ? @tr("Auto") : @tr("{} on", root.relays-on);
                         clicked => { root.edit-relays(); }
+                    }
+                }
+                // Screenshots and recordings: ours always, theirs asked of per call. Two
+                // switches, off until chosen; the other phone's app does the blocking, so an
+                // older one cannot, and the call screen says so.
+                SettingsGroup {
+                    SettingsRow {
+                        icon: @image-url("icons/camera-off.svg");
+                        title: @tr("Block screenshots");
+                        detail: @tr("Screenshots and recordings come out black");
+                        value: root.block-capture ? @tr("On") : @tr("Off");
+                        clicked => { root.toggle-block-capture(); }
+                    }
+                    SettingsDivider { }
+                    SettingsRow {
+                        icon: @image-url("icons/lock.svg");
+                        title: @tr("Ask them to block");
+                        detail: @tr("Their screen during your calls");
+                        value: root.ask-block-capture ? @tr("On") : @tr("Off");
+                        clicked => { root.toggle-ask-block-capture(); }
                     }
                 }
                 // Not shown, sent. A log on a phone screen helps nobody; a log in a chat

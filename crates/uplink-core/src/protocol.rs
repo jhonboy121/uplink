@@ -136,9 +136,9 @@ pub fn behind(ours: &Hello, theirs: &Hello) -> Option<Behind> {
 #[derive(Clone, Copy, PartialEq, Message)]
 pub struct Empty {}
 
-/// Whether each side's mic and camera are on, and whether its phone has put the call on hold,
-/// sent whenever any changes. The defaults are what a build that never sends it has: both on,
-/// not held.
+/// Whether each side's mic and camera are on, whether its phone has put the call on hold, and
+/// whether its screen can be captured, sent whenever any changes. The defaults are what a build
+/// that never sends it has: both on, not held, nothing asked, capturable.
 #[derive(Clone, Copy, PartialEq, Eq, Message)]
 pub struct MediaState {
     #[prost(bool, tag = "1")]
@@ -148,6 +148,13 @@ pub struct MediaState {
     /// A phone call was answered over this one: nothing is sent or played until it ends.
     #[prost(bool, tag = "3")]
     pub held: bool,
+    /// Asks the other phone to keep its screen from screenshots and recordings for this call.
+    /// A build that does not know it cannot, and says nothing back.
+    #[prost(bool, tag = "4")]
+    pub capture_asked: bool,
+    /// This phone's screen cannot be captured now: its own choice, or the other side's ask.
+    #[prost(bool, tag = "5")]
+    pub capture_blocked: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Message)]
@@ -390,8 +397,8 @@ mod tests {
             Signal::KeyframeRequest,
             Signal::Incompatible(hello()),
             Signal::Offer(hello().offer(Setup { call: 7, voice: true, resume: false })),
-            Signal::Media(MediaState { mic_off: true, camera_off: false, held: false }),
-            Signal::Media(MediaState { mic_off: false, camera_off: false, held: true }),
+            Signal::Media(MediaState { mic_off: true, camera_off: false, held: false, ..MediaState::default() }),
+            Signal::Media(MediaState { mic_off: false, camera_off: false, held: true, ..MediaState::default() }),
             Signal::AskVideo,
             Signal::WithdrawVideo,
             Signal::AnswerVideo(true),
@@ -466,10 +473,37 @@ mod tests {
     fn hold_reads_as_not_held_where_it_is_not_known() -> Result<(), Error> {
         let before = MediaStateBeforeHold { mic_off: true, camera_off: true };
         let (now, _) = split_message::<MediaState>(&encode(&before))?;
-        assert_eq!(now, MediaState { mic_off: true, camera_off: true, held: false });
-        let held = MediaState { mic_off: false, camera_off: false, held: true };
+        assert_eq!(now, MediaState { mic_off: true, camera_off: true, held: false, ..MediaState::default() });
+        let held = MediaState { mic_off: false, camera_off: false, held: true, ..MediaState::default() };
         let (back, _) = split_message::<MediaStateBeforeHold>(&encode(&held))?;
         assert_eq!(back, MediaStateBeforeHold { mic_off: false, camera_off: false });
+        Ok(())
+    }
+
+    /// Media state as it was before the capture ask, which older builds still send and read.
+    #[derive(Clone, Copy, PartialEq, Message)]
+    struct MediaStateBeforeCapture {
+        #[prost(bool, tag = "1")]
+        mic_off: bool,
+        #[prost(bool, tag = "2")]
+        camera_off: bool,
+        #[prost(bool, tag = "3")]
+        held: bool,
+    }
+
+    /// An older build skips the ask (and so never confirms it), and its state reads as nothing
+    /// asked and nothing blocked: how "their app can't block screenshots" is known.
+    #[test]
+    fn a_capture_ask_is_skipped_where_it_is_not_known() -> Result<(), Error> {
+        let asking = MediaState { capture_asked: true, capture_blocked: true, ..MediaState::default() };
+        let (old, _) = split_message::<MediaStateBeforeCapture>(&encode(&asking))?;
+        assert_eq!(old, MediaStateBeforeCapture { mic_off: false, camera_off: false, held: false });
+        let (now, _) = split_message::<MediaState>(&encode(&MediaStateBeforeCapture {
+            mic_off: true,
+            camera_off: false,
+            held: true,
+        }))?;
+        assert!(!now.capture_asked && !now.capture_blocked && now.mic_off && now.held);
         Ok(())
     }
 
