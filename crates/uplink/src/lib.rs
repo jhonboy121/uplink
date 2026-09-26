@@ -35,7 +35,7 @@ use uplink_android::platform::{CallScreen, Permission, Platform, PlatformEvent, 
 use uplink_android::preview::{Frame, Preview};
 use uplink_android::{cpu, log};
 use uplink_core::audio::{AudioReceiver, AudioSender};
-use uplink_core::calls::{CallId, CallLog};
+use uplink_core::calls::{self, CallId, CallLog};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
 use uplink_core::health::{Health, Weak};
@@ -727,7 +727,8 @@ fn show_added(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
 }
 
 fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
-    let items = with_state_value(state, |s| view::contact_items(&s.contacts, &s.selected, s.fresh));
+    let search = view::Search::new(&ui.get_people_query());
+    let items = with_state_value(state, |s| view::contact_items(&s.contacts, &s.selected, s.fresh, &search));
     if let Some(items) = items {
         ui.set_contacts_reveal(view::fresh_offset(ui, &items).unwrap_or(-1.0));
         ui.set_contacts(view::refill(ui.get_contacts(), items));
@@ -753,10 +754,12 @@ fn show_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
 /// How many the Calls screen shows; the store keeps more than a screen can use.
 const CALLS_SHOWN: i64 = 100;
 
-/// Fills the Calls screen, newest first, grouped by day.
+/// Fills the Calls screen, newest first, grouped by day. A search looks through all that is kept.
 fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
-    let items = with_state_value(state, |s| match s.log.recent(CALLS_SHOWN) {
-        Ok(records) => view::call_items(&records, &s.contacts, &s.clock, &s.selected_calls),
+    let search = view::Search::new(&ui.get_calls_query());
+    let limit = if search.is_empty() { CALLS_SHOWN } else { calls::KEEP };
+    let items = with_state_value(state, |s| match s.log.recent(limit) {
+        Ok(records) => view::call_items(&records, &s.contacts, &s.clock, &s.selected_calls, &search),
         Err(e) => {
             tracing::warn!("reading the call log: {e}");
             Vec::new()
@@ -925,6 +928,12 @@ fn went_back(ui: &App) -> bool {
         ui.invoke_clear_selection();
     } else if ui.get_selecting_calls() {
         ui.invoke_clear_call_selection();
+    } else if ui.get_screen() == Screen::People && !ui.get_people_query().is_empty() {
+        ui.set_people_query(Default::default());
+        ui.invoke_search_people(Default::default());
+    } else if ui.get_screen() == Screen::Calls && !ui.get_calls_query().is_empty() {
+        ui.set_calls_query(Default::default());
+        ui.invoke_search_calls(Default::default());
     } else if ui.get_screen() != Screen::People {
         ui.set_screen(Screen::People);
     } else {
@@ -1332,6 +1341,18 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     show_contacts(&state, &ui);
     show_calls(&state, &ui);
 
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_search_people(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            show_contacts(&s, &ui);
+        }
+    });
+    let (s, weak) = (Rc::clone(&state), ui.as_weak());
+    ui.on_search_calls(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            show_calls(&s, &ui);
+        }
+    });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_toggle_selected(move |id| {
         let Ok(peer) = EndpointId::from_str(id.trim()) else { return };

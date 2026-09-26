@@ -3,7 +3,7 @@
 import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ContactDetail, ContactItem, Group, Reach, Unit } from "types.slint";
-import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SectionHead, Wide } from "controls.slint";
+import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, PageTitle, Pill, RowDetail, RowName, SearchField, SectionHead, Wide } from "controls.slint";
 import { PersonRow } from "list.slint";
 
 export component PeoplePage inherits Rectangle {
@@ -14,10 +14,13 @@ export component PeoplePage inherits Rectangle {
     in property <Reach> reach;
     in property <bool> selecting;
     in property <int> selected-count;
+    // What the list is narrowed to; Rust filters the rows.
+    in-out property <string> query;
     // Whether as voice.
     callback call(string, bool);
     callback open(string);
     callback connect();
+    callback search(string);
     callback select(string);
     // A row was held long enough to count; the feel of it is the platform's.
     callback long-pressed();
@@ -68,7 +71,23 @@ export component PeoplePage inherits Rectangle {
             Brand { }
         }
 
-        if root.contacts.length == 0 : EmptyState {
+        // Once there is anyone to find. Locked while selecting, so what is ticked is all in view.
+        if root.contacts.length > 0 || root.query != "" : HorizontalLayout {
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            padding-bottom: Theme.gap;
+            SearchField {
+                text <=> root.query;
+                placeholder: @tr("Search people");
+                enabled: !root.selecting;
+                edited(text) => { root.search(text); }
+            }
+        }
+        if root.contacts.length == 0 && root.query != "" : EmptyState {
+            title: @tr("No matches");
+            body: @tr("No one in People by that name.");
+        }
+        if root.contacts.length == 0 && root.query == "" : EmptyState {
             title: @tr("No one here yet");
             body: @tr("Open Connect to scan a code, or send them yours.");
             HorizontalLayout {

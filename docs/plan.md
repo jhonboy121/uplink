@@ -1300,3 +1300,11 @@ default); keep disk usage lean. Avoid build scripts.
   `APP_REQUEST_RENDER_FRAME_RATE_RANGE [60, 60]` in `dumpsys display`) over any surface vote.
   `end_call` now keeps the camera only for an open scanner. A call itself stays at 60 while the
   camera runs; the mic already closes at call end (dropping the AAudio streams).
+- **2026-09-26**: **Search on People and Calls.** A field under the app bar (shell mockup,
+  "Finding someone in a long list"), shown once the list has anything in it. Rust filters the rows
+  before grouping, so the headings follow what is left; Calls searches the whole kept log
+  (`calls::KEEP`), not only the hundred shown. The field locks while selecting, Calls' Clear hides
+  during a search, Back clears it after ending selection, and another tab clears it.
+  - The keyboard goes when the call screen comes up, and a field lets go once the keyboard has
+    been put away for `Theme.keyboard-settle` (its height dips to zero while it opens; see
+    docs/ref/slint-1.18-android.md).

@@ -4,7 +4,7 @@
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { CallDetail, CallItem, Day, DayAgo, Ending, Ipv6, Measure, Path, PathKind, Stat } from "types.slint";
-import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, Line, PageTitle, Row, RowDetail, RowName, SectionHead, StatRow, Wide } from "controls.slint";
+import { AppBar, BarPill, BigAvatar, Brand, CallPair, DetailRow, EmptyState, Fingerprint, Line, PageTitle, Row, RowDetail, RowName, SearchField, SectionHead, StatRow, Wide } from "controls.slint";
 import { PersonRow } from "list.slint";
 
 // How the log words what Rust sends it, shared by the list and the page.
@@ -110,9 +110,12 @@ export component CallsPage inherits Rectangle {
     // unticking the last one or Back ends it.
     in property <bool> selecting;
     in property <int> selected-count;
+    // What the list is narrowed to; Rust filters the rows.
+    in-out property <string> query;
     // Whether as voice.
     callback call(string, bool);
     callback clear();
+    callback search(string);
     callback open(string);
     callback select(string);
     callback start-selecting();
@@ -133,7 +136,8 @@ export component CallsPage inherits Rectangle {
                 enabled: root.selected-count > 0;
                 clicked => { root.remove-selected(); }
             }
-            if !root.selecting && root.calls.length > 0 : BarPill {
+            // It clears the whole log, so not while a search shows only part of it.
+            if !root.selecting && root.calls.length > 0 && root.query == "" : BarPill {
                 text: @tr("Clear");
                 danger: true;
                 clicked => { root.clear(); }
@@ -141,7 +145,22 @@ export component CallsPage inherits Rectangle {
             Brand { }
         }
 
-        if root.calls.length == 0 : EmptyState {
+        if root.calls.length > 0 || root.query != "" : HorizontalLayout {
+            padding-left: Theme.edge;
+            padding-right: Theme.edge;
+            padding-bottom: Theme.gap;
+            SearchField {
+                text <=> root.query;
+                placeholder: @tr("Search calls");
+                enabled: !root.selecting;
+                edited(text) => { root.search(text); }
+            }
+        }
+        if root.calls.length == 0 && root.query != "" : EmptyState {
+            title: @tr("No matches");
+            body: @tr("No calls with anyone by that name.");
+        }
+        if root.calls.length == 0 && root.query == "" : EmptyState {
             title: @tr("No calls yet");
             body: @tr("Calls you make and calls you miss both end up here.");
         }

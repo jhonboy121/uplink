@@ -469,6 +469,78 @@ export component BarPill inherits VerticalLayout {
     }
 }
 
+// A list's search field, under its app bar. The cross clears it; its touch target runs the
+// field's full height and reaches the end edge, around an icon placed as the glyph is.
+export component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    callback edited(string);
+    height: Theme.search-height;
+    border-radius: self.height / 2;
+    background: Theme.surface;
+    Row {
+        padding-left: Theme.pill-pad;
+        padding-right: Theme.pill-pad;
+        spacing: Theme.gap;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("icons/search.svg");
+                width: Theme.quick-icon;
+                height: self.width;
+                colorize: Theme.muted;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            if root.text == "" : Text {
+                width: 100%;
+                text: root.placeholder;
+                color: Theme.muted;
+                font-size: 1rem;
+                vertical-alignment: center;
+                horizontal-alignment: Theme.start;
+                overflow: elide;
+            }
+            input := TextInput {
+                width: 100%;
+                text <=> root.text;
+                enabled: root.enabled;
+                single-line: true;
+                color: Theme.text;
+                font-size: 1rem;
+                vertical-alignment: center;
+                horizontal-alignment: Theme.start;
+                selection-background-color: Theme.beacon.with-alpha(0.3);
+                accessible-role: text-input;
+                accessible-placeholder-text: root.placeholder;
+                edited => { root.edited(self.text); }
+            }
+        }
+        if root.text != "" : VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("icons/close.svg");
+                width: Theme.quick-icon;
+                height: self.width;
+                colorize: Theme.muted;
+            }
+        }
+    }
+    if root.text != "" : Tap {
+        width: Theme.quick-icon + Theme.pill-pad * 2;
+        x: Theme.rtl ? 0 : parent.width - self.width;
+        accessible-role: button;
+        accessible-label: @tr("Clear search");
+        accessible-action-default => { self.tapped(); }
+        tapped => {
+            root.text = "";
+            root.edited("");
+        }
+    }
+}
+
 // A row's tick while picking several: filled when this one is picked.
 export component Tick inherits Image {
     in property <bool> on;

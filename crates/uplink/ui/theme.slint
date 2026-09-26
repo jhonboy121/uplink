@@ -163,6 +163,8 @@ export global Theme {
     out property <length> quick-icon: 16px;
     // The call log's ring-back pill, which says with its icon which kind it rings.
     out property <length> icon-pill-width: 35px;
+    // The search field over People and Calls.
+    out property <length> search-height: 40px;
     out property <length> icon-pill-icon: 15px;
     // Voice call and Video call side by side, each with its icon.
     out property <length> pair-gap: 12px;
@@ -247,6 +249,9 @@ export global Theme {
     out property <length> toast-bottom: 88px;
     // Long enough to read a sentence, short enough not to sit in the way.
     out property <duration> toast-life: 4s;
+    // How long the keyboard must stay away to count as put away. Slint hears its final height
+    // first, then the slide replayed from zero, so it dips to zero for a frame as it opens.
+    out property <duration> keyboard-settle: 250ms;
     // Every press, hover and selection fades rather than snapping.
     out property <duration> feedback: 160ms;
     // The design sets every line box to 1.6x its font; Slint's own is far tighter, so text

@@ -12,7 +12,7 @@ use crate::node::{EndReason, Mode};
 use crate::quality::Quality;
 use crate::{EndpointId, Error};
 /// Enough to look back over, and small enough that the screen never pages.
-const KEEP: i64 = 500;
+pub const KEEP: i64 = 500;
 
 /// How a call finished. `Missed` is ours to infer: the peer rang and nobody answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

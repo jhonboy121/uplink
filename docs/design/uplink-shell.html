@@ -1,4 +1,17 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}
+  /* ---- search (locked 2026-09-26) ----
+     A 40dp field (27.56px) under the app bar, 20dp (14px) in from each edge and 8dp (5.51px) above
+     the list. Surface-filled, fully rounded; a 16dp glyph and 16dp text (11px), 14dp (9.64px)
+     inside each end, 8dp (5.51px) between glyph and text. */
+  .search {
+    display: flex; align-items: center; gap: 5.51px; height: 27.56px; margin: 0 14px 5.51px;
+    padding: 0 9.64px; border-radius: 999px; background: #F1F4F8; color: #6B7C8F; font-size: 11px;
+  }
+  .search svg { width: 11px; height: 11px; flex: none; }
+  .search .q { flex: 1; min-width: 0; color: #0E151E; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search .q.hint { color: #6B7C8F; }
+  .search .caret { display: inline-block; width: 1px; height: 12px; background: #0A6FC2; vertical-align: -2px; margin-inline-start: 1px; }
+</style></head><body>
 <title>Uplink Shell &amp; Identity</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -1150,6 +1163,102 @@
       <div class="note"><span class="mark-i">○</span><div><b>Why wait before showing a change</b><p>The relay connection drops and comes back within a fifth of a second several times an hour, and moving from wifi to mobile data loses the network for half a second. Without the waits the chip would flicker between answers that are not true for long enough to matter.</p></div></div>
       <div class="note risk"><span class="mark-i">▲</span><div><b>Offline is a real failure, not a slow start</b><p>One night the relay could not be reached for ten hours while the phone had a network. Connecting… for ten hours would have hidden that. After 30 s the chip stops saying it is trying and says it is not reachable.</p></div></div>
       <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Connecting… (جارٍ الاتصال…) · No network (لا توجد شبكة). Online (متصل) and Offline (غير متصل) are already translated.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">shell</span><span class="pill-ok">Locked 2026-09-26</span></div>
+      <h2>Finding someone in a long list</h2>
+      <p>
+        People and Calls each get a search field under the title. It is always there once the list
+        has anything in it, so a name is one tap and a few letters away, and it filters as you type.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach on">Online</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="q hint">Search people</span></div>
+            <div class="list">
+              <div class="grouphead">Favourites</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><span>Called 20 minutes ago</span></div><span></span></div>
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+              <div class="crow"><div class="av" style="background:#DCEEDF;color:#1D4A2C;">L</div><div class="who"><b>Laptop</b><span>Never called</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Search · people</b>Always there once someone is: under the title, above the list. Nothing to open first.</figcaption>
+      </figure>
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach on">Online</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="q">a<span class="caret"></span></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="button" aria-label="Clear search"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></div>
+            <div class="list">
+              <div class="grouphead">All</div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><span>Called Tuesday</span></div><span></span></div>
+              <div class="crow"><div class="av" style="background:#DCEEDF;color:#1D4A2C;">L</div><div class="who"><b>Laptop</b><span>Never called</span></div><span></span></div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Search · typing</b>Each letter narrows the list. The groups follow what is left: no favourite matches, so no Favourites heading.</figcaption>
+      </figure>
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>People</h4><span class="end"><span class="reach on">Online</span><svg class="brand" viewBox="0 0 48 48" fill="none" aria-label="uplink"><path d="M13 18 V25 A11 11 0 0 0 35 25 V18" stroke="#0A6FC2" stroke-width="5.5" stroke-linecap="round"/><circle cx="13" cy="9" r="4.6" fill="#0E151E"/><circle cx="35" cy="9" r="4.6" fill="#0E151E"/></svg></span></div>
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="q">zeyn<span class="caret"></span></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="button" aria-label="Clear search"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></div>
+            <div class="empty">
+              <div class="t">No matches</div>
+              <div class="muted" style="font-size:10px;">No one in People by that name.</div>
+            </div>
+            <div class="tabs"><span class="on">People</span><span>Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Search · no matches</b>The field stays, so the way out is where the typing was. The cross clears it.</figcaption>
+      </figure>
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:04</span><span>5G ▚ 84%</span></div>
+            <div class="appbar"><h4>Calls</h4><span class="mini" style="color:#C62B2B;border-color:rgba(198,43,43,.35);">Clear</span></div>
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="q hint">Search calls</span></div>
+            <div class="list">
+              <div class="grouphead">Today</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><div class="how"><svg class="arrow-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Outgoing"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg><svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Voice"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg><span>09:14 · 23:10</span></div></div><span class="mini ic-pill" aria-label="Voice call"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span></div>
+              <div class="grouphead">Yesterday</div>
+              <div class="crow"><div class="av" style="background:#F6DDE6;color:#62243C;">N</div><div class="who"><b>Noor</b><div class="how"><svg class="arrow-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Incoming"><path d="M17 7L7 17"/><path d="M7 9v8h8"/></svg><svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Video"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg><span>21:37 · 21:02</span></div></div><span class="mini ic-pill" aria-label="Video call"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg></span></div>
+              <div class="crow"><div class="av" style="background:#D8E7F5;color:#123A5C;">A</div><div class="who"><b>Ammar</b><div class="how"><svg class="arrow-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Outgoing"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg><svg class="mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Voice"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg><span>2:05 · 18:40</span></div></div><span class="mini ic-pill" aria-label="Voice call"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span></div>
+            </div>
+            <div class="tabs"><span>People</span><span class="on">Calls</span><span>Connect</span><span>Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Search · calls</b>The same field on Calls. It matches the name a row shows, so a caller who is not a contact is found by the start of their key.</figcaption>
+      </figure>
+    </div>
+    <div class="scroller" style="margin-top: 18px;">
+      <table>
+        <thead><tr><th>Case</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td><b>Matching</b></td><td>Any part of the name the row shows, ignoring case. Calls looks through the whole kept log, not only the rows on screen.</td></tr>
+          <tr><td><b>Empty list</b></td><td>No field. Empty people and No calls yet are unchanged: there is nothing to search.</td></tr>
+          <tr><td><b>Selecting</b></td><td>The field is locked until selection ends, so nothing hidden by the search can be ticked and removed.</td></tr>
+          <tr><td><b>Back</b></td><td>Ends selection first, then clears the search, then goes to People, as before.</td></tr>
+          <tr><td><b>Clear on Calls</b></td><td>Hidden while a search is active: it empties the whole log, not the rows the search shows.</td></tr>
+          <tr><td><b>Another tab</b></td><td>Clears the search. Opening a row and coming back keeps it.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Search people (البحث في الأشخاص) · Search calls (البحث في المكالمات) · No matches (لا نتائج) · No one in People by that name. (لا أحد في الأشخاص بهذا الاسم.) · No calls with anyone by that name. (لا مكالمات مع أحد بهذا الاسم.) · Clear search (مسح البحث)</p></div></div>
     </div>
   </section>
 

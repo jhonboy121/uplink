@@ -72,6 +72,17 @@ long-press interval, `invoke_from_event_loop` / event-loop proxy.
 - [ ] APK size impact of Skia. Debug so far: clean build of ~520 crates 1m49s on the S24 (8 cores, nice 10);
       `.so` 85 MB → 46 MB after `strip --strip-debug`; APK 13 MB. A release measurement is still needed.
 
+## The keyboard's height is not a shown/hidden flag ✅
+
+`virtual-keyboard-size` comes from two streams in `SlintAndroidJavaHelper.dispatchInsets`: the
+decor view's insets listener, which reports the keyboard's *final* height as soon as it starts
+opening, and a `WindowInsetsAnimation` callback, which then replays the slide from zero. Opening,
+the height goes h → 0 → … → h. Treating "height is 0" as "put away" closed the keyboard it was
+opening (S24, 2026-09-26). Wait for it to stay at zero (`Theme.keyboard-settle`, 250 ms) first.
+
+Taking focus from a text field (e.g. `FocusScope.focus()` elsewhere) hides the keyboard; nothing
+else does. The call screen does this on appearing, since the field under it keeps focus.
+
 ## Layout rules we got wrong once ✅
 
 The official `slint` plugin (marketplace `slint-ui/ai-plugins`) ships a skill and a docs MCP

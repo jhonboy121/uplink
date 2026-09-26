@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use slint::ComponentHandle as _;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+use slint::{ComponentHandle as _, Model as _};
 
 mod compare;
 mod dump;
@@ -290,6 +290,18 @@ fn main() -> Result<()> {
         shoot(&window, &app, canvas, name)?;
     }
     app.set_reach(Reach::Online);
+    // Search, as the shell design draws it: narrowed as you type, then nothing found. The rows
+    // are what Rust would leave: Noor has no "a", and Ammar already heads the rest.
+    let everyone = app.get_contacts();
+    app.set_people_query("a".into());
+    let found: Vec<ContactItem> = everyone.iter().filter(|contact| contact.name.contains('a')).collect();
+    app.set_contacts(slint::ModelRc::new(slint::VecModel::from(found)));
+    shoot(&window, &app, canvas, "search-light")?;
+    app.set_people_query("zeyn".into());
+    app.set_contacts(slint::ModelRc::new(slint::VecModel::from(Vec::<ContactItem>::new())));
+    shoot(&window, &app, canvas, "search-none-light")?;
+    app.set_people_query("".into());
+    app.set_contacts(everyone);
     app.global::<Theme>().set_appearance(Appearance::Dark);
 
     // Arabic: every screen mirrored, and the words from the bundled translation.

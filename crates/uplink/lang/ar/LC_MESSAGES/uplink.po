@@ -727,6 +727,18 @@ msgstr[3] "المحدد: {n}"
 msgstr[4] "المحدد: {n}"
 msgstr[5] "المحدد: {n}"
 
+msgctxt "PeoplePage"
+msgid "Search people"
+msgstr "البحث في الأشخاص"
+
+msgctxt "PeoplePage"
+msgid "No matches"
+msgstr "لا نتائج"
+
+msgctxt "PeoplePage"
+msgid "No one in People by that name."
+msgstr "لا أحد في الأشخاص بهذا الاسم."
+
 msgctxt "PermissionsPage"
 msgid "A call needs all three. uplink asks once, and asks for nothing else — no contacts, no location, no storage."
 msgstr "تحتاج المكالمة إلى الثلاثة كلها. يسأل uplink مرة واحدة، ولا يطلب شيئًا آخر — لا جهات اتصال، ولا موقع، ولا تخزين."
@@ -1288,6 +1300,18 @@ msgctxt "CallsPage"
 msgid "Voice"
 msgstr "صوت"
 
+msgctxt "CallsPage"
+msgid "Search calls"
+msgstr "البحث في المكالمات"
+
+msgctxt "CallsPage"
+msgid "No matches"
+msgstr "لا نتائج"
+
+msgctxt "CallsPage"
+msgid "No calls with anyone by that name."
+msgstr "لا مكالمات مع أحد بهذا الاسم."
+
 msgctxt "PersonRow"
 msgid "Video call"
 msgstr "مكالمة فيديو"
@@ -1463,3 +1487,7 @@ msgstr "يرنّ فقط من في جهات اتصالك"
 msgctxt "CallWords"
 msgid "Not in your contacts"
 msgstr "ليس في جهات اتصالك"
+
+msgctxt "SearchField"
+msgid "Clear search"
+msgstr "مسح البحث"

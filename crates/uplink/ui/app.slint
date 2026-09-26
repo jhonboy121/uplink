@@ -115,6 +115,21 @@ export component App inherits Window {
     // The call log's own selection, apart from the contacts': the two lists are different
     // things, and switching tabs should not carry ticks across.
     in-out property <bool> selecting-calls: false;
+    // What each list is narrowed to. Another tab clears both; opening a row keeps them.
+    in-out property <string> people-query;
+    in-out property <string> calls-query;
+    callback search-people(string);
+    callback search-calls(string);
+    changed screen => {
+        if (root.people-query != "") {
+            root.people-query = "";
+            root.search-people("");
+        }
+        if (root.calls-query != "") {
+            root.calls-query = "";
+            root.search-calls("");
+        }
+    }
     in property <int> selected-calls-count: 0;
     callback toggle-call-selected(string);
     callback remove-selected-calls();
@@ -295,6 +310,29 @@ export component App inherits Window {
             self.call-folded = false;
         }
     }
+    // The call screen over everything. It takes the focus back from any text field under it,
+    // so the keyboard goes: nothing on the call screen types.
+    property <bool> call-shown: root.call-state != CallState.idle && !root.call-folded && !root.call-pip;
+    changed call-shown => {
+        if (self.call-shown) {
+            back-stop.focus();
+        }
+    }
+    // The keyboard put away, by Back or its own button, ends the typing: the field lets go and
+    // its cursor goes with it. A tap on the field brings both back. Only once it has stayed
+    // away: it also touches zero for a frame while it opens.
+    property <bool> keyboard-up: self.virtual-keyboard-size.height > 0;
+    changed keyboard-up => {
+        keyboard-gone.running = !self.keyboard-up;
+    }
+    keyboard-gone := Timer {
+        interval: Theme.keyboard-settle;
+        running: false;
+        triggered() => {
+            self.running = false;
+            back-stop.focus();
+        }
+    }
     // A second message restarts the clock instead of inheriting what is left of the first's.
     changed toast => {
         if (self.toast.length > 0) {
@@ -333,6 +371,8 @@ export component App inherits Window {
                     reveal: root.contacts-reveal;
                     selecting: root.selecting;
                     selected-count: root.selected-count;
+                    query <=> root.people-query;
+                    search(text) => { root.search-people(text); }
                     call(id, voice) => { root.call(id, voice); }
                     open(id) => { root.open-contact-page(id); }
                     connect => { root.screen = Screen.connect; }
@@ -346,6 +386,8 @@ export component App inherits Window {
                     calls: root.calls;
                     selecting: root.selecting-calls;
                     selected-count: root.selected-calls-count;
+                    query <=> root.calls-query;
+                    search(text) => { root.search-calls(text); }
                     call(id, voice) => { root.call(id, voice); }
                     clear => { root.confirming = Confirm.clear-calls; }
                     select(entry) => { root.toggle-call-selected(entry); }
@@ -468,7 +510,7 @@ export component App inherits Window {
         }
 
         // Overlays: declared last, so they cover the pages and the tab bar.
-        if root.call-state != CallState.idle && !root.call-folded && !root.call-pip : CallScreen {
+        if root.call-shown : CallScreen {
             frame: root.frame;
             remote-frame: root.remote-frame;
             peer-name: root.peer-name;

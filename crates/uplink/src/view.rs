@@ -105,16 +105,36 @@ pub fn name_of(contacts: &Contacts, id: &EndpointId) -> String {
     contacts.name_of(id).map_or_else(|| short(id), str::to_owned)
 }
 
-/// Contacts for People. The store already orders favourites first, so a group starts wherever
-/// the flag changes.
+/// What was typed into a list's search, as [`Search::finds`] compares it.
+pub struct Search(String);
+
+impl Search {
+    pub fn new(typed: &str) -> Self {
+        Self(typed.trim().to_lowercase())
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether a row's name holds what was typed, ignoring case.
+    pub fn finds(&self, name: &str) -> bool {
+        self.is_empty() || name.to_lowercase().contains(&self.0)
+    }
+}
+
+/// Contacts for People, those `search` finds. The store already orders favourites first, so a
+/// group starts wherever the flag changes among the rows shown.
 pub fn contact_items(
     contacts: &Contacts,
     selected: &FxHashSet<EndpointId>,
     fresh: Option<EndpointId>,
+    search: &Search,
 ) -> Vec<ContactItem> {
     let mut previous: Option<bool> = None;
     contacts
         .iter()
+        .filter(|contact| search.finds(&contact.name))
         .map(|contact| {
             let heading = (previous != Some(contact.favourite)).then_some(if contact.favourite {
                 Group::Favourites
@@ -228,16 +248,18 @@ pub fn call_items(
     contacts: &Contacts,
     clock: &LocalClock,
     selected: &FxHashSet<CallId>,
+    search: &Search,
 ) -> Vec<CallItem> {
     let mut previous: Option<i64> = None;
     records
         .iter()
-        .map(|logged| {
+        .map(|logged| (logged, name_of(contacts, &logged.call.peer)))
+        .filter(|(_, name)| search.finds(name))
+        .map(|(logged, name)| {
             let record = &logged.call;
             let days = clock.days_ago(record.at);
             let day = (previous != Some(days)).then(|| day_ago(days));
             previous = Some(days);
-            let name = name_of(contacts, &record.peer);
             CallItem {
                 initial: initial(&name),
                 name: name.into(),
