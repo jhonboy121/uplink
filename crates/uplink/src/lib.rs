@@ -730,7 +730,7 @@ fn show_contacts(state: &Rc<RefCell<State>>, ui: &App) {
     let items = with_state_value(state, |s| view::contact_items(&s.contacts, &s.selected, s.fresh));
     if let Some(items) = items {
         ui.set_contacts_reveal(view::fresh_offset(ui, &items).unwrap_or(-1.0));
-        ui.set_contacts(view::list(items));
+        ui.set_contacts(view::refill(ui.get_contacts(), items));
     }
     let count = with_state_value(state, |s| i32::try_from(s.selected.len()).unwrap_or(i32::MAX));
     ui.set_selected_count(count.unwrap_or_default());
@@ -763,7 +763,7 @@ fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
         }
     });
     if let Some(items) = items {
-        ui.set_calls(view::list(items));
+        ui.set_calls(view::refill(ui.get_calls(), items));
     }
     let count = with_state_value(state, |s| i32::try_from(s.selected_calls.len()).unwrap_or(i32::MAX));
     ui.set_selected_calls_count(count.unwrap_or_default());

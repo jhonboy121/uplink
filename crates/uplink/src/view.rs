@@ -56,6 +56,22 @@ pub fn list<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+/// `items` in the model already shown, rather than a new one: a new model makes a ListView
+/// forget where it is, and the list jumps. Only the rows that changed are told.
+pub fn refill<T: Clone + PartialEq + 'static>(shown: ModelRc<T>, items: Vec<T>) -> ModelRc<T> {
+    let Some(rows) = shown.as_any().downcast_ref::<VecModel<T>>() else { return list(items) };
+    if rows.row_count() == items.len() {
+        for (row, item) in items.into_iter().enumerate() {
+            if rows.row_data(row).as_ref() != Some(&item) {
+                rows.set_row_data(row, item);
+            }
+        }
+    } else {
+        rows.set_vec(items);
+    }
+    shown
+}
+
 /// The letter an avatar shows.
 pub fn initial(name: &str) -> SharedString {
     name.chars().next().unwrap_or('?').to_uppercase().to_string().into()
