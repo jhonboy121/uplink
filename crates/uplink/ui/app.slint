@@ -17,7 +17,7 @@ import { Appearance, Language, Theme } from "theme.slint";
 import {
     AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, OutputItem,
     PermissionItem, Preset, PresetItem, QualitySheet, Reach, RelayItem, Route, Screen, Stall, Toast, Mismatch,
-    Weak, CallCapture,
+    Weak, CallCapture, Screenshots,
 } from "types.slint";
 import { Row, Tap } from "controls.slint";
 import { BatteryPage, PermissionsPage, Splash } from "onboarding.slint";
@@ -30,6 +30,7 @@ import { ConnectPage, ScanPage } from "connect.slint";
 import { SettingsPage } from "settings.slint";
 import { RelaysPage } from "relays.slint";
 import { QualityPage } from "quality.slint";
+import { ScreenshotsPage } from "screenshots.slint";
 import { CallScreen, MiniCall } from "call.slint";
 
 export { Appearance, Language, Theme } from "theme.slint";
@@ -37,7 +38,7 @@ export {
     AddError, AddProblem, Ago, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
     DayAgo, Ending, Grant, Group, Ipv6, Measure, Mismatch, Output, OutputItem, Path, PathKind, Permission,
     PermissionItem, Preset, PresetItem, QualitySheet, Reach, Region, RelayItem, RelayUse, Route, Say, Screen,
-    Stall, Stat, Toast, Traffic, Unit, Weak, CallCapture,
+    Stall, Stat, Toast, Traffic, Unit, Weak, CallCapture, Screenshots,
 } from "types.slint";
 
 // No "call" tab: there is nothing to show when no call is running, and a call takes over the
@@ -235,12 +236,11 @@ export component App inherits Window {
     in property <bool> battery-unrestricted: true;
     in property <bool> full-screen-calls: true;
     // Privacy: screenshots and recordings.
-    in property <bool> block-capture;
-    in property <bool> ask-block-capture;
+    in property <Screenshots> screenshots;
+    in-out property <bool> screenshots-open: false;
+    callback choose-screenshots(Screenshots);
     in property <bool> reject-unknown;
     callback toggle-reject-unknown();
-    callback toggle-block-capture();
-    callback toggle-ask-block-capture();
     in property <bool> maker-list: false;
     callback allow-battery();
     callback allow-full-screen-calls();
@@ -412,12 +412,10 @@ export component App inherits Window {
                     relays-auto: root.relays-auto;
                     battery-unrestricted: root.battery-unrestricted;
                     full-screen-calls: root.full-screen-calls;
-                    block-capture: root.block-capture;
-                    ask-block-capture: root.ask-block-capture;
+                    screenshots: root.screenshots;
                     reject-unknown: root.reject-unknown;
                     toggle-reject-unknown => { root.toggle-reject-unknown(); }
-                    toggle-block-capture => { root.toggle-block-capture(); }
-                    toggle-ask-block-capture => { root.toggle-ask-block-capture(); }
+                    edit-screenshots => { root.screenshots-open = true; }
                     maker-list: root.maker-list;
                     quality-now: root.on-wifi ? root.quality-wifi.preset : root.quality-mobile.preset;
                     share-diagnostics => { root.share-diagnostics(); }
@@ -465,6 +463,14 @@ export component App inherits Window {
             on-wifi: root.on-wifi;
             pick-wifi => { root.quality-sheet = QualitySheet.wifi; }
             pick-mobile => { root.quality-sheet = QualitySheet.mobile; }
+        }
+
+        // Screenshots takes the window like Call quality; a choice applies at once.
+        if root.screenshots-open : ScreenshotsPage {
+            top-inset: root.safe-area-insets.top;
+            bottom-inset: root.safe-area-insets.bottom;
+            current: root.screenshots;
+            choose(choice) => { root.choose-screenshots(choice); }
         }
 
         // One call from the log, over the tabs. Under the naming sheet, which Add opens, and

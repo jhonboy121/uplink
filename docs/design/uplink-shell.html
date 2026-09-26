@@ -11,6 +11,25 @@
   .search .q { flex: 1; min-width: 0; color: #0E151E; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .search .q.hint { color: #6B7C8F; }
   .search .caret { display: inline-block; width: 1px; height: 12px; background: #0A6FC2; vertical-align: -2px; margin-inline-start: 1px; }
+
+  /* ---- screenshots page (locked 2026-09-26) ----
+     Call quality's page, in its dp, scaled to 248px: a card 16dp (11.02px) in from the edges,
+     14dp (9.64px) corners, on the surface colour. A row is a 38dp (26.18px) tick tile, 14dp
+     (9.64px) before the words, 16dp (11.02px) in from the card's sides and 8dp (5.51px) above and
+     below, at least 64dp (44.09px) tall. The line under a name may take two lines here, at 16dp
+     (11.02px) a line. The note sits 14dp (9.64px) under the card, 20dp (13.78px) in. */
+  .group { margin: 0 11.02px; border-radius: 9.64px; background: #F1F4F8; overflow: hidden; }
+  .choice {
+    display: grid; grid-template-columns: 26.18px 1fr; gap: 9.64px; align-items: center;
+    min-height: 44.09px; box-sizing: border-box; padding: 5.51px 11.02px;
+  }
+  .choice + .choice { border-top: 1px solid #E7ECF2; }
+  .choice .tile { width: 26.18px; height: 26.18px; border-radius: 7.58px; box-sizing: border-box; border: 1px solid #C9D3DE; display: grid; place-items: center; color: #0A6FC2; }
+  .choice.on .tile { background: #E4EAF1; border: 0; }
+  .choice .tile svg { width: 13.78px; height: 13.78px; }
+  .choice b { font-family: Outfit, sans-serif; font-weight: 700; font-size: 11.02px; line-height: 17.91px; display: block; }
+  .choice small { display: block; color: #6B7C8F; font-size: 8.96px; line-height: 11.02px; }
+  .footnote { color: #6B7C8F; font-size: 8.96px; line-height: 11.02px; padding: 9.64px 13.78px 0; }
 </style></head><body>
 <title>Uplink Shell &amp; Identity</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -1259,6 +1278,73 @@
     </div>
     <div class="notes" style="margin-top: 16px;">
       <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Search people (البحث في الأشخاص) · Search calls (البحث في المكالمات) · No matches (لا نتائج) · No one in People by that name. (لا أحد في الأشخاص بهذا الاسم.) · No calls with anyone by that name. (لا مكالمات مع أحد بهذا الاسم.) · Clear search (مسح البحث)</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="status-row"><span class="eyebrow">privacy</span><span class="pill-ok">Locked 2026-09-26</span></div>
+      <h2>Screenshots, as one choice</h2>
+      <p>
+        Two switches, "Block screenshots" and "Ask them to block", read as the same thing twice: the
+        second one was never turned on by the person it was for. They become one row in Settings and
+        a page of three choices, each saying where screenshots come out black.
+      </p>
+    </div>
+    <div class="screens">
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:08</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>Settings</h4></div>
+            <div class="list">
+              <div class="keyrow" style="border-top:1px solid #E7ECF2;">
+                <div><b>Reject unknown callers</b><small>Only people in your contacts ring</small></div>
+                <span class="v" style="color:#6B7C8F;">Off</span>
+              </div>
+              <div class="keyrow">
+                <div><b>Screenshots</b><small>Blocked on both phones</small></div>
+                <span class="v"></span>
+              </div>
+            </div>
+            <div class="tabs"><span>People</span><span>Calls</span><span>Connect</span><span class="on">Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Settings · screenshots</b>One row. The line under it says what is in force: Allowed, Blocked on this phone, or Blocked on both phones.</figcaption>
+      </figure>
+      <figure class="frame">
+        <div class="phone">
+          <div class="screen light">
+            <div class="statusbar"><span>23:08</span><span>5G ▚ 83%</span></div>
+            <div class="appbar"><h4>Screenshots</h4></div>
+            <div class="list">
+              <div class="group">
+              <div class="choice"><span class="tile"></span><div><b>Allowed</b><small>Screenshots work as usual</small></div></div>
+              <div class="choice"><span class="tile"></span><div><b>Only this phone</b><small>Screenshots and recordings of uplink come out black here</small></div></div>
+              <div class="choice on"><span class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><div><b>Both phones</b><small>Here, and on theirs during your calls</small></div></div>
+              </div>
+              <div class="footnote">With both phones, the other person sees that you asked. Nothing stops a photo of the screen.</div>
+            </div>
+            <div class="tabs"><span>People</span><span>Calls</span><span>Connect</span><span class="on">Settings</span></div>
+          </div>
+        </div>
+        <figcaption><b>Screenshots</b>Opened from the row, like Call quality. A tap chooses; the choice applies at once, mid-call too.</figcaption>
+      </figure>
+    </div>
+    <div class="scroller" style="margin-top: 18px;">
+      <table>
+        <thead><tr><th>In a call</th><th>Chip, in the route chip's style</th></tr></thead>
+        <tbody>
+          <tr><td><b>They chose Both phones</b></td><td>Screenshots blocked by Noor, on your phone, so the black screenshot has a reason. The name comes last: a long one elides, the words that explain do not.</td></tr>
+          <tr><td><b>You chose Both phones</b></td><td>No screenshots on their phone, once their app says it has blocked them.</td></tr>
+          <tr><td><b>You both did</b></td><td>No screenshots on either phone</td></tr>
+          <tr><td><b>Their app is too old to block</b></td><td>Noor's app can't block screenshots, as now.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notes" style="margin-top: 16px;">
+      <div class="note"><span class="mark-i">○</span><div><b>There is no "only their phone"</b><p>Asking them to block what you still let yourself capture is a choice nobody needs. A setting saved from the two old switches that did exactly that opens as Both phones.</p></div></div>
+      <div class="note"><span class="mark-i">○</span><div><b>New strings</b><p>Screenshots (لقطات الشاشة) · Allowed (مسموحة) · Only this phone (هذا الهاتف فقط) · Both phones (الهاتفان) · Screenshots work as usual (تعمل لقطات الشاشة كالمعتاد) · Screenshots and recordings of uplink come out black here (تظهر لقطات الشاشة وتسجيلات uplink سوداء هنا) · Here, and on theirs during your calls (هنا، وعلى هاتفهم أثناء مكالماتكما) · With both phones, the other person sees that you asked. Nothing stops a photo of the screen. (مع الهاتفين، يرى الطرف الآخر أنك طلبت ذلك. لا شيء يمنع تصوير الشاشة.) · Blocked on this phone (ممنوعة على هذا الهاتف) · Blocked on both phones (ممنوعة على الهاتفين) · Screenshots blocked by {} (لقطات الشاشة ممنوعة بطلب من {}) · No screenshots on their phone (لا لقطات شاشة على هاتفهم) · No screenshots on either phone (لا لقطات شاشة على أي من الهاتفين)</p></div></div>
     </div>
   </section>
 

@@ -11,6 +11,8 @@ component Chip inherits VerticalLayout {
     in property <color> fill;
     in property <color> edge;
     in property <color> ink;
+    in property <length> size: 0.75rem;
+    in property <length> tracking: Theme.joined ? 0 : 0.34px;
     alignment: start;
     Rectangle {
         height: Theme.chip-height;
@@ -25,9 +27,10 @@ component Chip inherits VerticalLayout {
                 text: root.text;
                 color: root.ink;
                 font-family: Theme.mono;
-                font-size: 0.75rem;
-                letter-spacing: Theme.joined ? 0 : 0.34px;
+                font-size: root.size;
+                letter-spacing: root.tracking;
                 vertical-alignment: center;
+                overflow: elide;
             }
         }
     }
@@ -185,13 +188,18 @@ component VoiceFace inherits VerticalLayout {
     }
 }
 
-component CallTimer inherits Text {
-    color: Theme.on-video-muted;
-    font-size: 1rem;
-    font-family: Theme.mono;
-    height: self.font-size * Theme.line-box;
-    horizontal-alignment: center;
-    vertical-alignment: center;
+// How long the call has run, on a chip in the route's colours so it reads over any picture.
+// A time is a code: its figures read left to right in any language.
+component CallTimer inherits HorizontalLayout {
+    in property <string> text;
+    Chip {
+        text: root.text;
+        size: 1rem;
+        tracking: 0;
+        fill: #58B6FF29;
+        edge: #58B6FF4C;
+        ink: Theme.on-video-accent;
+    }
 }
 
 // The whole window while a call is up: video owns the frame, chrome sits on a scrim. A voice
@@ -442,7 +450,10 @@ export component CallScreen inherits Rectangle {
             vertical-alignment: center;
         }
         if root.lost : Rectangle { height: Theme.lost-timer-top; }
-        if root.connected || root.lost : CallTimer { text: root.timer; }
+        if root.connected || root.lost : CallTimer {
+            alignment: center;
+            text: root.timer;
+        }
         // Theirs under their name, as in a video call; ours is in the corner above the keys.
         if root.connected && root.weak-shown == Weak.theirs : HorizontalLayout {
             alignment: center;
@@ -622,12 +633,9 @@ export component CallScreen inherits Rectangle {
                             font-weight: 600;
                             overflow: elide;
                         }
-                        // A time is a code: it reads left to right in any language.
-                        Line {
+                        CallTimer {
+                            alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
                             text: root.timer;
-                            color: Theme.on-video-muted;
-                            font-size: 1rem;
-                            font-family: Theme.mono;
                         }
                         if root.video && root.video-failed : Line {
                             text: @tr("Video isn't working on this phone — audio only");
@@ -745,7 +753,8 @@ export component CallScreen inherits Rectangle {
     if root.connected && !root.stalled && !root.held && !root.asking && (root.route != Route.unknown || root.weak-shown == Weak.ours || root.weak-shown == Weak.both || root.capture != CallCapture.none) : VerticalLayout {
         x: Theme.rtl ? parent.width - self.width - Theme.self-view-edge : Theme.self-view-edge;
         y: parent.height - root.bottom-inset - Theme.call-bottom - Theme.key-size - Theme.asking-lift - self.height;
-        width: self.preferred-width;
+        // A long name elides inside its chip rather than running off the screen.
+        width: min(self.preferred-width, parent.width - Theme.self-view-edge * 2);
         height: self.preferred-height;
         spacing: Theme.flags-gap;
         if root.weak-shown == Weak.ours || root.weak-shown == Weak.both : HorizontalLayout {
@@ -766,12 +775,14 @@ export component CallScreen inherits Rectangle {
                 ink: Theme.on-video-accent;
             }
         }
-        // This call cannot be captured on their phone, in the route chip's style: a fact about
-        // the call, not a warning.
-        if root.capture == CallCapture.blocked : HorizontalLayout {
+        // Where this call cannot be captured, in the route chip's style: a fact about the call,
+        // not a warning. Who asked is said, so a black screenshot has a reason.
+        if root.capture != CallCapture.none && root.capture != CallCapture.unsupported : HorizontalLayout {
             alignment: Theme.rtl ? LayoutAlignment.end : LayoutAlignment.start;
             Chip {
-                text: @tr("No screenshots");
+                text: root.capture == CallCapture.ours ? @tr("Screenshots blocked by {}", root.peer-name)
+                    : root.capture == CallCapture.theirs ? @tr("No screenshots on their phone")
+                    : @tr("No screenshots on either phone");
                 fill: #58B6FF29;
                 edge: #58B6FF4C;
                 ink: Theme.on-video-accent;

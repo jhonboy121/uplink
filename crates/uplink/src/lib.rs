@@ -38,6 +38,7 @@ use uplink_core::audio::{AudioReceiver, AudioSender};
 use uplink_core::calls::{self, CallId, CallLog};
 use uplink_core::card;
 use uplink_core::contacts::Contacts;
+use uplink_core::elapsed;
 use uplink_core::health::{Health, Weak};
 use uplink_core::logs;
 use uplink_core::media::{MediaSession, MediaStats, Route};
@@ -56,7 +57,7 @@ use crate::core::Core;
 use crate::audio::CallAudio;
 use crate::ui::{
     AddError, AddProblem, App, Appearance, CallCapture, CallState, Confirm, Grant, Language, Mismatch, PermissionItem,
-    QualitySheet, RelayItem, Say, Screen, Theme, Toast,
+    QualitySheet, RelayItem, Say, Screen, Screenshots, Theme, Toast,
 };
 use crate::video::{CallVideo, VideoParts};
 use crate::view::{maybe, none, one, toast};
@@ -132,23 +133,45 @@ struct Capture {
 }
 
 impl Capture {
+    /// From the two saved flags. Asking their phone always blocks this one too: a setting saved
+    /// when the two were separate switches, asking without blocking, opens as both phones.
+    const fn saved(block: bool, ask: bool) -> Self {
+        Self { block: block || ask, ask, peer_asked: false, peer_blocked: false }
+    }
+
+    const fn choice(self) -> Screenshots {
+        if self.ask {
+            Screenshots::BothPhones
+        } else if self.block {
+            Screenshots::ThisPhone
+        } else {
+            Screenshots::Allowed
+        }
+    }
+
+    const fn choose(&mut self, choice: Screenshots) {
+        self.block = !matches!(choice, Screenshots::Allowed);
+        self.ask = matches!(choice, Screenshots::BothPhones);
+    }
+
     const fn secure(self) -> bool {
         self.block || self.peer_asked
     }
 
-    /// What the call screen says: blocked on their side (which we asked for, or they asked of
-    /// us), or asked of an app that has not said it can.
+    /// What the call screen says: whose phone this call cannot be captured on, or that we asked
+    /// an app that has not said it can.
     fn shown(self, connected_for: Option<Duration>) -> CallCapture {
-        if (self.ask && self.peer_blocked) || self.peer_asked {
-            CallCapture::Blocked
-        } else if self.ask && connected_for.is_some_and(|connected| connected >= CAPTURE_ANSWER) {
-            CallCapture::Unsupported
-        } else {
-            CallCapture::None
+        match (self.ask && self.peer_blocked, self.peer_asked) {
+            (true, true) => CallCapture::Both,
+            (true, false) => CallCapture::Theirs,
+            (false, true) => CallCapture::Ours,
+            (false, false) if self.ask && connected_for.is_some_and(|connected| connected >= CAPTURE_ANSWER) => {
+                CallCapture::Unsupported
+            }
+            (false, false) => CallCapture::None,
         }
     }
 }
-const SECONDS_PER_MINUTE: u64 = 60;
 /// How long a just-added contact shimmers: two sweeps and a bit, enough to find it and no more.
 const FRESH_FOR: Duration = Duration::from_millis(3200);
 const PERCENT: f64 = 100.0;
@@ -459,10 +482,9 @@ impl State {
         }
     }
 
-    /// mm:ss since the call connected.
+    /// Time since the call connected.
     fn call_timer(&self) -> String {
-        let elapsed = self.connected_at.map(|at| at.elapsed().as_secs()).unwrap_or_default();
-        format!("{:02}:{:02}", elapsed / SECONDS_PER_MINUTE, elapsed % SECONDS_PER_MINUTE)
+        elapsed::timer(self.connected_at.map(|at| at.elapsed()).unwrap_or_default())
     }
 
     /// Starts the microphone and speaker; the call keeps running without them.
@@ -913,6 +935,8 @@ fn went_back(ui: &App) -> bool {
         ui.set_quality_sheet(QualitySheet::None);
     } else if ui.get_quality_open() {
         ui.set_quality_open(false);
+    } else if ui.get_screenshots_open() {
+        ui.set_screenshots_open(false);
     } else if ui.get_pending_key().row_count() > 0 {
         forget_pending_key(ui);
     } else if ui.get_open_contact().row_count() > 0 {
@@ -1292,11 +1316,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         stats: Arc::default(),
         core: None,
         settings: settings.clone(),
-        capture: Capture {
-            block: settings.flag(settings::BLOCK_CAPTURE),
-            ask: settings.flag(settings::ASK_BLOCK_CAPTURE),
-            ..Capture::default()
-        },
+        capture: Capture::saved(settings.flag(settings::BLOCK_CAPTURE), settings.flag(settings::ASK_BLOCK_CAPTURE)),
         relays: None,
     }));
 
@@ -1877,15 +1897,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     show_quality(&state, &ui, &platform);
 
     let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
-    ui.on_toggle_block_capture(move || {
+    ui.on_choose_screenshots(move |choice| {
         if let Some(ui) = weak.upgrade() {
-            toggle_capture(&s, &p, &ui, settings::BLOCK_CAPTURE);
-        }
-    });
-    let (s, p, weak) = (Rc::clone(&state), Rc::clone(&platform), ui.as_weak());
-    ui.on_toggle_ask_block_capture(move || {
-        if let Some(ui) = weak.upgrade() {
-            toggle_capture(&s, &p, &ui, settings::ASK_BLOCK_CAPTURE);
+            choose_capture(&s, &p, &ui, choice);
         }
     });
     show_capture(&state, &ui);
@@ -2385,25 +2399,24 @@ fn apply_capture(state: &Rc<RefCell<State>>, platform: &Platform) {
     }
 }
 
-/// The two privacy rows, as the store has them.
+/// The screenshots choice, as the store has it.
 fn show_capture(state: &Rc<RefCell<State>>, ui: &App) {
-    if let Some(capture) = with_state_value(state, |s| s.capture) {
-        ui.set_block_capture(capture.block);
-        ui.set_ask_block_capture(capture.ask);
+    if let Some(choice) = with_state_value(state, |s| s.capture.choice()) {
+        ui.set_screenshots(choice);
     }
 }
 
-/// Flips one of the two privacy switches, saves it, and puts it in force at once, mid-call too.
-fn toggle_capture(state: &Rc<RefCell<State>>, platform: &Platform, ui: &App, key: &'static str) {
+/// Saves the screenshots choice as its two flags and puts it in force at once, mid-call too.
+fn choose_capture(state: &Rc<RefCell<State>>, platform: &Platform, ui: &App, choice: Screenshots) {
     let saved = with_state_value(state, |s| {
-        let on = if key == settings::BLOCK_CAPTURE { &mut s.capture.block } else { &mut s.capture.ask };
-        *on = !*on;
-        let now = *on;
-        tracing::info!(key, on = now, "screen capture choice");
-        s.settings.set_flag(key, now)
+        s.capture.choose(choice);
+        tracing::info!(?choice, "screenshots choice");
+        s.settings
+            .set_flag(settings::BLOCK_CAPTURE, s.capture.block)
+            .and_then(|()| s.settings.set_flag(settings::ASK_BLOCK_CAPTURE, s.capture.ask))
     });
     if let Some(Err(e)) = saved {
-        tracing::warn!(key, "saving the screen capture choice: {e}");
+        tracing::warn!("saving the screenshots choice: {e}");
     }
     apply_capture(state, platform);
     show_capture(state, ui);

@@ -1445,28 +1445,20 @@ msgid "The most a call sends, picture and voice together. It sends less on its o
 msgstr "أقصى ما ترسله المكالمة، الصورة والصوت معًا. ترسل أقل من تلقاء نفسها حين تتعثّر الشبكة، وتتبدّل حين تنتقل بين Wi-Fi وبيانات الجوال أثناء المكالمة."
 
 msgctxt "CallScreen"
-msgid "No screenshots"
-msgstr "بلا لقطات شاشة"
-
-msgctxt "CallScreen"
 msgid "{}'s app can't block screenshots"
 msgstr "تطبيق {} لا يستطيع منع لقطات الشاشة"
 
-msgctxt "SettingsPage"
-msgid "Block screenshots"
-msgstr "منع لقطات الشاشة"
+msgctxt "CallScreen"
+msgid "Screenshots blocked by {}"
+msgstr "لقطات الشاشة ممنوعة بطلب من {}"
 
-msgctxt "SettingsPage"
-msgid "Screenshots and recordings come out black"
-msgstr "تظهر لقطات الشاشة والتسجيلات سوداء"
+msgctxt "CallScreen"
+msgid "No screenshots on their phone"
+msgstr "لا لقطات شاشة على هاتفهم"
 
-msgctxt "SettingsPage"
-msgid "Ask them to block"
-msgstr "اطلب منهم المنع"
-
-msgctxt "SettingsPage"
-msgid "Their screen during your calls"
-msgstr "شاشتهم أثناء مكالماتكما"
+msgctxt "CallScreen"
+msgid "No screenshots on either phone"
+msgstr "لا لقطات شاشة على أي من الهاتفين"
 
 msgctxt "SettingsPage"
 msgid "On"
@@ -1484,6 +1476,18 @@ msgctxt "SettingsPage"
 msgid "Only people in your contacts ring"
 msgstr "يرنّ فقط من في جهات اتصالك"
 
+msgctxt "SettingsPage"
+msgid "Screenshots"
+msgstr "لقطات الشاشة"
+
+msgctxt "SettingsPage"
+msgid "Blocked on this phone"
+msgstr "ممنوعة على هذا الهاتف"
+
+msgctxt "SettingsPage"
+msgid "Blocked on both phones"
+msgstr "ممنوعة على الهاتفين"
+
 msgctxt "CallWords"
 msgid "Not in your contacts"
 msgstr "ليس في جهات اتصالك"
@@ -1491,3 +1495,35 @@ msgstr "ليس في جهات اتصالك"
 msgctxt "SearchField"
 msgid "Clear search"
 msgstr "مسح البحث"
+
+msgctxt "ScreenshotsPage"
+msgid "Screenshots"
+msgstr "لقطات الشاشة"
+
+msgctxt "ScreenshotsPage"
+msgid "Allowed"
+msgstr "مسموحة"
+
+msgctxt "ScreenshotsPage"
+msgid "Screenshots work as usual"
+msgstr "تعمل لقطات الشاشة كالمعتاد"
+
+msgctxt "ScreenshotsPage"
+msgid "Only this phone"
+msgstr "هذا الهاتف فقط"
+
+msgctxt "ScreenshotsPage"
+msgid "Screenshots and recordings of uplink come out black here"
+msgstr "تظهر لقطات الشاشة وتسجيلات uplink سوداء هنا"
+
+msgctxt "ScreenshotsPage"
+msgid "Both phones"
+msgstr "الهاتفان"
+
+msgctxt "ScreenshotsPage"
+msgid "Here, and on theirs during your calls"
+msgstr "هنا، وعلى هاتفهم أثناء مكالماتكما"
+
+msgctxt "ScreenshotsPage"
+msgid "With both phones, the other person sees that you asked. Nothing stops a photo of the screen."
+msgstr "مع الهاتفين، يرى الطرف الآخر أنك طلبت ذلك. لا شيء يمنع تصوير الشاشة."

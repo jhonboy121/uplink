@@ -492,6 +492,17 @@
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
+
+  /* ---- the timer as a chip (locked 2026-09-26) ----
+     The timer sits on the picture, so it takes the route chip's fill, edge and ink to stay
+     readable over any frame. It keeps its own size: 16dp figures (11px) in the chip's 31dp
+     (21.36px) pill, 10dp (6.89px) inside each end. MM:SS for the first hour, then H:MM:SS. */
+  .timer {
+    display: inline-flex; align-items: center; width: fit-content; box-sizing: border-box;
+    height: 21.36px; padding: 0 6.89px; border-radius: 999px;
+    background: rgba(88, 182, 255, .16); color: #A9D9FF; border: 1px solid rgba(88, 182, 255, .3);
+  }
+  .voice .timer { margin-inline: auto; }
 </style>
 
 <div class="wrap">

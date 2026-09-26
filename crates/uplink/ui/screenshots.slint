@@ -1,0 +1,138 @@
+// Screenshots: where they come out black, as one choice of three. Drawn in the shell mockup,
+// "Screenshots, as one choice"; the rows are the Call quality picker's, with room to explain.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Screenshots } from "types.slint";
+import { AppBar, Brand, Line, PageTitle, Tap } from "controls.slint";
+import { SettingsDivider, SettingsGroup } from "settings.slint";
+
+// The tick tile, filled when its choice is the one in force.
+component ChoiceTile inherits VerticalLayout {
+    in property <bool> picked;
+    alignment: center;
+    Rectangle {
+        width: Theme.setting-tile;
+        height: self.width;
+        border-radius: Theme.setting-tile-radius;
+        background: root.picked ? Theme.raised : transparent;
+        border-width: root.picked ? 0 : Theme.tick-edge-width;
+        border-color: Theme.tick-edge;
+        if root.picked : Image {
+            source: @image-url("icons/tick.svg");
+            width: Theme.setting-icon;
+            height: self.width;
+            colorize: Theme.beacon;
+        }
+    }
+}
+
+// One choice: its tick tile, its name, and what it does, over two lines when it needs them.
+// A plain HorizontalLayout with the tile on the reading direction's start side, since a wrapped
+// line inside the flexbox `Row` makes a layout loop.
+component ChoiceRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> picked;
+    callback tapped();
+    min-height: Theme.preset-row;
+    accessible-role: checkbox;
+    accessible-checked: root.picked;
+    accessible-label: root.title;
+    accessible-description: root.detail;
+    accessible-action-default => { root.tapped(); }
+    touch := Tap {
+        tapped => { root.tapped(); }
+    }
+    background: touch.pressed ? Theme.raised.with-alpha(0.6) : transparent;
+    animate background { duration: Theme.feedback; easing: ease-out; }
+    HorizontalLayout {
+        padding-left: Theme.setting-pad;
+        padding-right: Theme.setting-pad;
+        padding-top: Theme.gap;
+        padding-bottom: Theme.gap;
+        spacing: Theme.setting-gap;
+        if !Theme.rtl : ChoiceTile { picked: root.picked; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Line {
+                text: root.title;
+                color: Theme.text;
+                font-size: 1rem;
+                font-weight: 700;
+            }
+            Text {
+                text: root.detail;
+                color: Theme.muted;
+                font-size: 0.8125rem;
+                wrap: word-wrap;
+                horizontal-alignment: Theme.start;
+            }
+        }
+        if Theme.rtl : ChoiceTile { picked: root.picked; }
+    }
+}
+
+export component ScreenshotsPage inherits Rectangle {
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    in property <Screenshots> current;
+    callback choose(Screenshots);
+    background: Theme.ground;
+
+    VerticalLayout {
+        AppBar {
+            top-inset: root.top-inset;
+            PageTitle {
+                text: @tr("Screenshots");
+                horizontal-stretch: 1;
+            }
+            Brand { }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            VerticalLayout {
+                alignment: start;
+                padding-left: Theme.group-edge;
+                padding-right: Theme.group-edge;
+                padding-bottom: root.bottom-inset + Theme.group-edge;
+                spacing: Theme.group-gap;
+                SettingsGroup {
+                    ChoiceRow {
+                        title: @tr("Allowed");
+                        detail: @tr("Screenshots work as usual");
+                        picked: root.current == Screenshots.allowed;
+                        tapped => { root.choose(Screenshots.allowed); }
+                    }
+                    SettingsDivider { }
+                    ChoiceRow {
+                        title: @tr("Only this phone");
+                        detail: @tr("Screenshots and recordings of uplink come out black here");
+                        picked: root.current == Screenshots.this-phone;
+                        tapped => { root.choose(Screenshots.this-phone); }
+                    }
+                    SettingsDivider { }
+                    ChoiceRow {
+                        title: @tr("Both phones");
+                        detail: @tr("Here, and on theirs during your calls");
+                        picked: root.current == Screenshots.both-phones;
+                        tapped => { root.choose(Screenshots.both-phones); }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: Theme.quality-note-inset;
+                    padding-right: Theme.quality-note-inset;
+                    Text {
+                        text: @tr("With both phones, the other person sees that you asked. Nothing stops a photo of the screen.");
+                        color: Theme.muted;
+                        font-size: 0.8125rem;
+                        wrap: word-wrap;
+                        horizontal-alignment: Theme.start;
+                    }
+                }
+            }
+        }
+    }
+}

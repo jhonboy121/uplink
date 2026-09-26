@@ -10,6 +10,7 @@ use uplink_android::platform::{Permission as AndroidPermission, Route as Android
 use uplink_core::EndpointId;
 use uplink_core::calls::{CallId, Logged, Outcome};
 use uplink_core::contacts::{Contact, Contacts};
+use uplink_core::elapsed;
 use uplink_core::health::Weak as CoreWeak;
 use uplink_core::media::Route as MediaRoute;
 use uplink_core::node::{Mode, RelayView};
@@ -280,12 +281,7 @@ pub fn call_items(
 
 /// How long an answered call lasted, when that was kept.
 fn answered_for(outcome: Outcome, duration: Option<Duration>) -> Option<SharedString> {
-    duration.filter(|_| outcome.answered()).map(|duration| minutes_seconds(duration).into())
-}
-
-fn minutes_seconds(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    format!("{}:{:02}", seconds / SECONDS_PER_MINUTE, seconds % SECONDS_PER_MINUTE)
+    duration.filter(|_| outcome.answered()).map(|duration| elapsed::length(duration).into())
 }
 
 /// Everything the call details page shows. `saved` is the contact's name, if they are one.
@@ -306,8 +302,8 @@ pub fn call_detail(logged: &Logged, saved: Option<String>, clock: &LocalClock) -
         voice_call: record.mode == Mode::Voice,
         day: day_ago(clock.days_ago(record.at)),
         time: clock.clock_of(record.at).into(),
-        duration: maybe(record.duration.map(|duration| minutes_seconds(duration).into())),
-        video_from: maybe(record.video_from.map(|at| minutes_seconds(at).into())),
+        duration: maybe(record.duration.map(|duration| elapsed::length(duration).into())),
+        video_from: maybe(record.video_from.map(|at| elapsed::length(at).into())),
         rejoins: quality.map_or(0, |q| i32::try_from(q.rejoins).unwrap_or(i32::MAX)),
         traffic: maybe(record.traffic.map(|traffic| Traffic {
             sent: data_size(traffic.sent).into(),

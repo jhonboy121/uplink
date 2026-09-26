@@ -10,14 +10,17 @@ viewBox — it runs from y 4.4 to y 38.75 — so a square crop of the viewBox wo
 high in its plate. `ART` is that bounding box, and the browser centres it for us.
 """
 
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ICONS = ROOT / "assets" / "icons"
-CHROMIUM = "/usr/bin/chromium"
+# Wherever this box keeps it (a snap on Ubuntu); `CHROMIUM=` names another.
+CHROMIUM = os.environ.get("CHROMIUM") or shutil.which("chromium") or "chromium"
 # The badge is small on screen (a fifth of a code) but is also drawn into a shared image at a
 # size we do not control, so it is rendered well above either.
 BADGE = 256

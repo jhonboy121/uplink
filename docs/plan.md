@@ -1308,3 +1308,9 @@ default); keep disk usage lean. Avoid build scripts.
   - The keyboard goes when the call screen comes up, and a field lets go once the keyboard has
     been put away for `Theme.keyboard-settle` (its height dips to zero while it opens; see
     docs/ref/slint-1.18-android.md).
+- **2026-09-26**: **Screenshots, as one choice.** "Block screenshots" and "Ask them to block" read
+  as the same switch twice: in a real call the ask was never turned on by the person it was for
+  (the log: only `block-capture` toggles). One Settings row now opens a page of three (Allowed /
+  Only this phone / Both phones; shell mockup "Screenshots, as one choice"). Saved as the same two
+  flags; an old ask-without-block opens as Both phones. In a call the chip says whose phone is
+  blocked and who asked ("Screenshots blocked by Noor"), so a black screenshot has a reason.

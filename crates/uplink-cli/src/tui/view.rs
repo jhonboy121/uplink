@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
+use uplink_core::elapsed;
 use uplink_core::node::Mode;
 use uplink_core::preset::{Network as Metered, Preset};
 
@@ -17,7 +18,6 @@ const CONTACTS_WIDTH: u16 = 28;
 const CALL_HEIGHT: u16 = 8;
 const QUALITY_HEIGHT: u16 = 4;
 const TRAFFIC_HEIGHT: u16 = 6;
-const SECONDS_PER_MINUTE: u64 = 60;
 
 pub fn draw(frame: &mut Frame, tui: &Tui) {
     let [header, body, log, footer] = Layout::vertical([
@@ -132,8 +132,7 @@ fn call_lines(tui: &Tui) -> Vec<Line<'static>> {
 }
 
 fn timer(call: &Call) -> String {
-    let elapsed = call.connected_at.map(|at| at.elapsed().as_secs()).unwrap_or_default();
-    format!("{:02}:{:02}", elapsed / SECONDS_PER_MINUTE, elapsed % SECONDS_PER_MINUTE)
+    elapsed::timer(call.connected_at.map(|at| at.elapsed()).unwrap_or_default())
 }
 
 fn step(preset: Preset) -> String {

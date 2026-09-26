@@ -37,56 +37,56 @@ msgctxt "AddRelaySheet"
 msgid "e.g. Home"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:655
+#: crates/uplink/ui/app.slint:684
 msgctxt "App"
 msgid "Clear"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:643
+#: crates/uplink/ui/app.slint:672
 msgctxt "App"
 msgid "Clear the call log?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:651
+#: crates/uplink/ui/app.slint:680
 msgctxt "App"
 msgid "Every call is forgotten. It does not affect your contacts."
 msgstr ""
 
-#: crates/uplink/ui/app.slint:653
+#: crates/uplink/ui/app.slint:682
 msgctxt "App"
 msgid "It leaves the call log. It does not affect your contacts."
 msgstr ""
 
-#: crates/uplink/ui/app.slint:655
+#: crates/uplink/ui/app.slint:684
 msgctxt "App"
 msgid "Remove"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:644
+#: crates/uplink/ui/app.slint:673
 msgctxt "App"
 msgid "Remove this call?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:646
+#: crates/uplink/ui/app.slint:675
 msgctxt "App"
 msgid "Remove {n} call?"
 msgid_plural "Remove {n} calls?"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/app.slint:648
+#: crates/uplink/ui/app.slint:677
 msgctxt "App"
 msgid "Remove {n} contact?"
 msgid_plural "Remove {n} contacts?"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/uplink/ui/app.slint:649
+#: crates/uplink/ui/app.slint:678
 msgctxt "App"
 msgid "Remove {}?"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:654
+#: crates/uplink/ui/app.slint:683
 msgctxt "App"
 msgid "Their key goes with them. You would need it again to call them, and they can still call you."
 msgstr ""
@@ -266,235 +266,245 @@ msgctxt "CallPair"
 msgid "Voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:676
+#: crates/uplink/ui/call.slint:684
 msgctxt "CallScreen"
 msgid "Answer"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:726
+#: crates/uplink/ui/call.slint:734
 msgctxt "CallScreen"
 msgid "Asking to switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:808
+#: crates/uplink/ui/call.slint:819
 msgctxt "CallScreen"
 msgid "Asking {} to switch to video…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:719
+#: crates/uplink/ui/call.slint:727
 msgctxt "CallScreen"
 msgid "Audio: {}"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:273
+#: crates/uplink/ui/call.slint:281
 msgctxt "CallScreen"
 msgid "Bluetooth"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:687
+#: crates/uplink/ui/call.slint:695
 msgctxt "CallScreen"
 msgid "Call again"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:408
-#: crates/uplink/ui/call.slint:428
+#: crates/uplink/ui/call.slint:416
+#: crates/uplink/ui/call.slint:436
 msgctxt "CallScreen"
 msgid "Calling…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:316
-#: crates/uplink/ui/call.slint:370
+#: crates/uplink/ui/call.slint:324
+#: crates/uplink/ui/call.slint:378
 msgctxt "CallScreen"
 msgid "Camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:816
+#: crates/uplink/ui/call.slint:827
 msgctxt "CallScreen"
 msgid "Cancel"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:682
+#: crates/uplink/ui/call.slint:690
 msgctxt "CallScreen"
 msgid "Close"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:436
+#: crates/uplink/ui/call.slint:444
 msgctxt "CallScreen"
 msgid "Connection lost"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:670
+#: crates/uplink/ui/call.slint:678
 msgctxt "CallScreen"
 msgid "Decline"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:763
+#: crates/uplink/ui/call.slint:772
 msgctxt "CallScreen"
 msgid "Direct"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:733
+#: crates/uplink/ui/call.slint:741
 msgctxt "CallScreen"
 msgid "End call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:603
+#: crates/uplink/ui/call.slint:614
 msgctxt "CallScreen"
 msgid "Fold away"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:408
+#: crates/uplink/ui/call.slint:416
 msgctxt "CallScreen"
 msgid "Incoming video call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:428
+#: crates/uplink/ui/call.slint:436
 msgctxt "CallScreen"
 msgid "Incoming voice call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:694
-#: crates/uplink/ui/call.slint:719
+#: crates/uplink/ui/call.slint:702
+#: crates/uplink/ui/call.slint:727
 msgctxt "CallScreen"
 msgid "Mute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:643
+#: crates/uplink/ui/call.slint:651
 msgctxt "CallScreen"
 msgid "Muted"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:774
+#: crates/uplink/ui/call.slint:785
 msgctxt "CallScreen"
-msgid "No screenshots"
+msgid "No screenshots on either phone"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:316
-#: crates/uplink/ui/call.slint:370
-#: crates/uplink/ui/call.slint:462
-#: crates/uplink/ui/call.slint:553
+#: crates/uplink/ui/call.slint:784
+msgctxt "CallScreen"
+msgid "No screenshots on their phone"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:324
+#: crates/uplink/ui/call.slint:378
+#: crates/uplink/ui/call.slint:473
+#: crates/uplink/ui/call.slint:564
 msgctxt "CallScreen"
 msgid "On hold"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:272
+#: crates/uplink/ui/call.slint:280
 msgctxt "CallScreen"
 msgid "Phone"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:498
+#: crates/uplink/ui/call.slint:509
 msgctxt "CallScreen"
 msgid "Reconnecting…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:763
+#: crates/uplink/ui/call.slint:772
 msgctxt "CallScreen"
 msgid "Relayed"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:275
+#: crates/uplink/ui/call.slint:783
+msgctxt "CallScreen"
+msgid "Screenshots blocked by {}"
+msgstr ""
+
+#: crates/uplink/ui/call.slint:283
 msgctxt "CallScreen"
 msgid "Speaker"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:708
+#: crates/uplink/ui/call.slint:716
 msgctxt "CallScreen"
 msgid "Switch camera"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:726
+#: crates/uplink/ui/call.slint:734
 msgctxt "CallScreen"
 msgid "Switch to video"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:513
+#: crates/uplink/ui/call.slint:524
 msgctxt "CallScreen"
 msgid "The call carries on when the network is back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:511
+#: crates/uplink/ui/call.slint:522
 msgctxt "CallScreen"
 msgid "The call carries on when your network is back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:512
+#: crates/uplink/ui/call.slint:523
 msgctxt "CallScreen"
 msgid "Their connection dropped. The call carries on when they're back."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:701
+#: crates/uplink/ui/call.slint:709
 msgctxt "CallScreen"
 msgid "Turn camera off"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:701
+#: crates/uplink/ui/call.slint:709
 msgctxt "CallScreen"
 msgid "Turn camera on"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:694
+#: crates/uplink/ui/call.slint:702
 msgctxt "CallScreen"
 msgid "Unmute"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:633
+#: crates/uplink/ui/call.slint:641
 msgctxt "CallScreen"
 msgid "Video isn't working on this phone — audio only"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:498
+#: crates/uplink/ui/call.slint:509
 msgctxt "CallScreen"
 msgid "Waiting for {}…"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:756
+#: crates/uplink/ui/call.slint:765
 msgctxt "CallScreen"
 msgid "Weak connection"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:274
+#: crates/uplink/ui/call.slint:282
 msgctxt "CallScreen"
 msgid "Wired headphones"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:370
+#: crates/uplink/ui/call.slint:378
 msgctxt "CallScreen"
 msgid "You"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:497
+#: crates/uplink/ui/call.slint:508
 msgctxt "CallScreen"
 msgid "You're offline"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:566
+#: crates/uplink/ui/call.slint:577
 msgctxt "CallScreen"
 msgid "You're on a phone call. {} can't hear or see you until it ends."
 msgstr ""
 
-#: crates/uplink/ui/call.slint:756
+#: crates/uplink/ui/call.slint:765
 msgctxt "CallScreen"
 msgid "Your connection is weak"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:320
-#: crates/uplink/ui/call.slint:466
+#: crates/uplink/ui/call.slint:328
+#: crates/uplink/ui/call.slint:477
 msgctxt "CallScreen"
 msgid "{} is on a phone call"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:475
+#: crates/uplink/ui/call.slint:486
 msgctxt "CallScreen"
 msgid "{} kept it voice"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:786
+#: crates/uplink/ui/call.slint:797
 msgctxt "CallScreen"
 msgid "{}'s app can't block screenshots"
 msgstr ""
 
-#: crates/uplink/ui/call.slint:453
-#: crates/uplink/ui/call.slint:648
+#: crates/uplink/ui/call.slint:464
+#: crates/uplink/ui/call.slint:656
 msgctxt "CallScreen"
 msgid "{}'s connection is weak"
 msgstr ""
@@ -1465,210 +1475,242 @@ msgctxt "ScanPage"
 msgid "Stop scanning"
 msgstr ""
 
+#: crates/uplink/ui/screenshots.slint:104
+msgctxt "ScreenshotsPage"
+msgid "Allowed"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:118
+msgctxt "ScreenshotsPage"
+msgid "Both phones"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:119
+msgctxt "ScreenshotsPage"
+msgid "Here, and on theirs during your calls"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:111
+msgctxt "ScreenshotsPage"
+msgid "Only this phone"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:88
+msgctxt "ScreenshotsPage"
+msgid "Screenshots"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:112
+msgctxt "ScreenshotsPage"
+msgid "Screenshots and recordings of uplink come out black here"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:105
+msgctxt "ScreenshotsPage"
+msgid "Screenshots work as usual"
+msgstr ""
+
+#: crates/uplink/ui/screenshots.slint:128
+msgctxt "ScreenshotsPage"
+msgid "With both phones, the other person sees that you asked. Nothing stops a photo of the screen."
+msgstr ""
+
 #: crates/uplink/ui/controls.slint:535
 msgctxt "SearchField"
 msgid "Clear search"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:167
-#: crates/uplink/ui/settings.slint:176
+#: crates/uplink/ui/settings.slint:165
+#: crates/uplink/ui/settings.slint:174
 msgctxt "SettingsPage"
 msgid "Allow"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:167
-#: crates/uplink/ui/settings.slint:176
+#: crates/uplink/ui/settings.slint:165
+#: crates/uplink/ui/settings.slint:174
+#: crates/uplink/ui/settings.slint:254
 msgctxt "SettingsPage"
 msgid "Allowed"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:262
-msgctxt "SettingsPage"
-msgid "Ask them to block"
-msgstr ""
-
-#: crates/uplink/ui/settings.slint:235
+#: crates/uplink/ui/settings.slint:233
 msgctxt "SettingsPage"
 msgid "Auto"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:183
+#: crates/uplink/ui/settings.slint:181
 msgctxt "SettingsPage"
 msgid "Background apps"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:165
+#: crates/uplink/ui/settings.slint:163
 msgctxt "SettingsPage"
 msgid "Battery"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:254
+#: crates/uplink/ui/settings.slint:253
 msgctxt "SettingsPage"
-msgid "Block screenshots"
+msgid "Blocked on both phones"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:224
+#: crates/uplink/ui/settings.slint:254
+msgctxt "SettingsPage"
+msgid "Blocked on this phone"
+msgstr ""
+
+#: crates/uplink/ui/settings.slint:222
 msgctxt "SettingsPage"
 msgid "Call quality"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:196
+#: crates/uplink/ui/settings.slint:194
 msgctxt "SettingsPage"
 msgid "Dark"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:273
+#: crates/uplink/ui/settings.slint:263
 msgctxt "SettingsPage"
 msgid "Diagnostics"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:209
+#: crates/uplink/ui/settings.slint:207
 msgctxt "SettingsPage"
 msgid "Follows the phone"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:193
+#: crates/uplink/ui/settings.slint:191
 msgctxt "SettingsPage"
 msgid "Follows the system"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:208
+#: crates/uplink/ui/settings.slint:206
 msgctxt "SettingsPage"
 msgid "Language"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:195
+#: crates/uplink/ui/settings.slint:193
 msgctxt "SettingsPage"
 msgid "Light"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:174
+#: crates/uplink/ui/settings.slint:172
 msgctxt "SettingsPage"
 msgid "Lock screen calls"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:248
-#: crates/uplink/ui/settings.slint:256
-#: crates/uplink/ui/settings.slint:264
+#: crates/uplink/ui/settings.slint:246
 msgctxt "SettingsPage"
 msgid "Off"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:248
-#: crates/uplink/ui/settings.slint:256
-#: crates/uplink/ui/settings.slint:264
+#: crates/uplink/ui/settings.slint:246
 msgctxt "SettingsPage"
 msgid "On"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:247
+#: crates/uplink/ui/settings.slint:245
 msgctxt "SettingsPage"
 msgid "Only people in your contacts ring"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:185
+#: crates/uplink/ui/settings.slint:183
 msgctxt "SettingsPage"
 msgid "Open"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:246
+#: crates/uplink/ui/settings.slint:244
 msgctxt "SettingsPage"
 msgid "Reject unknown callers"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:233
+#: crates/uplink/ui/settings.slint:231
 msgctxt "SettingsPage"
 msgid "Relays"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:175
+#: crates/uplink/ui/settings.slint:173
 msgctxt "SettingsPage"
 msgid "Ring over the lock screen"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:255
+#: crates/uplink/ui/settings.slint:252
 msgctxt "SettingsPage"
-msgid "Screenshots and recordings come out black"
+msgid "Screenshots"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:274
+#: crates/uplink/ui/settings.slint:264
 msgctxt "SettingsPage"
 msgid "Send the log to the fixer"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:193
-#: crates/uplink/ui/settings.slint:209
+#: crates/uplink/ui/settings.slint:191
+#: crates/uplink/ui/settings.slint:207
 msgctxt "SettingsPage"
 msgid "Set on this phone"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:144
+#: crates/uplink/ui/settings.slint:142
 msgctxt "SettingsPage"
 msgid "Settings"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:275
+#: crates/uplink/ui/settings.slint:265
 msgctxt "SettingsPage"
 msgid "Share"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:194
-#: crates/uplink/ui/settings.slint:210
+#: crates/uplink/ui/settings.slint:192
+#: crates/uplink/ui/settings.slint:208
 msgctxt "SettingsPage"
 msgid "System"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:225
+#: crates/uplink/ui/settings.slint:223
 msgctxt "SettingsPage"
 msgid "The most a call sends"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:263
-msgctxt "SettingsPage"
-msgid "Their screen during your calls"
-msgstr ""
-
-#: crates/uplink/ui/settings.slint:192
+#: crates/uplink/ui/settings.slint:190
 msgctxt "SettingsPage"
 msgid "Theme"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:166
+#: crates/uplink/ui/settings.slint:164
 msgctxt "SettingsPage"
 msgid "Wait for calls while asleep"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:234
+#: crates/uplink/ui/settings.slint:232
 msgctxt "SettingsPage"
 msgid "When a direct path won't form"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:184
+#: crates/uplink/ui/settings.slint:182
 msgctxt "SettingsPage"
 msgid "Your phone's own list"
 msgstr ""
 
-#: crates/uplink/ui/settings.slint:235
+#: crates/uplink/ui/settings.slint:233
 msgctxt "SettingsPage"
 msgid "{} on"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:58
+#: crates/uplink/ui/app.slint:59
 msgctxt "Tabs"
 msgid "Calls"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:59
+#: crates/uplink/ui/app.slint:60
 msgctxt "Tabs"
 msgid "Connect"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:57
+#: crates/uplink/ui/app.slint:58
 msgctxt "Tabs"
 msgid "People"
 msgstr ""
 
-#: crates/uplink/ui/app.slint:60
+#: crates/uplink/ui/app.slint:61
 msgctxt "Tabs"
 msgid "Settings"
 msgstr ""

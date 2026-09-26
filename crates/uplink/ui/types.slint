@@ -31,7 +31,12 @@ export enum Weak { none, ours, theirs, both }
 
 // Whether this call can be captured on the other phone: blocked there (asked by either side), or
 // asked of an app that has not said it can (an older build).
-export enum CallCapture { none, blocked, unsupported }
+// Screenshots in a call: blocked on their phone because we asked, on ours because they did, on
+// both, or asked of an app that has not said it can.
+export enum CallCapture { none, theirs, ours, both, unsupported }
+
+// Where screenshots come out black: nowhere, on this phone, or on both phones in a call.
+export enum Screenshots { allowed, this-phone, both-phones }
 
 // How much a call sends, lowest to highest.
 export enum Preset { lowest, low, balanced, high, highest }

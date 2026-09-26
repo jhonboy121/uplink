@@ -18,9 +18,9 @@ mod dump;
 mod ui;
 
 use ui::{
-    Ago, App, Appearance, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day, DayAgo, Ending,
-    Grant, Group, Language, Output, OutputItem, Permission, PermissionItem, Reach, Region, RelayItem, RelayUse, Route,
-    Screen, Stall, Theme, Unit, Weak,
+    Ago, App, Appearance, CallCapture, CallDetail, CallItem, CallState, Confirm, ContactDetail, ContactItem, Day,
+    DayAgo, Ending, Grant, Group, Language, Output, OutputItem, Permission, PermissionItem, Reach, Region, RelayItem,
+    RelayUse, Route, Screen, Screenshots, Stall, Theme, Unit, Weak,
 };
 
 /// Logical pixels.
@@ -106,6 +106,12 @@ fn main() -> Result<()> {
         shoot(&window, &app, canvas, name)?;
     }
 
+    // Screenshots: the Settings row says what is in force, and its page offers the three.
+    app.set_screenshots(Screenshots::BothPhones);
+    app.set_screenshots_open(true);
+    shoot(&window, &app, canvas, "screenshots")?;
+    app.set_screenshots_open(false);
+
     // Picking several to remove, and the sheet that asks before anything goes.
     app.set_screen(Screen::People);
     app.set_selecting(true);
@@ -179,6 +185,14 @@ fn main() -> Result<()> {
     app.set_mic_on(false);
     shoot(&window, &app, canvas, "call-connected-muted")?;
     app.set_mic_on(true);
+    // They asked for no screenshots, under a name long enough to elide.
+    app.set_peer_name("Laptop in the other room".into());
+    app.set_call_capture(CallCapture::Ours);
+    shoot(&window, &app, canvas, "call-capture-ours")?;
+    app.set_peer_name("Noor".into());
+    app.set_call_capture(CallCapture::Both);
+    shoot(&window, &app, canvas, "call-capture-both")?;
+    app.set_call_capture(CallCapture::None);
 
     // Call modes, named as the design's frames are.
     app.set_camera_on(false);
@@ -316,6 +330,9 @@ fn main() -> Result<()> {
         app.set_screen(screen);
         shoot(&window, &app, canvas, name)?;
     }
+    app.set_screenshots_open(true);
+    shoot(&window, &app, canvas, "screenshots-ar")?;
+    app.set_screenshots_open(false);
     app.set_screen(Screen::People);
     app.set_open_contact(one(open_contact()));
     shoot(&window, &app, canvas, "contact-ar")?;

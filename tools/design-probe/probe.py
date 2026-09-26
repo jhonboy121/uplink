@@ -9,6 +9,7 @@ CSS actually resolves to — margin collapsing, line boxes, flex gaps and all.
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,8 @@ PAGE = ROOT / "docs" / "design" / f"{DESIGN}.html"
 OUT = ROOT / "target" / "design" / ("geometry.json" if DESIGN == "uplink-call-ui" else f"geometry-{DESIGN}.json")
 PORT = 8173
 TIMEOUT = 120
-CHROMIUM = "/usr/bin/chromium"
+# Wherever this box keeps it (a snap on Ubuntu); `CHROMIUM=` names another.
+CHROMIUM = os.environ.get("CHROMIUM") or shutil.which("chromium") or "chromium"
 # The mockup's phone: a 248px screen standing for a 360dp one, at the frame's own 9/19.3.
 FRAME_PX = 248
 TARGET_DP = 360

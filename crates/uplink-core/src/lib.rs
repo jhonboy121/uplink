@@ -6,6 +6,7 @@ pub mod card;
 pub mod contacts;
 pub mod crypto;
 pub mod db;
+pub mod elapsed;
 mod error;
 pub mod health;
 pub mod identity;
