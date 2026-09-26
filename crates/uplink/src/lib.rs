@@ -521,7 +521,9 @@ impl State {
         }
     }
 
-    /// Stops the call's codecs and streams; a running camera restarts without the encoder.
+    /// Stops the call's codecs, streams and camera. Only an open scanner keeps the camera,
+    /// rebuilt without the encoder: a camera nothing shows costs battery, and Android holds an
+    /// app streaming one at 60 Hz.
     fn end_call(&mut self) {
         self.rate = None;
         if self.call.is_none() && self.audio.is_none() {
@@ -531,8 +533,10 @@ impl State {
         self.audio = None;
         self.call = None;
         self.parked = None;
-        if camera_was_running {
+        if camera_was_running && self.scanning {
             self.start_camera();
+        } else {
+            self.clear_frame();
         }
     }
 }

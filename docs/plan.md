@@ -1294,3 +1294,9 @@ default); keep disk usage lean. Avoid build scripts.
   People and the call log are now `ListView`s (only visible rows exist); the preview's painted
   rows are identical before and after in every variant. Device-tested with 1000 contacts and
   300 calls: smooth. `just seed contacts N` / `just seed calls N` fill either for testing.
+- **2026-09-26**: **A call's end stops the camera.** After a call the app still sat at 60 Hz: the
+  camera restarted without the encoder, feeding a picture nothing showed, and Android caps an app
+  streaming a camera (`CameraServiceProxy` → WindowManager, seen as
+  `APP_REQUEST_RENDER_FRAME_RATE_RANGE [60, 60]` in `dumpsys display`) over any surface vote.
+  `end_call` now keeps the camera only for an open scanner. A call itself stays at 60 while the
+  camera runs; the mic already closes at call end (dropping the AAudio streams).
