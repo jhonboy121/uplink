@@ -431,6 +431,7 @@ export component ToastCard inherits Rectangle {
                 : root.toast.say == Say.log-not-packed ? @tr("Could not pack the log")
                 : root.toast.say == Say.key-not-copied ? @tr("Could not copy your key: {}", root.toast.subject)
                 : root.toast.say == Say.relay-invalid ? @tr("{} is not a relay address", root.toast.subject)
+                : root.toast.say == Say.camera-unavailable ? @tr("That camera would not open. Still using this one")
                 : @tr("Something went wrong: {}", root.toast.subject);
             color: Theme.text;
             font-size: 0.875rem;

@@ -113,10 +113,12 @@ impl Preset {
         settings.set(network.key(), self.key()).await
     }
 
-    /// This, or the highest step below it this phone can send; the lowest if it can send none,
-    /// which is still a call.
+    /// This, or the highest step below it this phone can send; else the lowest it can send, above
+    /// the choice rather than a size its camera does not have; the lowest step if it can send
+    /// none, which is still a call.
     pub fn within(self, supported: &[Self]) -> Self {
-        supported.iter().copied().filter(|step| *step <= self).max().unwrap_or(Self::Lowest)
+        let below = supported.iter().copied().filter(|step| *step <= self).max();
+        below.or_else(|| supported.iter().copied().min()).unwrap_or(Self::Lowest)
     }
 }
 
@@ -163,5 +165,6 @@ mod tests {
         assert_eq!(Preset::Highest.within(&up_to_720), Preset::Balanced);
         assert_eq!(Preset::Low.within(&up_to_720), Preset::Low);
         assert_eq!(Preset::High.within(&[]), Preset::Lowest);
+        assert_eq!(Preset::Lowest.within(&[Preset::Balanced, Preset::High]), Preset::Balanced);
     }
 }

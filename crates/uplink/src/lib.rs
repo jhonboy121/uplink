@@ -221,6 +221,31 @@ struct Session {
     _scanner: Option<ImageReader>,
 }
 
+/// The quality steps each camera can send, with the encoder: a camera feeds the encoder's surface
+/// directly, so a size it cannot output cannot be sent from it, and the two cameras of one phone
+/// differ.
+#[derive(Default)]
+struct Steps {
+    front: Option<Vec<Preset>>,
+    back: Option<Vec<Preset>>,
+}
+
+impl Steps {
+    fn of(&self, facing: Facing) -> Option<&[Preset]> {
+        match facing {
+            Facing::Front => self.front.as_deref(),
+            Facing::Back => self.back.as_deref(),
+        }
+    }
+
+    const fn slot(&mut self, facing: Facing) -> &mut Option<Vec<Preset>> {
+        match facing {
+            Facing::Front => &mut self.front,
+            Facing::Back => &mut self.back,
+        }
+    }
+}
+
 /// Field order is drop order: the camera stops feeding the encoder before the call goes.
 struct State {
     ui: slint::Weak<App>,
@@ -261,8 +286,8 @@ struct State {
     /// What the screen and the small window's output button were last told, so each is told
     /// again only when it changes.
     chrome: Option<Chrome>,
-    /// The quality steps this phone's camera and encoder manage, asked once per window.
-    presets: Option<Vec<Preset>>,
+    /// The quality steps each camera and the encoder manage, asked once per window.
+    presets: Steps,
     /// The step the call in progress may send at: its cap, for this network.
     sending: Option<Preset>,
     /// What the call's video sends within that cap, while the path cannot carry all of it.
@@ -304,8 +329,9 @@ impl State {
         tracing::info!("{}", message.as_ref());
     }
 
-    /// Assumes the camera permission is granted (see [`request_camera`]).
-    fn start_camera(&mut self) {
+    /// Assumes the camera permission is granted (see [`request_camera`]). Returns whether it
+    /// opened; one that did not in a video call is the watchdog's to retry.
+    fn start_camera(&mut self) -> bool {
         self.session = None;
         // The last picture of whatever ran before would otherwise stay up until this camera's
         // first frame replaces it: a flash of the front camera before the scanner's back one.
@@ -318,6 +344,7 @@ impl State {
                     facing = ?camera.facing(),
                     orientation = camera.sensor_orientation(),
                     intent = ?camera.intent(),
+                    step = ?self.rate.as_ref().map(Rate::step),
                     "camera started"
                 );
                 self.status(format!(
@@ -328,10 +355,16 @@ impl State {
                 ));
                 self.session = Some(session);
                 self.sync_call_turns();
+                true
             }
             Err(e) => {
                 tracing::error!("camera start: {e:#}");
                 self.status(format!("camera start failed: {e:#}"));
+                // Otherwise nothing tries again: the watchdog only retries a reopen of its own.
+                if self.call.is_some() && self.camera_watch.retry_at.is_none() {
+                    self.camera_watch.retry_at = Some(Instant::now() + CAMERA_RETRY_FIRST);
+                }
+                false
             }
         }
     }
@@ -589,7 +622,7 @@ impl State {
 
     /// Rate control starts over at `cap`, all of it: a new call, or a new network or choice.
     fn pace_from(&mut self, cap: Preset, stats: &MediaStats) {
-        let rate = Rate::new(cap, self.presets.as_deref().unwrap_or_default());
+        let rate = Rate::new(cap, self.presets.of(self.facing).unwrap_or_default());
         stats.video_kbps.store(u64::from(rate.kbps()), Ordering::Relaxed);
         self.rate = Some(rate);
     }
@@ -935,7 +968,9 @@ fn request_camera(state: &Rc<RefCell<State>>, platform: &Rc<Platform>) {
     let (state, platform) = (Rc::clone(state), Rc::clone(platform));
     let task = slint::spawn_local(async move {
         match platform.request_permission(Permission::Camera).await {
-            Ok(true) => with_state(&state, State::start_camera),
+            Ok(true) => with_state(&state, |s| {
+                s.start_camera();
+            }),
             Ok(false) => with_state(&state, |s| s.status("camera permission denied")),
             Err(e) => {
                 tracing::error!("camera permission: {e}");
@@ -1420,7 +1455,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         reconnecting: false,
         telecom: TelecomState::default(),
         chrome: None,
-        presets: None,
+        presets: Steps::default(),
         sending: None,
         rate: None,
         media: None,
@@ -1967,15 +2002,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         send_call_command(&s, Command::Hangup, &weak);
     });
 
-    let s = Rc::clone(&state);
-    ui.on_flip_camera(move || {
-        with_state(&s, |s| {
-            s.facing = s.facing.flipped();
-            if s.session.is_some() {
-                s.start_camera();
-            }
-        });
-    });
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
+    ui.on_flip_camera(move || flip_camera(&s, &weak, &p));
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_toggle_mic(move || {
         let muted = with_state_value(&s, State::toggle_mic).unwrap_or_default();
@@ -2660,24 +2688,34 @@ const fn peer_of(event: &Event) -> Option<EndpointId> {
     }
 }
 
-/// The quality steps this phone's front camera and encoder can send, asked once per window: the
-/// answers do not change while it runs, and each takes a trip through the camera service.
+/// The quality steps the camera now facing and the encoder can send, asked once per window and
+/// camera: the answers do not change while it runs, and each takes a trip through the camera
+/// service. The first ask also puts every camera and encoder in the log, whatever happens next.
 fn sendable(state: &Rc<RefCell<State>>, platform: &Platform) -> Vec<Preset> {
-    if let Some(known) = with_state_value(state, |s| s.presets.clone()).flatten() {
+    let Some((facing, known, first)) = with_state_value(state, |s| {
+        let first = s.presets.front.is_none() && s.presets.back.is_none();
+        (s.facing, s.presets.of(s.facing).map(<[Preset]>::to_vec), first)
+    }) else {
+        return Vec::new();
+    };
+    if let Some(known) = known {
         return known;
     }
     let context = platform.context();
+    if first && let Err(e) = context.log_capabilities() {
+        tracing::warn!("putting the cameras and encoders in the log: {e}");
+    }
     let steps: Vec<Preset> = Preset::ALL
         .into_iter()
         .filter(|preset| {
-            context.can_send(preset.video()).unwrap_or_else(|e| {
-                tracing::warn!(?preset, "asking whether this phone can send it: {e}");
+            context.can_send(facing, preset.video()).unwrap_or_else(|e| {
+                tracing::warn!(?facing, ?preset, "asking whether this phone can send it: {e}");
                 false
             })
         })
         .collect();
-    tracing::info!(?steps, "quality steps this phone can send");
-    with_state(state, |s| s.presets = Some(steps.clone()));
+    tracing::info!(?facing, ?steps, "quality steps this camera can send");
+    with_state(state, |s| *s.presets.slot(facing) = Some(steps.clone()));
     steps
 }
 
@@ -2722,8 +2760,20 @@ fn requalify(state: &Rc<RefCell<State>>, platform: &Platform) {
         return;
     }
     tracing::info!(?before, ?now, "call quality changes over");
+    if step_to(state, now) {
+        with_state(state, |s| {
+            if s.session.is_some() {
+                s.start_camera();
+            }
+        });
+    }
+}
+
+/// Sends at `now` from here on, with rate control starting over. Returns whether a new encoder
+/// took over, which the camera then has to be pointed at.
+fn step_to(state: &Rc<RefCell<State>>, now: Preset) -> bool {
     send_at(state, now);
-    with_state(state, |s| {
+    with_state_value(state, |s| {
         if let Some(audio) = &s.audio {
             audio.set_voice_bps(now.voice_bps());
         }
@@ -2737,15 +2787,56 @@ fn requalify(state: &Rc<RefCell<State>>, platform: &Platform) {
             },
             None => None,
         };
-        // A new network is a new path: what the old one could carry says nothing about it.
+        // A new network is a new path, and a new camera a new set of steps: what the old one
+        // could carry says nothing about it.
         if let Some(stats) = &swapped {
             s.pace_from(now, stats);
         }
-        let swapped = swapped.is_some();
-        if swapped && s.session.is_some() {
-            s.start_camera();
-        }
+        swapped.is_some()
+    })
+    .unwrap_or_default()
+}
+
+/// Turns to the other camera. In a call the picture first moves to what that camera can send.
+/// A camera that will not open hands back to the one that did, and says so: a picture that just
+/// stops reads as the call breaking.
+fn flip_camera(state: &Rc<RefCell<State>>, ui: &slint::Weak<App>, platform: &Platform) {
+    let Some(live) = with_state_value(state, |s| {
+        s.facing = s.facing.flipped();
+        // A call whose camera failed to open still wants one: the tap is how it gets it back.
+        s.session.is_some() || (s.call.is_some() && s.camera_on)
+    }) else {
+        return;
+    };
+    fit_steps(state, platform);
+    if !live || with_state_value(state, State::start_camera).unwrap_or_default() {
+        return;
+    }
+    let facing = with_state_value(state, |s| {
+        s.facing = s.facing.flipped();
+        s.facing
     });
+    tracing::warn!(?facing, "the other camera would not open; back to this one");
+    fit_steps(state, platform);
+    with_state(state, |s| {
+        s.start_camera();
+    });
+    if let Some(ui) = ui.upgrade() {
+        toast(&ui, Say::CameraUnavailable, "");
+    }
+}
+
+/// After a turn to the other camera, mid-call: when it sends other steps than the last one, the
+/// call moves to the one it can send of this network's choice, rate control starting over.
+fn fit_steps(state: &Rc<RefCell<State>>, platform: &Platform) {
+    let Some(Some(before)) = with_state_value(state, |s| s.sending) else { return };
+    let was = with_state_value(state, |s| s.presets.of(s.facing.flipped()).map(<[Preset]>::to_vec)).flatten();
+    let now = preset_now(state, platform);
+    if now == before && was.as_deref() == Some(sendable(state, platform).as_slice()) {
+        return;
+    }
+    tracing::info!(?before, ?now, "the other camera sends other steps");
+    step_to(state, now);
 }
 
 /// The Call quality page and Settings' row: each network's step (what this phone can send of

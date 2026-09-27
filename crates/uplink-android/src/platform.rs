@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 use uplink_core::quality::VideoTarget;
 
 use crate::Error;
+use crate::camera::Facing;
 use crate::codec::Avc;
 
 /// `getHistoricalProcessExitReasons` pid filter: all processes of the package.
@@ -397,19 +398,28 @@ impl AppContext {
         })
     }
 
-    /// Whether this phone can send a call's video like this: the front camera and the encoder
-    /// both manage it.
-    pub fn can_send(&self, video: VideoTarget) -> Result<bool, Error> {
+    /// Whether this phone can send a call's video like this from the camera facing that way: the
+    /// camera and the encoder both manage it.
+    pub fn can_send(&self, facing: Facing, video: VideoTarget) -> Result<bool, Error> {
         const BPS_PER_KBPS: u32 = 1000;
         let int = |value: u32| jint::try_from(value);
         let args = [
+            JValue::Bool(facing == Facing::Front),
             JValue::Int(int(video.width)?),
             JValue::Int(int(video.height)?),
             JValue::Int(int(video.fps)?),
             JValue::Int(int(video.kbps * BPS_PER_KBPS)?),
         ];
         self.with(|env, application| {
-            Ok(env.call_method(application, jni_str!("canSend"), jni_sig!("(IIII)Z"), &args)?.z()?)
+            Ok(env.call_method(application, jni_str!("canSend"), jni_sig!("(ZIIII)Z"), &args)?.z()?)
+        })
+    }
+
+    /// Every camera and H.264 encoder into the log, as Java describes them.
+    pub fn log_capabilities(&self) -> Result<(), Error> {
+        self.with(|env, application| {
+            env.call_method(application, jni_str!("logCapabilities"), jni_sig!("()V"), &[])?;
+            Ok(())
         })
     }
 

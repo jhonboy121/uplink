@@ -1770,9 +1770,14 @@ msgctxt "ToastCard"
 msgid "No code in that image"
 msgstr ""
 
-#: crates/uplink/ui/sheets.slint:434
+#: crates/uplink/ui/sheets.slint:435
 msgctxt "ToastCard"
 msgid "Something went wrong: {}"
+msgstr ""
+
+#: crates/uplink/ui/sheets.slint:434
+msgctxt "ToastCard"
+msgid "That camera would not open. Still using this one"
 msgstr ""
 
 #: crates/uplink/ui/sheets.slint:418

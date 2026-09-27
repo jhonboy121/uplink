@@ -1151,6 +1151,10 @@ msgctxt "ToastCard"
 msgid "{} is not a relay address"
 msgstr "⁨{}⁩ ليس عنوان خادم وسيط"
 
+msgctxt "ToastCard"
+msgid "That camera would not open. Still using this one"
+msgstr "تعذّر فتح تلك الكاميرا. ما زالت هذه الكاميرا قيد الاستخدام"
+
 
 msgctxt "CallPage"
 msgid "Both agreed"

@@ -4,6 +4,9 @@ use crate::camera::Facing;
 pub enum Error {
     #[error("{call} failed: camera_status_t {status}")]
     Camera { call: &'static str, status: i32 },
+    /// Not `source`: the chain would print the camera's own error twice.
+    #[error("{facing:?} camera {id}: {error}")]
+    CameraOpen { facing: Facing, id: String, error: Box<Self> },
     #[error("no {0:?} camera")]
     NoCamera(Facing),
     #[error("{call} failed: EGL error {code:#x}")]

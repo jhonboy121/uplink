@@ -132,16 +132,33 @@ impl Camera {
         cam.id = id.to_string_lossy().into_owned();
         cam.sensor_orientation = orientation;
         let range = [fps; FPS_RANGE_LEN];
-        // SAFETY: every out-pointer is a field of `cam`; `Drop` releases whatever was created
+        // Which camera said no is half of what the log needs: phones have more than one per side.
+        cam.start(&id, windows, range).map_err(|error| Error::CameraOpen {
+            facing,
+            id: cam.id.clone(),
+            error: Box::new(error),
+        })?;
+        Ok(cam)
+    }
+
+    /// Opens the device and repeats a request into every window. On failure `Drop` releases
+    /// whatever was created.
+    fn start(&mut self, id: &CStr, windows: &[&NativeWindow], range: [i32; FPS_RANGE_LEN]) -> Result<(), Error> {
+        // SAFETY: every out-pointer is a field of `self`; `Drop` releases whatever was created
         // if a later step fails.
         unsafe {
             check(
                 "openCamera",
-                ffi::ACameraManager_openCamera(mgr, id.as_ptr(), &raw mut *cam.device_callbacks, &raw mut cam.device),
+                ffi::ACameraManager_openCamera(
+                    self.mgr,
+                    id.as_ptr(),
+                    &raw mut *self.device_callbacks,
+                    &raw mut self.device,
+                ),
             )?;
             check(
                 "ACaptureSessionOutputContainer_create",
-                ffi::ACaptureSessionOutputContainer_create(&raw mut cam.outputs),
+                ffi::ACaptureSessionOutputContainer_create(&raw mut self.outputs),
             )?;
             for window in windows {
                 let mut output = null_mut();
@@ -149,30 +166,30 @@ impl Camera {
                     "ACaptureSessionOutput_create",
                     ffi::ACaptureSessionOutput_create(window.ptr().as_ptr(), &raw mut output),
                 )?;
-                cam.session_outputs.push(output);
+                self.session_outputs.push(output);
                 check(
                     "ACaptureSessionOutputContainer_add",
-                    ffi::ACaptureSessionOutputContainer_add(cam.outputs, output),
+                    ffi::ACaptureSessionOutputContainer_add(self.outputs, output),
                 )?;
             }
             check(
                 "createCaptureSession",
                 ffi::ACameraDevice_createCaptureSession(
-                    cam.device,
-                    cam.outputs,
-                    &raw const *cam.session_callbacks,
-                    &raw mut cam.session,
+                    self.device,
+                    self.outputs,
+                    &raw const *self.session_callbacks,
+                    &raw mut self.session,
                 ),
             )?;
             check(
                 "createCaptureRequest",
                 ffi::ACameraDevice_createCaptureRequest(
-                    cam.device,
-                    match intent {
+                    self.device,
+                    match self.intent {
                         Intent::Preview => ffi::ACameraDevice_request_template::TEMPLATE_PREVIEW,
                         Intent::Record => ffi::ACameraDevice_request_template::TEMPLATE_RECORD,
                     },
-                    &raw mut cam.request,
+                    &raw mut self.request,
                 ),
             )?;
             for window in windows {
@@ -181,13 +198,13 @@ impl Camera {
                     "ACameraOutputTarget_create",
                     ffi::ACameraOutputTarget_create(window.ptr().as_ptr(), &raw mut target),
                 )?;
-                cam.targets.push(target);
-                check("ACaptureRequest_addTarget", ffi::ACaptureRequest_addTarget(cam.request, target))?;
+                self.targets.push(target);
+                check("ACaptureRequest_addTarget", ffi::ACaptureRequest_addTarget(self.request, target))?;
             }
             check(
                 "AE_TARGET_FPS_RANGE",
                 ffi::ACaptureRequest_setEntry_i32(
-                    cam.request,
+                    self.request,
                     ffi::acamera_metadata_tag::ACAMERA_CONTROL_AE_TARGET_FPS_RANGE.0,
                     FPS_RANGE_LEN as u32,
                     range.as_ptr(),
@@ -196,15 +213,15 @@ impl Camera {
             check(
                 "setRepeatingRequest",
                 ffi::ACameraCaptureSession_setRepeatingRequest(
-                    cam.session,
+                    self.session,
                     null_mut(),
                     SINGLE_REQUEST,
-                    &raw mut cam.request,
+                    &raw mut self.request,
                     null_mut(),
                 ),
             )?;
         }
-        Ok(cam)
+        Ok(())
     }
 
     pub fn id(&self) -> &str {

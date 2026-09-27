@@ -21,6 +21,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
+import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
@@ -949,44 +950,158 @@ public class UplinkApplication extends Application {
   private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
   /**
-   * Whether this phone can send a call's video at this size, rate and bitrate: the front camera
-   * (where calls start) outputs that size to an encoder fast enough, and the encoder the app gets
-   * for H.264 takes it. A step that fails either is not offered.
+   * Whether this phone can send a call's video at this size, rate and bitrate from the camera
+   * facing that way: it outputs that size to an encoder fast enough, and the encoder the app gets
+   * for H.264 takes it. A step that fails either is not sent from that camera. Called from Rust.
    */
-  boolean canSend(int width, int height, int fps, int bitrate) {
-    return cameraCanSend(width, height, fps) && encoderCanSend(width, height, fps, bitrate);
+  boolean canSend(boolean front, int width, int height, int fps, int bitrate) {
+    return cameraCanSend(front, width, height, fps) && encoderCanSend(width, height, fps, bitrate);
   }
 
-  private boolean cameraCanSend(int width, int height, int fps) {
+  private boolean cameraCanSend(boolean front, int width, int height, int fps) {
+    StreamConfigurationMap streams = streams(front);
+    if (streams == null) {
+      return false;
+    }
+    Size[] sizes = streams.getOutputSizes(MediaCodec.class);
+    for (Size size : sizes != null ? sizes : new Size[0]) {
+      if (size.getWidth() == width && size.getHeight() == height) {
+        // Stricter than the fps ranges: how often this size can come out at all.
+        long frame = streams.getOutputMinFrameDuration(MediaCodec.class, size);
+        return frame * fps <= NANOS_PER_SECOND;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The phone, every camera and every H.264 codec, as the platform describes them, into the log.
+   * Written before anything can fail rather than after: the one phone that shows a problem is
+   * someone else's, and what it could do is what the log has to say already. Called from Rust.
+   */
+  void logCapabilities() {
+    log(
+        Log.INFO,
+        "device "
+            + Build.MANUFACTURER
+            + " "
+            + Build.MODEL
+            + " ("
+            + Build.DEVICE
+            + "), board "
+            + Build.BOARD
+            + ", hardware "
+            + Build.HARDWARE
+            + ", soc "
+            + Build.SOC_MANUFACTURER
+            + " "
+            + Build.SOC_MODEL
+            + ", build "
+            + Build.DISPLAY);
+    CameraManager cameras = getSystemService(CameraManager.class);
+    try {
+      for (String id : cameras != null ? cameras.getCameraIdList() : new String[0]) {
+        log(Log.INFO, "camera " + id + ": " + describe(cameras.getCameraCharacteristics(id)));
+      }
+    } catch (CameraAccessException | RuntimeException e) {
+      log(Log.WARN, "reading the cameras: " + e);
+    }
+    for (MediaCodecInfo codec : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+      if (Arrays.asList(codec.getSupportedTypes()).contains(AVC)) {
+        log(Log.INFO, (codec.isEncoder() ? "encoder " : "decoder ") + describe(codec));
+      }
+    }
+  }
+
+  private static String describe(CameraCharacteristics camera) {
+    Integer lens = camera.get(CameraCharacteristics.LENS_FACING);
+    StreamConfigurationMap streams =
+        camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+    StringBuilder out = new StringBuilder();
+    out.append("facing ")
+        .append(lens)
+        .append(", level ")
+        .append(camera.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL))
+        .append(", sensor ")
+        .append(camera.get(CameraCharacteristics.SENSOR_ORIENTATION))
+        .append("°")
+        .append(", capabilities ")
+        .append(Arrays.toString(camera.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)))
+        .append(", fps ")
+        .append(
+            Arrays.toString(
+                camera.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)));
+    if (streams == null) {
+      return out.append(", no stream map").toString();
+    }
+    return out.append(", encoder sizes ")
+        .append(Arrays.toString(streams.getOutputSizes(MediaCodec.class)))
+        .append(", private sizes ")
+        .append(Arrays.toString(streams.getOutputSizes(ImageFormat.PRIVATE)))
+        .append(", yuv sizes ")
+        .append(Arrays.toString(streams.getOutputSizes(ImageFormat.YUV_420_888)))
+        .toString();
+  }
+
+  private static String describe(MediaCodecInfo codec) {
+    MediaCodecInfo.CodecCapabilities avc = codec.getCapabilitiesForType(AVC);
+    MediaCodecInfo.VideoCapabilities video = avc.getVideoCapabilities();
+    MediaCodecInfo.EncoderCapabilities encoder = avc.getEncoderCapabilities();
+    StringBuilder out = new StringBuilder(codec.getName());
+    out.append(", hardware ")
+        .append(codec.isHardwareAccelerated())
+        .append(", colors ")
+        .append(Arrays.toString(avc.colorFormats));
+    for (MediaCodecInfo.CodecProfileLevel level : avc.profileLevels) {
+      out.append(", profile ").append(level.profile).append('@').append(level.level);
+    }
+    if (video != null) {
+      out.append(", widths ")
+          .append(video.getSupportedWidths())
+          .append(", heights ")
+          .append(video.getSupportedHeights())
+          .append(", align ")
+          .append(video.getWidthAlignment())
+          .append('x')
+          .append(video.getHeightAlignment())
+          .append(", fps ")
+          .append(video.getSupportedFrameRates())
+          .append(", bitrate ")
+          .append(video.getBitrateRange());
+    }
+    if (encoder != null) {
+      out.append(", cbr ")
+          .append(
+              encoder.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR))
+          .append(", vbr ")
+          .append(
+              encoder.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR))
+          .append(", complexity ")
+          .append(encoder.getComplexityRange());
+    }
+    return out.toString();
+  }
+
+  /** The first camera facing that way, as the native side opens it; null if there is none. */
+  private StreamConfigurationMap streams(boolean front) {
+    int facing =
+        front ? CameraCharacteristics.LENS_FACING_FRONT : CameraCharacteristics.LENS_FACING_BACK;
     CameraManager cameras = getSystemService(CameraManager.class);
     if (cameras == null) {
-      return false;
+      return null;
     }
     try {
       for (String id : cameras.getCameraIdList()) {
         CameraCharacteristics camera = cameras.getCameraCharacteristics(id);
-        Integer facing = camera.get(CameraCharacteristics.LENS_FACING);
-        StreamConfigurationMap streams =
-            camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-        if (facing == null
-            || facing != CameraCharacteristics.LENS_FACING_FRONT
-            || streams == null) {
-          continue;
+        Integer lens = camera.get(CameraCharacteristics.LENS_FACING);
+        if (lens != null && lens == facing) {
+          return camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
         }
-        Size[] sizes = streams.getOutputSizes(MediaCodec.class);
-        for (Size size : sizes != null ? sizes : new Size[0]) {
-          if (size.getWidth() == width && size.getHeight() == height) {
-            // Stricter than the fps ranges: how often this size can come out at all.
-            long frame = streams.getOutputMinFrameDuration(MediaCodec.class, size);
-            return frame * fps <= NANOS_PER_SECOND;
-          }
-        }
-        return false;
       }
     } catch (CameraAccessException | RuntimeException e) {
       log(Log.WARN, "reading the camera's sizes: " + e);
     }
-    return false;
+    return null;
   }
 
   /**
