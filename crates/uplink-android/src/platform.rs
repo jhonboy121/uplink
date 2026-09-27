@@ -989,7 +989,7 @@ impl Platform {
 
     /// H.264 codec constants from the SDK (the NDK headers don't carry them).
     pub fn avc(&self) -> Result<Avc, Error> {
-        self.with_context(|env, _| {
+        self.with_context(|env, application| {
             let mime = env
                 .get_static_field(
                     jni_str!("android/media/MediaFormat"),
@@ -1004,7 +1004,13 @@ impl Platform {
                     jni_sig!("I"),
                 )?
                 .i()?;
-            Ok(Avc { mime: java_string(env, mime)?, surface_color_format })
+            // Negative when the encoder does not have it.
+            let mode = env.call_method(application, jni_str!("encoderConstantBitrate"), jni_sig!("()I"), &[])?.i()?;
+            Ok(Avc {
+                mime: java_string(env, mime)?,
+                surface_color_format,
+                constant_bitrate: (mode >= 0).then_some(mode),
+            })
         })
     }
 

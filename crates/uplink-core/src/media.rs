@@ -116,6 +116,10 @@ pub struct MediaStats {
     /// Media payload each way, video frames and audio packets both: what a call carried, as the
     /// log reports it, without QUIC's own overhead.
     pub bytes_sent: AtomicU64,
+    /// Video our encoder put out, sent or not: what it really makes of the bitrate it is set to.
+    pub bytes_encoded: AtomicU64,
+    /// Frames our encoder put out, sent or not: whether our camera is feeding it at all.
+    pub frames_encoded: AtomicU64,
     /// Not sent: too many frames already in flight.
     pub frames_dropped_congested: AtomicU64,
     /// Sent but reset after missing the deadline.
@@ -207,6 +211,8 @@ impl VideoSender {
     pub fn send(&mut self, frame: Frame) {
         let sequence = self.next_sequence;
         self.next_sequence += 1;
+        MediaStats::count(&self.stats.bytes_encoded, u64::try_from(frame.data.len()).unwrap_or(u64::MAX));
+        MediaStats::count(&self.stats.frames_encoded, 1);
         let Ok(permit) = Arc::clone(&self.in_flight).try_acquire_owned() else {
             MediaStats::count(&self.stats.frames_dropped_congested, 1);
             return;

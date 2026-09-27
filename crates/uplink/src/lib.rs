@@ -186,6 +186,32 @@ struct FrameStats {
     blit_micros: AtomicU64,
 }
 
+/// Seconds without an encoded frame before the other side is told our camera is off, rather than
+/// left looking at the last one.
+const CAMERA_QUIET_SECS: u32 = 2;
+/// The first wait before reopening a camera again, doubling to the most while it keeps failing.
+const CAMERA_RETRY_FIRST: Duration = Duration::from_secs(3);
+const CAMERA_RETRY_MOST: Duration = Duration::from_secs(30);
+
+/// Our camera in a video call, as the watchdog last saw it. A Huawei in the field paused the
+/// camera for as long as the call was in picture-in-picture, whatever the foreground service
+/// said, and once took it away outright; nothing brought it back but turning it off and on.
+#[derive(Default)]
+struct CameraWatch {
+    /// Seconds in a row without a frame.
+    quiet: u32,
+    /// The other side has been told our camera is off while it sends nothing.
+    paused: bool,
+    /// Not reopened again before this.
+    retry_at: Option<Instant>,
+    /// The wait after the next reopen.
+    backoff: Duration,
+    /// In picture-in-picture at the last look: coming back to full screen retries at once.
+    pip: bool,
+    /// The encoder's frame count at the last look.
+    encoded: u64,
+}
+
 /// Field order is drop order: the shown image, then the camera, then the readers it feeds.
 struct Session {
     shown: Option<Image>,
@@ -207,6 +233,7 @@ struct State {
     extra_turns: i32,
     mirror: bool,
     resume_camera: bool,
+    camera_watch: CameraWatch,
     scanning: bool,
     /// One decode at a time; frames that arrive meanwhile are dropped.
     scan_busy: Arc<AtomicBool>,
@@ -450,12 +477,62 @@ impl State {
         self.camera_on
     }
 
+    /// Once a second in a video call: reopens a camera its own callbacks say was taken away or
+    /// failed, and pauses our picture for the other side while no frame goes out. Returns whether
+    /// that pause changed, which they have to be told.
+    ///
+    /// Reopening goes by the callbacks alone; the frames only decide the pause, since a phone
+    /// that stops the camera in picture-in-picture says nothing. They are the encoder's, which
+    /// are what the other side gets: the preview's stop whenever the app is not drawing, while
+    /// the camera goes on feeding the encoder.
+    fn watch_camera(&mut self, pip: bool) -> bool {
+        let Some(call) = self.call.as_ref().filter(|_| self.camera_on && !self.telecom.held) else {
+            return std::mem::take(&mut self.camera_watch).paused;
+        };
+        let encoded = call.stats.frames_encoded.load(Ordering::Relaxed);
+        let now = Instant::now();
+        let watch = &mut self.camera_watch;
+        let frames = encoded.saturating_sub(std::mem::replace(&mut watch.encoded, encoded));
+        if std::mem::replace(&mut watch.pip, pip) && !pip {
+            (watch.retry_at, watch.backoff) = (None, CAMERA_RETRY_FIRST);
+        }
+        if frames > 0 {
+            (watch.quiet, watch.retry_at, watch.backoff) = (0, None, CAMERA_RETRY_FIRST);
+        } else {
+            watch.quiet = watch.quiet.saturating_add(1);
+        }
+        let error = self.session.as_ref().and_then(|session| session.camera.error());
+        // A reopen that failed leaves no camera to call back, so it is tried again.
+        let reopen_failed = self.session.is_none() && watch.retry_at.is_some();
+        if (error.is_some() || reopen_failed) && watch.retry_at.is_none_or(|at| now >= at) {
+            let wait = watch.backoff.max(CAMERA_RETRY_FIRST);
+            (watch.retry_at, watch.backoff) = (Some(now + wait), (wait * 2).min(CAMERA_RETRY_MOST));
+            tracing::warn!(error, reopen_failed, pip, "camera lost mid-call; reopening");
+            self.start_camera();
+            if let Some(call) = &self.call {
+                call.request_keyframe();
+            }
+        }
+        let watch = &mut self.camera_watch;
+        let paused = watch.quiet >= CAMERA_QUIET_SECS;
+        if paused == watch.paused {
+            return false;
+        }
+        watch.paused = paused;
+        tracing::info!(paused, pip, "our camera's picture");
+        // Back: the other side's decoder starts again from a whole picture.
+        if !paused && let Some(call) = &self.call {
+            call.request_keyframe();
+        }
+        true
+    }
+
     /// What the other side is told about our mic, our camera and our hold.
     fn media_state(&self) -> MediaState {
         let mic_off = self.audio.as_ref().is_some_and(CallAudio::muted);
         MediaState {
             mic_off,
-            camera_off: !self.camera_on,
+            camera_off: !self.camera_on || self.camera_watch.paused,
             held: self.telecom.held,
             capture_asked: self.capture.ask,
             capture_blocked: self.capture.secure(),
@@ -552,6 +629,7 @@ impl State {
             return;
         }
         let camera_was_running = self.session.take().is_some();
+        self.camera_watch = CameraWatch::default();
         self.audio = None;
         self.call = None;
         self.parked = None;
@@ -1183,8 +1261,8 @@ impl Drop for PanicHook {
     }
 }
 
-fn stats_text(state: &State, secs: f64, cpu_percent: Option<f64>) -> String {
-    let camera_fps = f64::from(state.stats.camera.swap(0, Ordering::Relaxed)) / secs;
+fn stats_text(state: &State, camera_frames: u32, secs: f64, cpu_percent: Option<f64>) -> String {
+    let camera_fps = f64::from(camera_frames) / secs;
     let blits = state.stats.blits.swap(0, Ordering::Relaxed);
     let micros = state.stats.blit_micros.swap(0, Ordering::Relaxed);
     let blit_fps = f64::from(blits) / secs;
@@ -1289,6 +1367,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         extra_turns: 0,
         mirror: false,
         resume_camera: false,
+        camera_watch: CameraWatch::default(),
         scanning: false,
         scan_busy: Arc::default(),
         contacts,
@@ -2110,15 +2189,18 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         let cpu_percent = last.1.zip(now.1).map(|(before, after)| (after - before) / secs * PERCENT);
         last = now;
         ticks += 1;
-        with_state(&s, |state| {
+        let pip = window.upgrade().is_some_and(|ui| ui.get_call_pip());
+        let camera_paused = with_state_value(&s, |state| {
             state.recover_audio();
+            let camera_frames = state.stats.camera.swap(0, Ordering::Relaxed);
+            let camera_paused = state.watch_camera(pip);
             // A codec that dies mid-call takes the picture with it and says nothing otherwise.
             if state.call.as_ref().is_some_and(|call| !call.codecs_running()) {
                 state.video_failed();
             }
             // Counted every second, written every few: the log is read by whoever is fixing a
             // call that has already happened, and a line a second would bury it.
-            let text = stats_text(state, secs, cpu_percent);
+            let text = stats_text(state, camera_frames, secs, cpu_percent);
             // Only while there is something to measure: idle, it was a line every five seconds
             // saying nothing, all day, into a log that rolls by size.
             let busy = state.call.is_some() || state.session.is_some();
@@ -2153,7 +2235,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 ui.set_call_weak(view::weak(weak));
                 ui.set_call_capture(state.capture.shown(state.connected_at.map(|at| at.elapsed())));
             }
+            camera_paused
         });
+        if camera_paused == Some(true) {
+            tell_media(&s, &window);
+        }
         // A call starting, ending, turning video or going on hold: within the second.
         if let Some(ui) = window.upgrade() {
             sync_chrome(&s, &ui, &p);

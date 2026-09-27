@@ -32,6 +32,8 @@ pub struct Avc {
     pub mime: String,
     /// `MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface`.
     pub surface_color_format: i32,
+    /// `EncoderCapabilities.BITRATE_MODE_CBR`, when the encoder we get says it supports it.
+    pub constant_bitrate: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,22 +144,46 @@ pub struct Encoder {
 }
 
 impl Encoder {
+    /// A call's encoder: at the bitrate it is given each second rather than on average
+    /// (constant bitrate, where the encoder has it), and at no more frames than the step's rate
+    /// whatever the camera sends. Left to its default, a HiSilicon encoder set to 150 kbps at
+    /// 15 fps sent 1.4 Mbps at 21. Both are asked for, not assumed: an encoder that refuses the
+    /// format for carrying them is retried without, on a new codec, as a refused decoder is.
     pub fn new(avc: &Avc, video: VideoConfig) -> Result<(Self, Events), Error> {
+        match Self::configured(avc, video, true) {
+            Ok(encoder) => Ok(encoder),
+            Err(e) => {
+                tracing::warn!("encoder refused constant bitrate or a frame cap ({e}); retrying without");
+                Self::configured(avc, video, false)
+            }
+        }
+    }
+
+    fn configured(avc: &Avc, video: VideoConfig, strict: bool) -> Result<(Self, Events), Error> {
         let (codec, events) = Codec::new(MediaCodec::from_encoder_type(&avc.mime))?;
         let mut format = base_format(avc, video.width, video.height)?;
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_COLOR_FORMAT)?, avc.surface_color_format);
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_BIT_RATE)?, video.bitrate);
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_FRAME_RATE)?, video.fps);
         format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL)?, video.keyframe_interval_secs);
+        let constant_bitrate = avc.constant_bitrate.filter(|_| strict);
+        if let Some(mode) = constant_bitrate {
+            format.set_i32(ndk_key!(AMEDIAFORMAT_KEY_BITRATE_MODE)?, mode);
+        }
+        if strict {
+            // Surface input only, which ours is: frames over the rate are dropped before encoding.
+            let most_fps = f32::from(i16::try_from(video.fps).unwrap_or(i16::MAX));
+            format.set_f32(ndk_key!(AMEDIAFORMAT_KEY_MAX_FPS_TO_ENCODER)?, most_fps);
+        }
         let name = codec.name();
         codec
             .0
             .configure(&format, None, MediaCodecDirection::Encoder)
-            .inspect_err(|e| tracing::warn!(name, ?video, "configuring the encoder: {e}"))
+            .inspect_err(|e| tracing::warn!(name, ?video, strict, "configuring the encoder: {e}"))
             .at("AMediaCodec_configure (encoder)")?;
         let window = codec.0.create_input_surface().at("AMediaCodec_createInputSurface")?;
         codec.0.start().at("AMediaCodec_start (encoder)")?;
-        tracing::info!(name, ?video, "encoder started");
+        tracing::info!(name, ?video, constant_bitrate = constant_bitrate.is_some(), capped = strict, "encoder started");
         Ok((Self { codec, window, config: Vec::new() }, events))
     }
 

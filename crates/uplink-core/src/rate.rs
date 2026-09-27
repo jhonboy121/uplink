@@ -9,6 +9,12 @@
 //! step's size and frame rate: a smaller picture at the same bitrate looks better than a starved
 //! big one. It steps back up once the bitrate has had room for a while, and waits longer after
 //! a step up that did not hold.
+//!
+//! Three things keep it from climbing into the same wall again, after WebRTC's congestion
+//! control: growth never runs past half again what actually went out, so a step that holds the
+//! encoder back cannot grow a target nothing tested; the rate each cut came at is remembered,
+//! and approached slowly; and a step whose encoder puts out more than it is set to (a HiSilicon
+//! one would not go under 2.5 Mbps at 720p) is judged on what it really sends.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,8 +53,27 @@ const UP_AFTER: u32 = 5;
 const UP_AFTER_MOST: u32 = 40;
 /// Room for the step above: this much over the current step's own bitrate.
 const UP_MARGIN_PERCENT: u32 = 125;
-/// A step up that falls back within this many samples did not hold.
-const PROBATION: u32 = DOWN_AFTER + UP_AFTER;
+/// A step up that falls back within this many samples did not hold: a home router's queue took
+/// twenty to fifty seconds to show one that did not.
+const PROBATION: u32 = 60;
+/// Growth stops at this share of what went out, plus a little so a small rate can still grow.
+const CEILING_PERCENT: u32 = 150;
+const CEILING_KBPS: u32 = 10;
+/// Within this band around the rate the last cuts came at, growth is this share of it a second
+/// instead of [`GROWTH_PERCENT`]; past the top of it the path has more room than it had, and
+/// the memory goes.
+const NEAR_BELOW_PERCENT: u32 = 90;
+const NEAR_ABOVE_PERCENT: u32 = 110;
+const NEAR_GROWTH_PERCENT: u32 = 3;
+/// The encoder putting out this much over what it is set to, on this many clean samples in a
+/// row, is sending what it will, not what it is told: that step's real cost. One sample is not
+/// enough: a keyframe (after every step, and whenever the peer asks under loss) is a burst that
+/// read as 700 kbps at a 187 kbps setting under netem.
+const OVERSHOOT_PERCENT: u32 = 130;
+const OVERSHOOT_SAMPLES: u32 = 5;
+/// Samples a step's learned floor is trusted before it is tried again: the path may carry it
+/// now, and nothing but trying can say. A try that fails is a step up that did not hold.
+const FLOOR_KEPT: u64 = 120;
 
 /// The call's counters at one moment.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +82,8 @@ pub struct Reading {
     /// Frames of ours that could not go: dropped before sending, or reset late.
     stuck: u64,
     bytes_sent: u64,
+    /// What our encoder put out, sent or not.
+    bytes_encoded: u64,
     lost_packets: u64,
     datagrams_sent: u64,
     /// Gauges, not counters: read as they are.
@@ -71,6 +98,7 @@ impl Reading {
             at,
             stuck: get(&stats.frames_dropped_congested) + get(&stats.frames_late),
             bytes_sent: get(&stats.bytes_sent),
+            bytes_encoded: get(&stats.bytes_encoded),
             lost_packets: get(&stats.lost_packets),
             datagrams_sent: get(&stats.datagrams_sent),
             rtt_ms: get(&stats.rtt_ms),
@@ -121,6 +149,13 @@ const fn room_above(step: Preset) -> u32 {
     step.video().kbps * UP_MARGIN_PERCENT / PERCENT
 }
 
+/// kbit/s between two byte counts `millis` apart.
+fn kbps_between(before: u64, now: u64, millis: u64) -> u32 {
+    // Bits per millisecond is kbit/s.
+    let kbps = now.saturating_sub(before).saturating_mul(u64::from(u8::BITS)) / millis;
+    u32::try_from(kbps).unwrap_or(u32::MAX)
+}
+
 pub struct Rate {
     /// The steps this call may send at, lowest first: what the phone can send, up to the cap.
     steps: Vec<Preset>,
@@ -130,6 +165,16 @@ pub struct Rate {
     most_kbps: u32,
     last: Option<Reading>,
     best: Best,
+    /// The rate the path's recent cuts came at, while it still describes the path.
+    capacity: Option<u32>,
+    /// What each of `steps` really sends at the least, once its encoder has shown it will not
+    /// go under, and the sample that last showed it.
+    floors: Vec<Option<(u32, u64)>>,
+    /// Samples taken, as a clock for `floors`.
+    samples: u64,
+    /// Clean samples in a row with the encoder well over its setting, and the least it sent.
+    over: u32,
+    over_least: u32,
     hold: u32,
     below: u32,
     above: u32,
@@ -147,6 +192,7 @@ impl Rate {
         }
         steps.sort_unstable();
         let most_kbps = cap.video().kbps;
+        let floors = vec![None; steps.len()];
         Self {
             steps,
             step: cap,
@@ -154,6 +200,11 @@ impl Rate {
             most_kbps,
             last: None,
             best: Best::default(),
+            capacity: None,
+            floors,
+            samples: 0,
+            over: 0,
+            over_least: 0,
             hold: 0,
             below: 0,
             above: 0,
@@ -176,11 +227,13 @@ impl Rate {
     pub fn pause(&mut self) {
         self.last = None;
         self.best = Best::default();
+        self.capacity = None;
     }
 
     /// Takes the call's counters once a second and says what the encoder should change.
     pub fn sample(&mut self, now: Reading) -> Change {
         let Some(before) = self.last.replace(now) else { return Change::None };
+        self.samples += 1;
         let (kbps_before, step_before) = (self.kbps(), self.step);
         self.judge(&before, &now);
         self.move_step();
@@ -196,28 +249,96 @@ impl Rate {
 
     /// Cuts, holds or grows the target.
     fn judge(&mut self, before: &Reading, now: &Reading) {
+        let millis = u64::try_from(now.at.duration_since(before.at).as_millis()).unwrap_or(u64::MAX).max(1);
+        let through = kbps_between(before.bytes_sent, now.bytes_sent, millis);
+        let encoded = kbps_between(before.bytes_encoded, now.bytes_encoded, millis);
+        // A cut on one path says nothing about the next.
+        if now.route != before.route {
+            self.capacity = None;
+        }
         let queued = self.best.queued(now.route, now.rtt_ms);
         if self.hold > 0 {
             self.hold -= 1;
+            self.over = 0;
             return;
         }
         let stuck = now.stuck > before.stuck;
         let lost = now.lost_packets.saturating_sub(before.lost_packets);
         let sent = now.datagrams_sent.saturating_sub(before.datagrams_sent);
         let lossy = sent > 0 && lost * u64::from(PERCENT) >= sent * LOSS_PERCENT;
-        if stuck || queued || lossy {
-            let millis = u64::try_from(now.at.duration_since(before.at).as_millis()).unwrap_or(u64::MAX).max(1);
-            // Bits per millisecond is kbit/s.
-            let through = now.bytes_sent.saturating_sub(before.bytes_sent).saturating_mul(u64::from(u8::BITS)) / millis;
-            let through = u32::try_from(through).unwrap_or(u32::MAX);
+        let failing = stuck || queued || lossy;
+        self.learn_floor(encoded, !failing);
+        if failing {
             let (least, most) =
                 (self.target_kbps * MOST_CUT_PERCENT / PERCENT, self.target_kbps * CUT_TO_PERCENT / PERCENT);
             let cut = (through / PERCENT * CUT_TO_PERCENT).clamp(least, most);
-            tracing::info!(stuck, queued, lossy, rtt_ms = now.rtt_ms, through, kbps = cut, "video bitrate cut");
+            self.capacity = Some(self.capacity.map_or(through, |capacity| capacity.midpoint(through)));
             self.target_kbps = cut.max(FLOOR_KBPS);
+            tracing::info!(
+                stuck,
+                queued,
+                lossy,
+                rtt_ms = now.rtt_ms,
+                through,
+                kbps = self.target_kbps,
+                capacity = self.capacity,
+                "video bitrate cut"
+            );
             self.hold = HOLD_SAMPLES;
         } else {
-            self.target_kbps = (self.target_kbps * GROWTH_PERCENT / PERCENT).min(self.most_kbps);
+            self.target_kbps = self.grown(through);
+        }
+    }
+
+    /// The target after a clean sample: fast far from the rate the path last failed at, slow
+    /// near it, and never past half again what actually went out.
+    fn grown(&mut self, through: u32) -> u32 {
+        let target = self.target_kbps;
+        let ceiling = through.saturating_mul(CEILING_PERCENT) / PERCENT + CEILING_KBPS;
+        let fast = target.saturating_mul(GROWTH_PERCENT) / PERCENT;
+        let next = match self.capacity {
+            Some(capacity) if target.saturating_mul(PERCENT) > capacity.saturating_mul(NEAR_ABOVE_PERCENT) => {
+                // Clean well past it: the path has more room than it had.
+                self.capacity = None;
+                fast
+            }
+            Some(capacity) if target.saturating_mul(PERCENT) >= capacity.saturating_mul(NEAR_BELOW_PERCENT) => {
+                target + (capacity * NEAR_GROWTH_PERCENT / PERCENT).max(1)
+            }
+            _ => fast,
+        };
+        next.min(ceiling.max(target)).min(self.most_kbps)
+    }
+
+    /// Notes what this step's encoder really sends, once it has sent well over what it is set to
+    /// for [`OVERSHOOT_SAMPLES`] clean samples in a row.
+    fn learn_floor(&mut self, encoded: u32, clean: bool) {
+        let set = self.kbps();
+        if !clean || encoded.saturating_mul(PERCENT) <= set.saturating_mul(OVERSHOOT_PERCENT) {
+            self.over = 0;
+            return;
+        }
+        self.over_least = if self.over == 0 { encoded } else { self.over_least.min(encoded) };
+        self.over += 1;
+        if self.over < OVERSHOOT_SAMPLES {
+            return;
+        }
+        let at = self.steps.iter().position(|step| *step == self.step).unwrap_or_default();
+        let known = self.floor(at);
+        let learned = if known == 0 { self.over_least } else { known.min(self.over_least) };
+        if learned != known {
+            tracing::info!(step = ?self.step, set, sends = learned, "encoder sends over its bitrate");
+        }
+        if let Some(floor) = self.floors.get_mut(at) {
+            *floor = Some((learned, self.samples));
+        }
+    }
+
+    /// What the step at position `at` has lately shown it sends at the least; zero otherwise.
+    fn floor(&self, at: usize) -> u32 {
+        match self.floors.get(at).copied().flatten() {
+            Some((kbps, seen)) if self.samples.saturating_sub(seen) <= FLOOR_KEPT => kbps,
+            _ => 0,
         }
     }
 
@@ -232,8 +353,11 @@ impl Rate {
             // It held: the next step up waits no longer than the first.
             (self.since_up, self.up_after) = (None, UP_AFTER);
         }
-        let starved = lower.is_some_and(|lower| self.target_kbps < lower.video().kbps);
-        let roomy = higher.is_some() && self.target_kbps >= room_above(self.step);
+        // Starved: under what the step below needs, or under what this one really sends.
+        let starved =
+            lower.is_some_and(|lower| self.target_kbps < lower.video().kbps || self.target_kbps < self.floor(at));
+        let roomy =
+            higher.is_some() && self.target_kbps >= room_above(self.step) && self.target_kbps >= self.floor(at + 1);
         (self.below, self.above) = (if starved { self.below + 1 } else { 0 }, if roomy { self.above + 1 } else { 0 });
         let next = if self.below >= DOWN_AFTER {
             if self.since_up.is_some() {
@@ -250,19 +374,21 @@ impl Rate {
                 above
                     .iter()
                     .copied()
-                    .take_while(|step| {
-                        let room = self.target_kbps >= room_above(below);
-                        below = *step;
+                    .zip(at + 1..)
+                    .take_while(|&(step, index)| {
+                        let room = self.target_kbps >= room_above(below) && self.target_kbps >= self.floor(index);
+                        below = step;
                         room
                     })
                     .last()
+                    .map(|(step, _)| step)
             })
         } else {
             None
         };
         if let Some(next) = next {
             self.step = next;
-            (self.below, self.above) = (0, 0);
+            (self.below, self.above, self.over) = (0, 0, 0);
             // A new encoder and the camera reopened onto it: frames stall a moment either way.
             self.hold = HOLD_SAMPLES;
         }
@@ -290,6 +416,7 @@ mod tests {
                 at,
                 stuck: 0,
                 bytes_sent: 0,
+                bytes_encoded: 0,
                 lost_packets: 0,
                 datagrams_sent: 0,
                 rtt_ms,
@@ -303,6 +430,8 @@ mod tests {
             self.at += SECOND;
             self.reading.at = self.at;
             self.reading.bytes_sent += u64::from(kbps) * 1000 / u64::from(u8::BITS);
+            // The encoder puts out what it is set to; a test that says otherwise changes this.
+            self.reading.bytes_encoded += u64::from(rate.kbps()) * 1000 / u64::from(u8::BITS);
             self.reading.datagrams_sent += 100;
             change(&mut self.reading);
             rate.sample(self.reading)
@@ -393,11 +522,12 @@ mod tests {
         assert_eq!(rate.kbps(), Preset::High.video().kbps);
     }
 
-    /// The path from the netem squeeze test: starved to the floor, then clean again. A step at a
-    /// time behind 10 s waits took more than a minute to get the picture back.
+    /// The path from the netem squeeze test: starved to the floor, then clean again. Growth never
+    /// runs past half again what went out, so no step is skipped on a rate nothing tested; each
+    /// waits its [`UP_AFTER`] and the new encoder's hold. Under half a minute when it could skip.
     #[test]
-    fn back_from_the_floor_in_under_half_a_minute_skipping_steps() {
-        const BACK_WITHIN: u32 = 30;
+    fn back_from_the_floor_a_step_at_a_time_within_three_quarters_of_a_minute() {
+        const BACK_WITHIN: u32 = 45;
         let (mut rate, mut path) = started(Preset::Highest, 30);
         path.narrow(&mut rate, 0, 60);
         assert_eq!(rate.step(), Preset::Lowest);
@@ -410,7 +540,7 @@ mod tests {
             waited += 1;
             assert!(waited <= BACK_WITHIN, "still at {:?} after {waited} s ({steps:?})", rate.step());
         }
-        assert!(steps.len() < Preset::ALL.len() - 1, "one step at a time: {steps:?}");
+        assert_eq!(steps, [Preset::Low, Preset::Balanced, Preset::High, Preset::Highest]);
     }
 
     #[test]
@@ -443,5 +573,93 @@ mod tests {
         rate.sample(path.reading);
         path.narrow(&mut rate, 700, 30);
         assert_eq!(rate.step(), Preset::Low, "no 720p on this phone: 1080p to 540p");
+    }
+
+    /// The field log's cycle: a lower step holds the encoder back, the target must not grow past
+    /// half again what went out, so it cannot step up on a rate nothing tested.
+    #[test]
+    fn a_held_back_step_does_not_grow_a_target_nothing_tested() {
+        let (mut rate, mut path) = started(Preset::High, 30);
+        path.narrow(&mut rate, 1200, 30);
+        assert_eq!(rate.step(), Preset::Balanced);
+        // Clean again, but the step holds the encoder at its own bitrate.
+        path.clean(&mut rate, 3);
+        let sent = rate.kbps();
+        assert!(
+            rate.target_kbps <= sent * CEILING_PERCENT / PERCENT + CEILING_KBPS,
+            "target {} over {sent}",
+            rate.target_kbps
+        );
+    }
+
+    /// After a cut the path's rate is remembered: growth near it is a few percent a second, not a
+    /// fifth, so it creeps back to where it failed rather than leaping past it.
+    #[test]
+    fn growth_is_slow_near_where_the_path_last_failed() {
+        let (mut rate, mut path) = started(Preset::High, 30);
+        let _ = path.second(&mut rate, 3000, |r| r.stuck += 1);
+        path.clean(&mut rate, HOLD_SAMPLES + 1);
+        let capacity = rate.capacity.unwrap_or_default();
+        assert_eq!(capacity, 3000);
+        // Into the band around it, then a second of growth inside it.
+        while rate.target_kbps * PERCENT < capacity * NEAR_BELOW_PERCENT {
+            path.clean(&mut rate, 1);
+        }
+        let before = rate.target_kbps;
+        path.clean(&mut rate, 1);
+        assert!(
+            rate.target_kbps - before <= capacity * NEAR_GROWTH_PERCENT / PERCENT,
+            "{before} → {}",
+            rate.target_kbps
+        );
+    }
+
+    /// A HiSilicon encoder at 720p would not go under about 2.5 Mbps whatever it was set to. Once
+    /// seen, 720p costs that: a target under it steps down, and cannot step back up until the
+    /// floor is old enough to be worth trying again.
+    #[test]
+    fn a_step_is_judged_on_what_its_encoder_really_sends() {
+        const SENDS: u32 = 2500;
+        let balanced = Preset::ALL.iter().position(|step| *step == Preset::Balanced).unwrap_or_default();
+        let (mut rate, mut path) = started(Preset::Balanced, 30);
+        let _ = path.second(&mut rate, 1500, |r| r.stuck += 1);
+        // The encoder puts out SENDS a second, whatever it is set to.
+        let changes: Vec<Change> = (0..HOLD_SAMPLES + OVERSHOOT_SAMPLES + DOWN_AFTER + 1)
+            .map(|_| {
+                let set = rate.kbps();
+                let extra = u64::from(SENDS.saturating_sub(set)) * 1000 / u64::from(u8::BITS);
+                path.second(&mut rate, set, |r| r.bytes_encoded += extra)
+            })
+            .collect();
+        assert_eq!(rate.floor(balanced), SENDS);
+        assert!(changes.iter().any(|change| matches!(change, Change::Step(Preset::Low, _))), "{changes:?}");
+        // Clean from here, with an honest encoder at 540p: not back to 720p while the floor holds.
+        path.clean(&mut rate, 60);
+        assert_eq!(rate.step(), Preset::Low);
+        // Old enough to try again.
+        let mut waited = 0;
+        while rate.step() == Preset::Low {
+            path.clean(&mut rate, 1);
+            waited += 1;
+            assert!(waited <= u32::try_from(FLOOR_KEPT).unwrap_or(u32::MAX), "never tried 720p again");
+        }
+    }
+
+    /// Netem, 2026-09-27: under a squeeze, the keyframes after each step and the peer's asks
+    /// read as the encoder sending 700 kbps at a 187 kbps setting. Learned as Low's floor, that
+    /// kept the picture at the lowest step for the rest of the call once the path was clean.
+    #[test]
+    fn keyframe_bursts_on_a_failing_path_teach_no_floor() {
+        let (mut rate, mut path) = started(Preset::High, 30);
+        for _ in 0..30 {
+            let set = rate.kbps();
+            let burst = u64::from(set * 3) * 1000 / u64::from(u8::BITS);
+            let _ = path
+                .second(&mut rate, set / 4, |r| (r.stuck, r.bytes_encoded) = (r.stuck + 1, r.bytes_encoded + burst));
+        }
+        assert_eq!(rate.step(), Preset::Lowest);
+        assert!(rate.floors.iter().all(Option::is_none), "{:?}", rate.floors);
+        path.clean(&mut rate, 45);
+        assert_eq!(rate.step(), Preset::High, "back once clean");
     }
 }

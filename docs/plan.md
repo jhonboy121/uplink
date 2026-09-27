@@ -1314,3 +1314,43 @@ default); keep disk usage lean. Avoid build scripts.
   Only this phone / Both phones; shell mockup "Screenshots, as one choice"). Saved as the same two
   flags; an old ask-without-block opens as Both phones. In a call the chip says whose phone is
   blocked and who asked ("Screenshots blocked by Noor"), so a black screenshot has a reason.
+- **2026-09-26**: **A camera watchdog in video calls.** A Huawei stopped delivering camera frames
+  for as long as the call was in picture-in-picture (the call service declares the camera type, as
+  Android asks; the S24 keeps streaming), and once disconnected the camera outright (`onDisconnected`,
+  logged as error -1), which nothing reopened until the camera was turned off and on. Once a second
+  now: a camera that errored, is missing, or has sent nothing for 5 s on screen is reopened with a
+  keyframe (3 s backoff doubling to 30 s, cleared on leaving picture-in-picture); and after 2 s
+  without frames the other side is told our camera is off, so they see that instead of a frozen
+  face, and on when frames return. Another calling app shows the same freeze on that phone, so it is Huawei's
+  policy, not something a flag fixes.
+- **2026-09-26**: **Rate control, after WebRTC's, and the encoder held to its word.** Calls
+  cycled: stepped up to 1080p about 12 s after a cut, the home router's queue showed it 20–50 s
+  later, cut, repeat (68 encoder swaps in one log). Compared against WebRTC's congestion control
+  (goog_cc AIMD, link-capacity estimate, probing) and its Android encoder:
+  - **Growth never runs past 1.5× what went out** (+10 kbps), as GCC caps its increase by acked
+    throughput. The target used to grow 20%/s while a lower step held the encoder back, so it
+    stepped up on a rate nothing had tested, several steps at once.
+  - **The rate each cut came at is remembered** (averaged cut to cut): within ±10% of it growth is
+    3% of it a second, not 20%; clean past it, the memory goes; a new route forgets it.
+  - **A step is judged on what its encoder really sends**: `bytes_encoded` (counted at the sender,
+    before any congestion drop) over 1.3× the setting is that step's floor. Under its floor a step
+    steps down; a step up needs the target to cover the next step's floor. A floor is trusted for
+    two minutes, then the step is tried again (a try that fails doubles the wait, as before).
+  - **Probation is a minute** (was 10 samples): the failures came 20–50 s after a step up.
+  - **Encoder**: constant bitrate where `isBitrateModeSupported` says so, and `max-fps-to-encoder`
+    at the step's rate (surface input drops the camera's extra frames); an encoder refusing either
+    is retried without, on a new codec. The HiSilicon set to 150 kbps at 15 fps sent 1.4 Mbps at 21.
+  - Cost: back from the floor to the top is now ~40 s a step at a time (was under 30, skipping
+    steps). Not done: probing with padding, scaling frames instead of reopening the camera on a
+    step, and BBRv3 in place of Cubic (iroh's `congestion_controller_factory`).
+  - **Netem, 2026-09-27 (CLI ↔ S24), and two fixes it forced.** The squeeze stepped Highest →
+    Lowest in ~20 s, as it should; once shaping came off it stayed at Lowest for the 40 s left of
+    the call. Under congestion the keyframes after each step (and the peer's asks) read as the
+    encoder sending 721 kbps at a 187 kbps setting; learned as Low's floor, that blocked the step
+    up. A floor is now learned only from five clean samples in a row, never inside a hold.
+    The camera watchdog counted preview frames, which stop whenever the app is not drawing
+    (screen off, home) while the camera goes on feeding the encoder: it reopened a working camera
+    every 6 s and told the peer ours was off. Reopening now goes by the camera's own callbacks
+    alone (`onDisconnected`/`onError`), the only failure seen in the field; the frame count only
+    decides telling the peer our picture paused, and counts the encoder's frames
+    (`frames_encoded`), which are what the peer gets.

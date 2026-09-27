@@ -73,6 +73,10 @@ import java.util.Set;
  */
 public class UplinkApplication extends Application {
   private static final String TAG = "uplink";
+
+  /** What {@link #encoderConstantBitrate} answers for an encoder without it. */
+  private static final int NO_MODE = -1;
+
   private static final String RING_CHANNEL = "ring";
   private static final int RING_NOTIFICATION_ID = 3;
   private static final String MISSED_CHANNEL = "missed";
@@ -983,6 +987,25 @@ public class UplinkApplication extends Application {
       log(Log.WARN, "reading the camera's sizes: " + e);
     }
     return false;
+  }
+
+  /**
+   * {@code BITRATE_MODE_CBR} when the H.264 encoder we get supports it, else {@link #NO_MODE}: a
+   * call wants the bitrate it asks for every second, not on average over a scene. Called from Rust.
+   */
+  int encoderConstantBitrate() {
+    int constant = MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR;
+    for (MediaCodecInfo codec : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+      if (!codec.isEncoder() || !Arrays.asList(codec.getSupportedTypes()).contains(AVC)) {
+        continue;
+      }
+      MediaCodecInfo.EncoderCapabilities encoder =
+          codec.getCapabilitiesForType(AVC).getEncoderCapabilities();
+      boolean supported = encoder != null && encoder.isBitrateModeSupported(constant);
+      log(Log.INFO, "encoder " + codec.getName() + ", constant bitrate " + supported);
+      return supported ? constant : NO_MODE;
+    }
+    return NO_MODE;
   }
 
   /** The first H.264 encoder in the list: the one `AMediaCodec_createEncoderByType` gives us. */
