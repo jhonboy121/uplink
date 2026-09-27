@@ -1898,11 +1898,8 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     // the notification can be waiting already, and the call it connects has to find this window
     // attached, since that is where its media goes.
     let events = core.attach();
-    let (s, weak, p, c) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform), Arc::clone(&core));
-    spawn_ui(async move {
-        handle_node_events(events, weak, s, p).await;
-        c.detach();
-    });
+    let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
+    spawn_ui(handle_node_events(events, weak, s, p));
 
     let (s, weak, p) = (Rc::clone(&state), ui.as_weak(), Rc::clone(&platform));
     ui.on_call(move |key, voice| match peer_key(&key, &identity) {
@@ -2325,6 +2322,9 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
 
     let outcome = ui.run();
+    // Here, not at the end of the event task: with the loop gone that task is never polled again,
+    // and a window left attached stops the endpoint once its queue fills.
+    core.detach();
     if let Err(e) = platform.set_call_service(false, "", false) {
         tracing::warn!("stopping call service: {e}");
     }

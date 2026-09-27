@@ -338,7 +338,6 @@ async fn deliver(
         {
             ringer.missed(&record.peer).await;
         }
-        // Cloned out rather than held: the lock must not span the await below.
         let window = {
             let mut inbox = inbox.lock();
             match &event {
@@ -354,10 +353,17 @@ async fn deliver(
             unattended(&event);
             continue;
         };
-        if let Err(closed) = window.send(event).await {
-            // The window went without saying so. Whatever it was, nobody saw it.
-            inbox.lock().window.take();
-            unattended(&closed.0);
+        // Never awaited: a window that stops reading must not stall the endpoint behind it.
+        match window.try_send(event) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(event)) => {
+                tracing::error!(?event, "window not reading its events, dropped");
+            }
+            Err(mpsc::error::TrySendError::Closed(event)) => {
+                // The window went without saying so. Whatever it was, nobody saw it.
+                inbox.lock().window.take();
+                unattended(&event);
+            }
         }
     }
     tracing::info!("endpoint stopped speaking");
