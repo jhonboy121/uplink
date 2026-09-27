@@ -3,13 +3,11 @@
 //! clock: a lost packet is rebuilt from the next packet's FEC data, else concealed by Opus.
 
 use std::collections::BTreeMap;
-use std::ffi::{CStr, c_int};
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::endpoint::Connection;
-use opus_sys as ffi;
+use opusorus::{Application, Bitrate};
 use tokio::sync::mpsc;
 
 use crate::media::{Link, MediaStats};
@@ -38,92 +36,47 @@ const MAX_BUFFERED_FRAMES: usize = 10;
 /// After this much consecutive concealment (200 ms) playout stops and re-buffers.
 const MAX_CONCEALED_RUN: u32 = 10;
 
-fn check(code: c_int) -> Result<c_int, Error> {
-    if code >= 0 {
-        return Ok(code);
-    }
-    // SAFETY: opus_strerror returns a static string for any code.
-    let message = unsafe { CStr::from_ptr(ffi::opus_strerror(code)) };
-    Err(Error::Opus(message.to_string_lossy().into_owned()))
+fn opus(e: opusorus::Error) -> Error {
+    Error::Opus(e.to_string())
 }
 
 #[derive(Debug)]
-struct Encoder(NonNull<ffi::OpusEncoder>);
-
-// SAFETY: the encoder state is plain heap memory with no thread affinity; it is used through
-// `&mut self` only.
-unsafe impl Send for Encoder {}
+struct Encoder(opusorus::Encoder);
 
 impl Encoder {
     fn new() -> Result<Self, Error> {
-        let mut status = ffi::OPUS_OK;
-        // SAFETY: valid parameters; `status` receives the error code.
-        let state =
-            unsafe { ffi::opus_encoder_create(SAMPLE_RATE, CHANNELS, ffi::OPUS_APPLICATION_VOIP, &raw mut status) };
-        check(status)?;
-        let encoder = Self(NonNull::new(state).ok_or_else(|| Error::Opus("encoder allocation failed".into()))?);
-        encoder.ctl(ffi::OPUS_SET_BITRATE_REQUEST, BITRATE)?;
-        encoder.ctl(ffi::OPUS_SET_INBAND_FEC_REQUEST, ENABLED)?;
-        encoder.ctl(ffi::OPUS_SET_PACKET_LOSS_PERC_REQUEST, EXPECTED_LOSS_PERCENT)?;
-        Ok(encoder)
+        let mut encoder = opusorus::Encoder::new(SAMPLE_RATE, CHANNELS, Application::Voip).map_err(opus)?;
+        encoder.set_bitrate(Bitrate::Bits(BITRATE)).map_err(opus)?;
+        encoder.set_inband_fec(ENABLED).map_err(opus)?;
+        encoder.set_packet_loss_perc(EXPECTED_LOSS_PERCENT).map_err(opus)?;
+        Ok(Self(encoder))
     }
 
-    fn ctl(&self, request: c_int, value: c_int) -> Result<(), Error> {
-        // SAFETY: every request used here takes one `opus_int32` argument.
-        check(unsafe { ffi::opus_encoder_ctl(self.0.as_ptr(), request, value) }).map(drop)
+    fn set_bitrate(&mut self, bps: i32) -> Result<(), Error> {
+        self.0.set_bitrate(Bitrate::Bits(bps)).map_err(opus)
     }
 
     fn encode(&mut self, pcm: &Pcm, packet: &mut [u8]) -> Result<usize, Error> {
-        let frame = c_int::try_from(pcm.len()).map_err(|_| Error::Opus("frame too long".into()))?;
-        let capacity = i32::try_from(packet.len()).unwrap_or(i32::MAX);
-        // SAFETY: `pcm` holds `frame` samples and `packet` `capacity` bytes.
-        let written =
-            check(unsafe { ffi::opus_encode(self.0.as_ptr(), pcm.as_ptr(), frame, packet.as_mut_ptr(), capacity) })?;
-        Ok(usize::try_from(written).unwrap_or_default())
-    }
-}
-
-impl Drop for Encoder {
-    fn drop(&mut self) {
-        // SAFETY: created by opus_encoder_create and destroyed once.
-        unsafe { ffi::opus_encoder_destroy(self.0.as_ptr()) };
+        self.0.encode(pcm, FRAME_SAMPLES, packet).map_err(opus)
     }
 }
 
 #[derive(Debug)]
-struct Decoder(NonNull<ffi::OpusDecoder>);
-
-// SAFETY: as for `Encoder`.
-unsafe impl Send for Decoder {}
+struct Decoder(opusorus::Decoder);
 
 impl Decoder {
     fn new() -> Result<Self, Error> {
-        let mut status = ffi::OPUS_OK;
-        // SAFETY: valid parameters; `status` receives the error code.
-        let state = unsafe { ffi::opus_decoder_create(SAMPLE_RATE, CHANNELS, &raw mut status) };
-        check(status)?;
-        Ok(Self(NonNull::new(state).ok_or_else(|| Error::Opus("decoder allocation failed".into()))?))
+        opusorus::Decoder::new(SAMPLE_RATE, CHANNELS).map(Self).map_err(opus)
     }
 
     /// Decodes `packet` (its FEC data when `fec`), or conceals a loss when `None`.
     fn decode(&mut self, packet: Option<&[u8]>, fec: bool, pcm: &mut Pcm) -> Result<(), Error> {
-        let (data, len) = packet.map_or((std::ptr::null(), 0), |p| (p.as_ptr(), i32::try_from(p.len()).unwrap_or(0)));
-        let frame = c_int::try_from(pcm.len()).map_err(|_| Error::Opus("frame too long".into()))?;
-        // SAFETY: `data` holds `len` bytes (or is null for concealment); `pcm` holds `frame` samples.
-        let decoded =
-            check(unsafe { ffi::opus_decode(self.0.as_ptr(), data, len, pcm.as_mut_ptr(), frame, c_int::from(fec)) })?;
+        let decoded = self.0.decode(packet, pcm, FRAME_SAMPLES, fec).map_err(opus)?;
         // A short decode (never expected for 20 ms packets) leaves stale samples otherwise.
-        if let Some(rest) = pcm.get_mut(usize::try_from(decoded).unwrap_or_default()..) {
+        if let Some(rest) = pcm.get_mut(decoded..) {
             rest.fill(0);
         }
         Ok(())
-    }
-}
-
-impl Drop for Decoder {
-    fn drop(&mut self) {
-        // SAFETY: created by opus_decoder_create and destroyed once.
-        unsafe { ffi::opus_decoder_destroy(self.0.as_ptr()) };
     }
 }
 
@@ -139,8 +92,8 @@ pub struct AudioSender {
 
 impl AudioSender {
     /// The most the voice may take, in bits a second, from the next frame on.
-    pub fn set_bitrate(&self, bps: i32) -> Result<(), Error> {
-        self.encoder.ctl(ffi::OPUS_SET_BITRATE_REQUEST, bps)
+    pub fn set_bitrate(&mut self, bps: i32) -> Result<(), Error> {
+        self.encoder.set_bitrate(bps)
     }
 
     /// A full datagram buffer drops the frame: late audio is worse than lost audio. So does a lost

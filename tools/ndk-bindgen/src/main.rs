@@ -1,6 +1,5 @@
 //! Regenerates `ffi_<arch>.rs` for `external/ndk/ndk-sys` (upstream-compatible flags) and
-//! `sys/ndk-gl-sys` (EGL/GLES3) from a local NDK sysroot, and `sys/opus-sys` (libopus) from
-//! `vendor/opus` against the same sysroot.
+//! `sys/ndk-gl-sys` (EGL/GLES3) from a local NDK sysroot.
 //!
 //! usage: ndk-bindgen [<sysroot>]  (default: $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot)
 
@@ -95,18 +94,7 @@ fn ndk_gl_sys(b: bindgen::Builder) -> Result<bindgen::Builder> {
         .allowlist_type("(EGL|GL|Khronos|khronos_).*"))
 }
 
-fn opus_sys(b: bindgen::Builder) -> Result<bindgen::Builder> {
-    Ok(b.rust_target(rust_target(NDK_GL_SYS_RUST_MINOR)?)
-        .rust_edition(bindgen::RustEdition::Edition2024)
-        // ctl request codes and error codes are C `int`s.
-        .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
-        .allowlist_function("opus_.*")
-        .allowlist_var("OPUS_.*")
-        .allowlist_type("Opus.*|opus_.*"))
-}
-
-const JOBS: [(&str, Configure); 3] =
-    [("external/ndk/ndk-sys", ndk_sys), ("sys/ndk-gl-sys", ndk_gl_sys), ("sys/opus-sys", opus_sys)];
+const JOBS: [(&str, Configure); 2] = [("external/ndk/ndk-sys", ndk_sys), ("sys/ndk-gl-sys", ndk_gl_sys)];
 
 fn default_sysroot() -> Result<PathBuf> {
     let ndk = std::env::var_os("ANDROID_NDK_HOME").context("ANDROID_NDK_HOME not set (run via `just bindgen`)")?;

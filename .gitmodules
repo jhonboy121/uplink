@@ -1,3 +1,6 @@
+[submodule "external/opusorus"]
+	path = external/opusorus
+	url = https://github.com/jhonboy121/opusorus.git
 [submodule "external/h264"]
 	path = external/h264
 	url = https://github.com/jhonboy121/h264.git

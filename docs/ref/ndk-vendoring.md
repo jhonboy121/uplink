@@ -93,7 +93,7 @@ Notable additions relevant to uplink: `AImage_getTransform`, `AImageReader_setDe
 
 ## Workspace wiring
 
-- Root `Cargo.toml`: `exclude = ["vendor", "sys"]`, so they're built as path deps but are not workspace members
+- Root `Cargo.toml`: `exclude = ["sys", "external"]`, so they're built as path deps but are not workspace members
   (clippy doesn't lint them). `[patch.crates-io]` points `ndk`/`ndk-sys` at `external/ndk/`, and
   `ndk-context` and `netwatch` at theirs (sections below).
 - `sys/ndk-gl-sys` keeps bindgen's naming-lint allows (`non_upper_case_globals` etc.); the C names can't be renamed.

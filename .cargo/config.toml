@@ -3,7 +3,7 @@ linker = "tools/android-clang"
 
 [env]
 CC_aarch64_linux_android = { value = "tools/android-clang", relative = true }
-# Only probed (cmake-rs asks for both compilers); our C deps build no C++.
+# Only probed (aws-lc-sys' builder and cmake-rs ask for both compilers); no C dep builds C++.
 CXX_aarch64_linux_android = { value = "tools/android-clang", relative = true }
 AR_aarch64_linux_android = "llvm-ar"
 # The `slint!` macro bundles every language under here into the binary. It looks for

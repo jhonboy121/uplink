@@ -5040,10 +5040,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "opus-sys"
-version = "0.1.0+1.5.2"
+name = "opusorus"
+version = "0.1.0"
 dependencies = [
- "cmake",
+ "libm",
 ]
 
 [[package]]
@@ -7853,7 +7853,7 @@ dependencies = [
  "iroh",
  "n0-future",
  "noq-proto",
- "opus-sys",
+ "opusorus",
  "parking_lot",
  "prost",
  "qrcode",

@@ -83,18 +83,18 @@ clippy:
 
 [doc('''
 Format Rust (cargo fmt), TOML (taplo) and Java (google-java-format), each by its default rules.
-vendor/ stays as upstream wrote it: plain `cargo fmt` formats the members, not path dependencies.
+external/ stays as upstream wrote it: plain `cargo fmt` formats the members only.
 ''')]
 fmt:
     cargo fmt
-    git ls-files '*.toml' ':!vendor/' | RUST_LOG=warn xargs taplo fmt
-    git ls-files '*.java' ':!vendor/' | xargs java -jar "{{google_java_format}}" --replace
+    git ls-files '*.toml' ':!external/' | RUST_LOG=warn xargs taplo fmt
+    git ls-files '*.java' ':!external/' | xargs java -jar "{{google_java_format}}" --replace
 
 [doc("Fail if anything `just fmt` would change")]
 fmt-check:
     cargo fmt --check
-    git ls-files '*.toml' ':!vendor/' | RUST_LOG=warn xargs taplo fmt --check
-    git ls-files '*.java' ':!vendor/' | xargs java -jar "{{google_java_format}}" --dry-run --set-exit-if-changed
+    git ls-files '*.toml' ':!external/' | RUST_LOG=warn xargs taplo fmt --check
+    git ls-files '*.java' ':!external/' | xargs java -jar "{{google_java_format}}" --dry-run --set-exit-if-changed
 
 [doc("Build the app library")]
 build:

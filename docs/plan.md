@@ -1354,3 +1354,11 @@ default); keep disk usage lean. Avoid build scripts.
     alone (`onDisconnected`/`onError`), the only failure seen in the field; the frame count only
     decides telling the peer our picture paused, and counts the encoder's frames
     (`frames_encoded`), which are what the peer gets.
+- **2026-09-27**: **Opus is opusorus, pure Rust.** libopus 1.5.2 (`vendor/opus`, built by
+  `sys/opus-sys` with CMake, bindings from `just bindgen`) is replaced by opusorus, the user's
+  safe-Rust port of libopus 1.6.1 (bit-exact with it, RFC 6716/8251 vectors, differential fuzzing),
+  a git submodule at `external/opusorus` used by path. `audio.rs` loses its FFI wrapper (no
+  `unsafe`): same VOIP mode, bitrate, in-band FEC, 10% expected loss, FEC/PLC decode.
+  `AudioSender::set_bitrate` takes `&mut self`. Measured from linker maps of the release library:
+  libopus 338 KB → opusorus 443 KB (+105 KB). Device-tested in a call. `external/` is outside the
+  workspace, `just fmt` and the bindgen jobs; the C toolchain stays for Skia and aws-lc.
