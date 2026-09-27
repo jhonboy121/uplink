@@ -21,7 +21,7 @@ uplink-android = { path = "crates/uplink-android" }
 uplink-core = { path = "crates/uplink-core" }
 ndk-gl-sys = { path = "sys/ndk-gl-sys" }
 # Opus: a pure-Rust port of libopus 1.6.1, bit-exact with it; a git submodule, by path.
-opusorus = { path = "external/opusorus/crates/opusorus" }
+opusorus = { path = "external/opusorus/crates/opusorus", features = ["fast"] }
 # The CLI's camera: a pure-Rust OpenH264 port (submodule), decoding the clip and encoding it live
 # at rate control's bitrate, as MediaCodec does on the phone. See external/h264/docs/STATUS.md.
 h264 = { path = "external/h264", features = ["threads", "simd"] }
