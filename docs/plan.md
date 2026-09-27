@@ -1362,3 +1362,26 @@ default); keep disk usage lean. Avoid build scripts.
   `AudioSender::set_bitrate` takes `&mut self`. Measured from linker maps of the release library:
   libopus 338 KB → opusorus 443 KB (+105 KB). Device-tested in a call. `external/` is outside the
   workspace, `just fmt` and the bindgen jobs; the C toolchain stays for Skia and aws-lc.
+- **2026-09-27**: **the database is Turso, pure Rust and async.** rusqlite (SQLite's C, bundled)
+  is replaced by Turso `=0.8.0-pre.13` (a pure-Rust rewrite reading and writing SQLite's file
+  format), pinned, with no default features: no C allocator, no full-text search, and on Android
+  plain file IO (io_uring is Linux-only) and pure-Rust crypto. Checked first against our own SQL
+  and the real rusqlite-written `uplink.db` (opened, read, written; SQLite's integrity check
+  still passes). Device-tested on the phone's data.
+  - **Async all the way, no `block_on`:** `Db` is Turso's connection behind an async lock (it
+    refuses overlapping exclusive work rather than queueing it), with `run` holding it for a
+    unit of work. Settings keep an in-memory copy loaded at open, so reads stay synchronous and
+    writes are async; the core opens `Settings` and `CallLog` once and every window uses those,
+    so the endpoint (relay pilot, unknown-caller gate) sees the window's writes. Contacts read
+    from their list as before; writes are async. The window runs writes with `spawn_local` on
+    a fresh handle, never holding its state across an await. The one wait left is the existing
+    startup one in `Core::start` (Java calls it synchronously), which now opens the database too.
+  - **`AUTOINCREMENT` dropped:** Turso keeps its own counter beside `sqlite_sequence`, so a row
+    written by plain SQLite (devdb) could have its id handed out again. An existing `calls`
+    table is rebuilt without it once, in one transaction.
+  - **Log trim:** `DELETE … WHERE id IN (SELECT … LIMIT -1 OFFSET 500)` instead of `NOT IN` the
+    newest 500, which sorted the whole table per call and was slow on Turso (test 10.3 s → 1.1 s).
+  - **Size:** measured from linker maps of the release library, +11.3 MB loaded (`turso_core`
+    6.1 MB, its generics 1.9, tables 1.5, unwind 0.7, parser 0.5, regex 0.5; SQLite's C −1.65):
+    the stripped library 32.7 → 44.5 MB, ~+5.4 MB compressed in the APK. Release build time
+    ~5½ → 11½ min. Levers if it matters: `opt-level = "s"` for `turso_core`, trimming features.

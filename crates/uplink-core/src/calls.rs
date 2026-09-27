@@ -5,9 +5,9 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{OptionalExtension, params};
+use turso::{Connection, Row, Value};
 
-use crate::db::Db;
+use crate::db::{Db, rows};
 use crate::node::{EndReason, Mode};
 use crate::quality::Quality;
 use crate::{EndpointId, Error};
@@ -162,6 +162,8 @@ pub struct Logged {
     pub call: CallRecord,
 }
 
+/// Cloning shares the connection, as every handle to the database does.
+#[derive(Clone)]
 pub struct CallLog {
     db: Db,
 }
@@ -174,25 +176,46 @@ const COLUMNS: &str = "id, peer, incoming, outcome, at, seconds, sent, received,
 const ADDED: [(&str, &str); 5] =
     [("sent", "INTEGER"), ("received", "INTEGER"), ("quality", "BLOB"), ("voice", "INTEGER"), ("video_at", "INTEGER")];
 
+/// The table as it is created now: `id` is the rowid, which a new row takes as one past the
+/// highest. Tables made before had `AUTOINCREMENT`, which Turso keeps a counter for of its own
+/// beside SQLite's, so a row written by plain SQLite (the dev tools) could have its id handed
+/// out again; nothing here needs ids never to be reused, so the table is rebuilt without it.
+const SCHEMA: &str = "(
+     id       INTEGER PRIMARY KEY,
+     peer     TEXT NOT NULL,
+     incoming INTEGER NOT NULL,
+     outcome  TEXT NOT NULL,
+     at       INTEGER NOT NULL,
+     seconds  INTEGER,
+     sent     INTEGER,
+     received INTEGER,
+     quality  BLOB,
+     voice    INTEGER,
+     video_at INTEGER
+ )";
+const INDEX: &str = "CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)";
+const OLD_KEY: &str = "AUTOINCREMENT";
+
 /// A row as [`COLUMNS`] reads it, or `None` for one whose key no longer parses.
-fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
-    let peer = row.get::<_, String>(1)?;
+fn read_row(row: &Row) -> Result<Option<Logged>, Error> {
+    let peer = row.get::<String>(1)?;
     let Ok(peer_id) = peer.parse::<EndpointId>() else {
         tracing::warn!(peer, "a logged key no longer parses; skipping");
         return Ok(None);
     };
     let unsigned = |value: Option<i64>| value.and_then(|v| u64::try_from(v).ok());
     let (sent, received) = (unsigned(row.get(6)?), unsigned(row.get(7)?));
-    let quality = row.get::<_, Option<Vec<u8>>>(8)?.and_then(|bytes| {
-        Quality::from_bytes(&bytes)
+    let quality = match row.get_value(8)? {
+        Value::Blob(bytes) => Quality::from_bytes(&bytes)
             .inspect_err(|e| tracing::debug!("a call's quality summary no longer reads: {e}"))
-            .ok()
-    });
+            .ok(),
+        _ => None,
+    };
     let call = CallRecord {
         peer: peer_id,
         incoming: row.get(2)?,
-        outcome: Outcome::parse(&row.get::<_, String>(3)?),
-        mode: if row.get::<_, Option<bool>>(9)?.unwrap_or_default() { Mode::Voice } else { Mode::Video },
+        outcome: Outcome::parse(&row.get::<String>(3)?),
+        mode: if row.get::<Option<bool>>(9)?.unwrap_or_default() { Mode::Voice } else { Mode::Video },
         at: UNIX_EPOCH + Duration::from_secs(unsigned(Some(row.get(4)?)).unwrap_or_default()),
         duration: unsigned(row.get(5)?).map(Duration::from_secs),
         video_from: unsigned(row.get(10)?).map(Duration::from_secs),
@@ -202,119 +225,147 @@ fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Option<Logged>> {
     Ok(Some(Logged { id: CallId(row.get(0)?), call }))
 }
 
+/// Brings a table from any earlier build up to [`SCHEMA`]: the columns added since, then the
+/// rebuild without `AUTOINCREMENT`, in one transaction so a failure leaves the old table whole.
+async fn upgrade(db: &Connection) -> Result<(), Error> {
+    let existing: Vec<String> = rows(db, "SELECT name FROM pragma_table_info('calls')", ())
+        .await?
+        .iter()
+        .map(|row| row.get::<String>(0))
+        .collect::<Result<_, _>>()?;
+    for (column, kind) in ADDED {
+        if !existing.iter().any(|name| name == column) {
+            db.execute_batch(&format!("ALTER TABLE calls ADD COLUMN {column} {kind}")).await?;
+        }
+    }
+    let table = rows(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'calls'", ()).await?;
+    let old = table.first().map(|row| row.get::<String>(0)).transpose()?.is_some_and(|sql| sql.contains(OLD_KEY));
+    if old {
+        tracing::info!("rebuilding the call log without AUTOINCREMENT");
+        db.execute_batch(&format!(
+            "BEGIN;
+             CREATE TABLE calls_rebuilt {SCHEMA};
+             INSERT INTO calls_rebuilt ({COLUMNS}) SELECT {COLUMNS} FROM calls;
+             DROP TABLE calls;
+             ALTER TABLE calls_rebuilt RENAME TO calls;
+             {INDEX};
+             COMMIT"
+        ))
+        .await?;
+    }
+    Ok(())
+}
+
 impl CallLog {
-    pub fn open(db: Db) -> Result<Self, Error> {
-        db.with(|db| {
-            db.execute_batch(
-                "CREATE TABLE IF NOT EXISTS calls (
-                     id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                     peer     TEXT NOT NULL,
-                     incoming INTEGER NOT NULL,
-                     outcome  TEXT NOT NULL,
-                     at       INTEGER NOT NULL,
-                     seconds  INTEGER,
-                     sent     INTEGER,
-                     received INTEGER,
-                     quality  BLOB,
-                     voice    INTEGER,
-                     video_at INTEGER
-                 );
-                 CREATE INDEX IF NOT EXISTS calls_at ON calls (at DESC)",
-            )?;
-            let existing = db
-                .prepare("SELECT name FROM pragma_table_info('calls')")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            for (column, kind) in ADDED {
-                if !existing.iter().any(|name| name == column) {
-                    db.execute_batch(&format!("ALTER TABLE calls ADD COLUMN {column} {kind}"))?;
-                }
-            }
-            Ok(())
-        })?;
+    pub async fn open(db: Db) -> Result<Self, Error> {
+        db.run(async |db| {
+            db.execute_batch(&format!("CREATE TABLE IF NOT EXISTS calls {SCHEMA}; {INDEX}")).await?;
+            upgrade(db).await
+        })
+        .await?;
         Ok(Self { db })
     }
 
-    pub fn record(&self, record: &CallRecord) -> Result<(), Error> {
+    pub async fn record(&self, record: &CallRecord) -> Result<(), Error> {
         let at = i64::try_from(record.at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(i64::MAX);
         let seconds = record.duration.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let signed = |bytes: u64| i64::try_from(bytes).unwrap_or(i64::MAX);
         let (sent, received) = record.traffic.map(|t| (signed(t.sent), signed(t.received))).unzip();
         let quality = record.quality.as_ref().map(Quality::to_bytes);
         let video_at = record.video_from.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-        self.db.with(|db| {
-            db.execute(
-                "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality, voice, video_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    record.peer.to_string(),
-                    record.incoming,
-                    record.outcome.as_str(),
-                    at,
-                    seconds,
-                    sent,
-                    received,
-                    quality,
-                    record.mode == Mode::Voice,
-                    video_at
-                ],
-            )?;
-            // Trimmed here rather than on a timer: the log only grows when a call ends.
-            db.execute(
-                "DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY at DESC, id DESC LIMIT ?1)",
-                params![KEEP],
-            )?;
-            Ok(())
-        })
+        let values: [Value; 10] = [
+            record.peer.to_string().into(),
+            record.incoming.into(),
+            record.outcome.as_str().into(),
+            at.into(),
+            seconds.into(),
+            sent.into(),
+            received.into(),
+            quality.into(),
+            (record.mode == Mode::Voice).into(),
+            video_at.into(),
+        ];
+        self.db
+            .run(async |db| {
+                db.execute(
+                    "INSERT INTO calls (peer, incoming, outcome, at, seconds, sent, received, quality, voice, video_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    values,
+                )
+                .await?;
+                // Trimmed here rather than on a timer: the log only grows when a call ends. Only
+                // what lies past the newest `KEEP` is looked at, through the index on `at`:
+                // `NOT IN` the newest sorted the whole table on every call, which Turso does slowly.
+                db.execute(
+                    "DELETE FROM calls WHERE id IN
+                         (SELECT id FROM calls ORDER BY at DESC, id DESC LIMIT -1 OFFSET ?1)",
+                    (KEEP,),
+                )
+                .await?;
+                Ok(())
+            })
+            .await
     }
 
     /// Most recent first.
-    pub fn recent(&self, limit: i64) -> Result<Vec<Logged>, Error> {
-        self.db.with(|db| {
-            let mut statement =
-                db.prepare(&format!("SELECT {COLUMNS} FROM calls ORDER BY at DESC, id DESC LIMIT ?1"))?;
-            let rows = statement.query_map(params![limit], read_row)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.extend(row?);
-            }
-            Ok(out)
-        })
+    pub async fn recent(&self, limit: i64) -> Result<Vec<Logged>, Error> {
+        let found = self
+            .db
+            .run(async |db| {
+                rows(db, &format!("SELECT {COLUMNS} FROM calls ORDER BY at DESC, id DESC LIMIT ?1"), (limit,)).await
+            })
+            .await?;
+        let mut out = Vec::with_capacity(found.len());
+        for row in &found {
+            out.extend(read_row(row)?);
+        }
+        Ok(out)
     }
 
     /// One call, for its details page; `None` once it has been removed or trimmed.
-    pub fn get(&self, id: CallId) -> Result<Option<Logged>, Error> {
-        self.db.with(|db| {
-            let found = db
-                .query_row(&format!("SELECT {COLUMNS} FROM calls WHERE id = ?1"), params![id.0], read_row)
-                .optional()?;
-            Ok(found.flatten())
-        })
+    pub async fn get(&self, id: CallId) -> Result<Option<Logged>, Error> {
+        let found = self
+            .db
+            .run(async |db| rows(db, &format!("SELECT {COLUMNS} FROM calls WHERE id = ?1"), (id.0,)).await)
+            .await?;
+        Ok(found.first().map(read_row).transpose()?.flatten())
     }
 
     /// Forgets the given calls, in one transaction, so a selection goes all at once or not at all.
-    pub fn remove(&self, ids: &[CallId]) -> Result<(), Error> {
-        self.db.with(|db| {
-            let transaction = db.unchecked_transaction()?;
-            for id in ids {
-                transaction.execute("DELETE FROM calls WHERE id = ?1", params![id.0])?;
-            }
-            transaction.commit()?;
-            Ok(())
-        })
+    pub async fn remove(&self, ids: &[CallId]) -> Result<(), Error> {
+        self.db
+            .run(async |db| {
+                db.execute_batch("BEGIN").await?;
+                for id in ids {
+                    if let Err(e) = db.execute("DELETE FROM calls WHERE id = ?1", (id.0,)).await {
+                        if let Err(rollback) = db.execute_batch("ROLLBACK").await {
+                            tracing::warn!("rolling back a removal: {rollback}");
+                        }
+                        return Err(e.into());
+                    }
+                }
+                db.execute_batch("COMMIT").await?;
+                Ok(())
+            })
+            .await
     }
 
     /// How many calls came in and were never answered, which is what a tab badge would show.
-    pub fn missed(&self) -> Result<i64, Error> {
-        self.db
-            .with(|db| Ok(db.query_row("SELECT COUNT(*) FROM calls WHERE outcome = 'missed'", [], |row| row.get(0))?))
+    pub async fn missed(&self) -> Result<i64, Error> {
+        let counted = self
+            .db
+            .run(async |db| rows(db, "SELECT COUNT(*) FROM calls WHERE outcome = 'missed'", ()).await)
+            .await?;
+        Ok(counted.first().map(|row| row.get::<i64>(0)).transpose()?.unwrap_or_default())
     }
 
-    pub fn clear(&self) -> Result<(), Error> {
-        self.db.with(|db| {
-            db.execute("DELETE FROM calls", [])?;
-            Ok(())
-        })
+    pub async fn clear(&self) -> Result<(), Error> {
+        self.db
+            .run(async |db| {
+                db.execute("DELETE FROM calls", ()).await?;
+                Ok(())
+            })
+            .await
     }
 }
 
@@ -351,85 +402,93 @@ mod tests {
         assert!(Outcome::Lost.answered());
     }
 
-    #[test]
-    fn a_voice_call_that_became_video_survives_the_round_trip() -> Result<()> {
+    #[tokio::test]
+    async fn a_voice_call_that_became_video_survives_the_round_trip() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         let mut call = record(false, Outcome::Lost, SystemTime::now());
         call.mode = Mode::Voice;
         call.video_from = Some(Duration::from_secs(192));
-        log.record(&call)?;
-        let back = &log.recent(1)?[0].call;
+        log.record(&call).await?;
+        let back = &log.recent(1).await?[0].call;
         assert_eq!((back.mode, back.video_from, back.outcome), (Mode::Voice, call.video_from, Outcome::Lost));
         Ok(())
     }
 
-    #[test]
-    fn the_newest_call_is_first() -> Result<()> {
+    #[tokio::test]
+    async fn the_newest_call_is_first() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         let old = UNIX_EPOCH + Duration::from_secs(1_000);
         let new = UNIX_EPOCH + Duration::from_secs(2_000);
-        log.record(&record(true, Outcome::Missed, old))?;
-        log.record(&record(false, Outcome::Answered, new))?;
-        let recent = log.recent(10)?;
+        log.record(&record(true, Outcome::Missed, old)).await?;
+        log.record(&record(false, Outcome::Answered, new)).await?;
+        let recent = log.recent(10).await?;
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].call.at, new);
         assert!(!recent[0].call.incoming);
         Ok(())
     }
 
-    #[test]
-    fn traffic_survives_the_round_trip() -> Result<()> {
+    #[tokio::test]
+    async fn traffic_survives_the_round_trip() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         let mut call = record(true, Outcome::Answered, SystemTime::now());
         call.traffic = Some(Traffic { sent: 12_345_678, received: 9_876 });
         let mut quality = Quality::default();
         quality.fps_in.add(24.0);
         call.quality = Some(quality);
-        log.record(&call)?;
-        let logged = log.recent(1)?;
+        log.record(&call).await?;
+        let logged = log.recent(1).await?;
         assert_eq!(logged[0].call.traffic, call.traffic);
         assert_eq!(logged[0].call.quality, call.quality);
-        let one = log.get(logged[0].id)?.map(|found| found.call.traffic);
+        let one = log.get(logged[0].id).await?.map(|found| found.call.traffic);
         assert_eq!(one, Some(call.traffic));
         Ok(())
     }
 
-    /// A log from before traffic was recorded gains the columns on open and keeps its rows.
-    #[test]
-    fn an_older_log_is_brought_up_to_date() -> Result<()> {
+    /// A log from an earlier build gains the columns added since, keeps its rows, and loses
+    /// `AUTOINCREMENT` (see [`SCHEMA`]).
+    #[tokio::test]
+    async fn an_older_log_is_brought_up_to_date() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let db = Db::open(dir.path())?;
-        db.with(|db| {
+        let db = Db::open(dir.path()).await?;
+        let peer = SecretKey::generate().public().to_string();
+        db.run(async |db| {
             db.execute_batch(
                 "CREATE TABLE calls (id INTEGER PRIMARY KEY AUTOINCREMENT, peer TEXT NOT NULL,
                      incoming INTEGER NOT NULL, outcome TEXT NOT NULL, at INTEGER NOT NULL, seconds INTEGER);",
-            )?;
-            db.execute(
-                "INSERT INTO calls (peer, incoming, outcome, at) VALUES (?1, 1, 'missed', 1)",
-                params![SecretKey::generate().public().to_string()],
-            )?;
+            )
+            .await?;
+            db.execute("INSERT INTO calls (peer, incoming, outcome, at) VALUES (?1, 1, 'missed', 1)", (peer,))
+                .await?;
             Ok(())
-        })?;
-        let log = CallLog::open(db)?;
-        let old = log.recent(10)?;
+        })
+        .await?;
+        let log = CallLog::open(db.clone()).await?;
+        let old = log.recent(10).await?;
         assert_eq!(old.len(), 1);
         assert_eq!(old[0].call.traffic, None);
+        let sql = db
+            .run(async |db| rows(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'calls'", ()).await)
+            .await?;
+        assert!(sql.first().map(|row| row.get::<String>(0)).transpose()?.is_some_and(|sql| !sql.contains(OLD_KEY)));
+        log.record(&record(false, Outcome::Answered, SystemTime::now())).await?;
+        assert_eq!(log.recent(10).await?.len(), 2);
         Ok(())
     }
 
-    #[test]
-    fn removing_takes_only_the_chosen_calls() -> Result<()> {
+    #[tokio::test]
+    async fn removing_takes_only_the_chosen_calls() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         for second in 1..=3 {
-            log.record(&record(false, Outcome::Answered, UNIX_EPOCH + Duration::from_secs(second)))?;
+            log.record(&record(false, Outcome::Answered, UNIX_EPOCH + Duration::from_secs(second))).await?;
         }
-        let before = log.recent(10)?;
-        log.remove(&[before[0].id, before[2].id])?;
-        let after = log.recent(10)?;
+        let before = log.recent(10).await?;
+        log.remove(&[before[0].id, before[2].id]).await?;
+        let after = log.recent(10).await?;
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].id, before[1].id);
         // An id survives the trip through the screen as text.
@@ -437,40 +496,40 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn a_duration_survives_the_round_trip() -> Result<()> {
+    #[tokio::test]
+    async fn a_duration_survives_the_round_trip() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         let mut call = record(false, Outcome::Answered, SystemTime::now());
         call.duration = Some(Duration::from_secs(252));
-        log.record(&call)?;
-        assert_eq!(log.recent(1)?[0].call.duration, Some(Duration::from_secs(252)));
+        log.record(&call).await?;
+        assert_eq!(log.recent(1).await?[0].call.duration, Some(Duration::from_secs(252)));
         Ok(())
     }
 
-    #[test]
-    fn missed_calls_are_counted() -> Result<()> {
+    #[tokio::test]
+    async fn missed_calls_are_counted() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         let now = SystemTime::now();
-        log.record(&record(true, Outcome::Missed, now))?;
-        log.record(&record(true, Outcome::Missed, now))?;
-        log.record(&record(true, Outcome::Answered, now))?;
-        assert_eq!(log.missed()?, 2);
-        log.clear()?;
-        assert_eq!(log.missed()?, 0);
+        log.record(&record(true, Outcome::Missed, now)).await?;
+        log.record(&record(true, Outcome::Missed, now)).await?;
+        log.record(&record(true, Outcome::Answered, now)).await?;
+        assert_eq!(log.missed().await?, 2);
+        log.clear().await?;
+        assert_eq!(log.missed().await?, 0);
         Ok(())
     }
 
-    #[test]
-    fn the_log_stops_growing() -> Result<()> {
+    #[tokio::test]
+    async fn the_log_stops_growing() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let log = CallLog::open(Db::open(dir.path())?)?;
+        let log = CallLog::open(Db::open(dir.path()).await?).await?;
         for second in 0..KEEP + 20 {
             let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(second).unwrap_or_default());
-            log.record(&record(false, Outcome::Answered, at))?;
+            log.record(&record(false, Outcome::Answered, at)).await?;
         }
-        assert_eq!(i64::try_from(log.recent(KEEP * 2)?.len()).unwrap_or_default(), KEEP);
+        assert_eq!(i64::try_from(log.recent(KEEP * 2).await?.len()).unwrap_or_default(), KEEP);
         Ok(())
     }
 

@@ -3,10 +3,13 @@
 //! Marker files were the alternative and the reason not to: one zero-byte file per remembered
 //! fact, no types, no atomicity, and nothing to list. A row is a row.
 
-use rusqlite::{OptionalExtension, params};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 
 use crate::Error;
-use crate::db::Db;
+use crate::db::{Db, rows};
 
 /// Whether the battery explainer has been answered. Shown once: the exemption is not required,
 /// and a "no" asked again every launch is nagging. Settings keeps the way back.
@@ -31,12 +34,19 @@ pub const ASK_BLOCK_CAPTURE: &str = "ask-block-capture";
 pub const REJECT_UNKNOWN: &str = "reject-unknown";
 
 const TRUE: &str = "1";
+const FALSE: &str = "0";
 
-/// Cloning shares the store, because the callbacks that write a setting are scattered across the
-/// UI and none of them owns it.
+/// Cloning shares the store and its copy, because the callbacks that write a setting are
+/// scattered across the UI and none of them owns it.
+///
+/// Every setting is read into memory when the store opens: they are a few dozen short strings,
+/// read far more often than written, and often from code that cannot wait (a flag checked as a
+/// call comes in, the network's quality step). Writes go to the database first and change the
+/// copy only once they land, so the two never disagree about what was saved.
 #[derive(Clone)]
 pub struct Settings {
     db: Db,
+    values: Arc<RwLock<FxHashMap<String, String>>>,
 }
 
 impl Settings {
@@ -45,42 +55,45 @@ impl Settings {
         &self.db
     }
 
-    pub fn open(db: Db) -> Result<Self, Error> {
-        db.with(|db| {
-            db.execute_batch(
-                "CREATE TABLE IF NOT EXISTS settings (
-                     key   TEXT PRIMARY KEY NOT NULL,
-                     value TEXT NOT NULL
-                 )",
-            )?;
-            Ok(())
-        })?;
-        Ok(Self { db })
+    pub async fn open(db: Db) -> Result<Self, Error> {
+        let values = db
+            .run(async |db| {
+                db.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS settings (
+                         key   TEXT PRIMARY KEY NOT NULL,
+                         value TEXT NOT NULL
+                     )",
+                )
+                .await?;
+                let mut values = FxHashMap::default();
+                for row in rows(db, "SELECT key, value FROM settings", ()).await? {
+                    values.insert(row.get::<String>(0)?, row.get::<String>(1)?);
+                }
+                Ok(values)
+            })
+            .await?;
+        Ok(Self { db, values: Arc::new(RwLock::new(values)) })
     }
 
-    /// The stored value, or `None` if it has never been set. An unreadable row reads as unset:
-    /// a setting is a preference, and failing to start over one would be absurd.
+    /// The saved value, or `None` if it has never been set.
     pub fn get(&self, key: &str) -> Option<String> {
-        let read = self.db.with(|db| {
-            Ok(db
-                .query_one("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get(0))
-                .optional()?)
-        });
-        read.unwrap_or_else(|e| {
-            tracing::warn!(key, "reading a setting: {e}");
-            None
-        })
+        self.values.read().get(key).cloned()
     }
 
-    pub fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-        self.db.with(|db| {
-            db.execute(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )?;
-            Ok(())
-        })
+    pub async fn set(&self, key: &str, value: &str) -> Result<(), Error> {
+        self.db
+            .run(async |db| {
+                db.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+                .await?;
+                Ok(())
+            })
+            .await?;
+        self.values.write().insert(key.to_owned(), value.to_owned());
+        Ok(())
     }
 
     /// A setting that is only ever on or off. Absent is off.
@@ -88,8 +101,8 @@ impl Settings {
         self.get(key).as_deref() == Some(TRUE)
     }
 
-    pub fn set_flag(&self, key: &str, on: bool) -> Result<(), Error> {
-        self.set(key, if on { TRUE } else { "0" })
+    pub async fn set_flag(&self, key: &str, on: bool) -> Result<(), Error> {
+        self.set(key, if on { TRUE } else { FALSE }).await
     }
 
     /// A setting holding a list, one entry per line. Blank lines are not entries: they are what
@@ -101,8 +114,8 @@ impl Settings {
         stored.lines().filter(|line| !line.is_empty()).map(str::to_owned).collect()
     }
 
-    pub fn set_lines(&self, key: &str, lines: &[String]) -> Result<(), Error> {
-        self.set(key, &lines.join("\n"))
+    pub async fn set_lines(&self, key: &str, lines: &[String]) -> Result<(), Error> {
+        self.set(key, &lines.join("\n")).await
     }
 }
 
@@ -110,29 +123,44 @@ impl Settings {
 mod tests {
     use super::*;
 
-    fn settings() -> Result<Settings, Error> {
-        Settings::open(Db::memory()?)
+    async fn settings() -> Result<Settings, Error> {
+        Settings::open(Db::memory().await?).await
     }
 
-    #[test]
-    fn a_setting_survives_being_written_twice() -> Result<(), Error> {
-        let settings = settings()?;
+    #[tokio::test]
+    async fn a_setting_survives_being_written_twice() -> Result<(), Error> {
+        let settings = settings().await?;
         assert_eq!(settings.get(APPEARANCE), None);
-        settings.set(APPEARANCE, "dark")?;
-        settings.set(APPEARANCE, "light")?;
+        settings.set(APPEARANCE, "dark").await?;
+        settings.set(APPEARANCE, "light").await?;
         assert_eq!(settings.get(APPEARANCE).as_deref(), Some("light"));
         Ok(())
     }
 
     /// Absent reads as off, which is what every flag here means before it is ever set.
-    #[test]
-    fn a_flag_is_off_until_it_is_set() -> Result<(), Error> {
-        let settings = settings()?;
+    #[tokio::test]
+    async fn a_flag_is_off_until_it_is_set() -> Result<(), Error> {
+        let settings = settings().await?;
         assert!(!settings.flag(BATTERY_OFFERED));
-        settings.set_flag(BATTERY_OFFERED, true)?;
+        settings.set_flag(BATTERY_OFFERED, true).await?;
         assert!(settings.flag(BATTERY_OFFERED));
-        settings.set_flag(BATTERY_OFFERED, false)?;
+        settings.set_flag(BATTERY_OFFERED, false).await?;
         assert!(!settings.flag(BATTERY_OFFERED));
+        Ok(())
+    }
+
+    /// Reopened, the store reads back what was written, and a clone sees a write made through
+    /// another: the copy is shared, not per handle.
+    #[tokio::test]
+    async fn the_copy_is_shared_and_the_store_is_the_truth() -> Result<(), Error> {
+        let dir = tempfile::tempdir()?;
+        let settings = Settings::open(Db::open(dir.path()).await?).await?;
+        let other = settings.clone();
+        settings.set(LANGUAGE, "ar").await?;
+        assert_eq!(other.get(LANGUAGE).as_deref(), Some("ar"));
+        drop((settings, other));
+        let reopened = Settings::open(Db::open(dir.path()).await?).await?;
+        assert_eq!(reopened.get(LANGUAGE).as_deref(), Some("ar"));
         Ok(())
     }
 }

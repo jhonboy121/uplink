@@ -118,9 +118,9 @@ pub async fn run(
         // Fail before the screen takes over, where the error can be read.
         live::check_clip(path)?;
     }
-    let db = Db::open(dir)?;
-    let contacts = Contacts::open(db.clone())?;
-    let settings = Settings::open(db)?;
+    let db = Db::open(dir).await?;
+    let contacts = Contacts::open(db.clone()).await?;
+    let settings = Settings::open(db).await?;
     let (node, events) =
         Node::start(identity::load_or_create(dir, &identity::Plain).await?, Network::Public(settings.clone()), APP)
             .await?;
@@ -456,8 +456,8 @@ impl Tui {
                 self.send(Command::Network(true)).await?;
                 self.requalify();
             }
-            (KeyCode::Char('[' | '-'), _) => self.choose(-1)?,
-            (KeyCode::Char(']' | '+' | '='), _) => self.choose(1)?,
+            (KeyCode::Char('[' | '-'), _) => self.choose(-1).await?,
+            (KeyCode::Char(']' | '+' | '='), _) => self.choose(1).await?,
             (KeyCode::Char('r'), _) => self.send(Command::Relays(Steer::Check)).await?,
             _ => {}
         }
@@ -486,10 +486,10 @@ impl Tui {
     }
 
     /// Steps this network's chosen quality up or down, saved as the app saves it.
-    fn choose(&mut self, by: isize) -> Result<()> {
+    async fn choose(&mut self, by: isize) -> Result<()> {
         let now = Preset::ALL.iter().position(|preset| *preset == self.cap()).unwrap_or_default();
         let Some(next) = now.checked_add_signed(by).and_then(|index| Preset::ALL.get(index)) else { return Ok(()) };
-        next.choose(&self.settings, self.network)?;
+        next.choose(&self.settings, self.network).await?;
         self.requalify();
         Ok(())
     }

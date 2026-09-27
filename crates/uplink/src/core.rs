@@ -55,6 +55,8 @@ pub struct Core {
     calls: NodeHandle,
     id: EndpointId,
     db: Db,
+    settings: Settings,
+    log: CallLog,
     /// Where a window wants events delivered, while there is one. The core consumes the endpoint's
     /// stream itself and forwards through this — rather than handing the stream to whoever is
     /// answering, which had no answer for a process that starts at boot and never has a window.
@@ -115,11 +117,11 @@ pub fn locale(stored: Option<&str>) -> &'static str {
 }
 
 impl Ringer {
-    fn follow(&self, event: &Event) {
+    async fn follow(&self, event: &Event) {
         if let Event::Ended { peer: Some(peer), reason: EndReason::Incompatible { behind, theirs } } = event {
-            self.update_needed(peer, *behind, theirs);
+            self.update_needed(peer, *behind, theirs).await;
         }
-        if let Err(e) = self.telecom(event) {
+        if let Err(e) = self.telecom(event).await {
             tracing::warn!("telecom: {e}");
         }
         let outcome = match event {
@@ -137,7 +139,7 @@ impl Ringer {
 
     /// Asked first, before either phone rings: Telecom's no ends the call right there, while the
     /// dial is still looking for them or before the notification exists.
-    fn telecom(&self, event: &Event) -> Result<(), uplink_android::Error> {
+    async fn telecom(&self, event: &Event) -> Result<(), uplink_android::Error> {
         match event {
             Event::Dialing { peer, mode } | Event::Incoming { peer, mode } => {
                 let incoming = matches!(event, Event::Incoming { .. });
@@ -146,7 +148,7 @@ impl Ringer {
                     self.refuse();
                     return Ok(());
                 }
-                let (key, name, video) = (peer.to_string(), self.name_of(peer), *mode == Mode::Video);
+                let (key, name, video) = (peer.to_string(), self.name_of(peer).await, *mode == Mode::Video);
                 if incoming {
                     self.context.telecom_incoming(&key, &name, video)
                 } else {
@@ -167,23 +169,24 @@ impl Ringer {
     }
 
     /// Nobody answered. The notification only shows when uplink is not in front; Java decides.
-    fn missed(&self, peer: &EndpointId) {
-        if let Err(e) = self.context.missed_call(&self.name_of(peer)) {
+    async fn missed(&self, peer: &EndpointId) {
+        if let Err(e) = self.context.missed_call(&self.name_of(peer).await) {
             tracing::warn!("missed-call notification: {e}");
         }
     }
 
     /// A call that could not happen until one phone updates. As `missed`: only when not in front.
-    fn update_needed(&self, peer: &EndpointId, behind: Behind, theirs: &str) {
-        if let Err(e) = self.context.update_needed(behind == Behind::Us, &self.name_of(peer), theirs, &self.app) {
+    async fn update_needed(&self, peer: &EndpointId, behind: Behind, theirs: &str) {
+        let name = self.name_of(peer).await;
+        if let Err(e) = self.context.update_needed(behind == Behind::Us, &name, theirs, &self.app) {
             tracing::warn!("update notification: {e}");
         }
     }
 
     /// The nickname for a saved contact, and the short key for anyone else.
-    fn name_of(&self, peer: &EndpointId) -> String {
-        let saved = match Contacts::open(self.db.clone()) {
-            Ok(contacts) => contacts.name_of(peer).map(str::to_owned),
+    async fn name_of(&self, peer: &EndpointId) -> String {
+        let saved = match Contacts::saved_name(&self.db, peer).await {
+            Ok(name) => name,
             Err(e) => {
                 tracing::warn!("reading contacts for a ringing call: {e}");
                 None
@@ -230,22 +233,15 @@ impl Pending {
 /// Writes every call to the log as it ends, window or no window. A call that rang with nobody
 /// looking used to vanish: the log was the window's to write.
 struct Ledger {
-    log: Option<CallLog>,
+    log: CallLog,
     db: Db,
     pending: Option<Pending>,
     sending: Sending,
 }
 
 impl Ledger {
-    fn open(db: Db, sending: Sending) -> Self {
-        let log = CallLog::open(db.clone())
-            .inspect_err(|e| tracing::error!("opening the call log; calls go unrecorded: {e}"))
-            .ok();
-        Self { log, db, pending: None, sending }
-    }
-
     /// The record written, when this event ended a call.
-    fn follow(&mut self, event: &Event) -> Option<CallRecord> {
+    async fn follow(&mut self, event: &Event) -> Option<CallRecord> {
         match event {
             Event::Dialing { peer, mode } | Event::Incoming { peer, mode } => {
                 let incoming = matches!(event, Event::Incoming { .. });
@@ -297,17 +293,15 @@ impl Ledger {
                     // Taken, so the next call starts with nothing said about it.
                     quality: call.stats.map(|stats| Quality { target: self.sending.lock().take(), ..stats.summary() }),
                 };
-                self.write(&record);
+                self.write(&record).await;
                 Some(record)
             }
             _ => None,
         }
     }
 
-    fn write(&self, record: &CallRecord) {
-        if let Some(log) = &self.log
-            && let Err(e) = log.record(record)
-        {
+    async fn write(&self, record: &CallRecord) {
+        if let Err(e) = self.log.record(record).await {
             tracing::warn!("recording the call: {e}");
         }
         // A contact's second line is the same fact, kept beside it so the list does not have to
@@ -315,14 +309,8 @@ impl Ledger {
         if !record.outcome.answered() {
             return;
         }
-        match Contacts::open(self.db.clone()) {
-            Ok(mut contacts) if contacts.contains(&record.peer) => {
-                if let Err(e) = contacts.called(record.peer) {
-                    tracing::warn!("stamping the call: {e}");
-                }
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("reading contacts to stamp the call: {e}"),
+        if let Err(e) = Contacts::stamp_called(&self.db, &record.peer).await {
+            tracing::warn!("stamping the call: {e}");
         }
     }
 }
@@ -334,15 +322,21 @@ type Sending = Arc<Mutex<Option<VideoTarget>>>;
 /// The one consumer of the endpoint's events, for as long as the process lives. A window gets
 /// them while it is attached; otherwise they are answered here, because a call arriving at a
 /// backgrounded app is the case this whole arrangement exists for.
-async fn deliver(mut events: mpsc::Receiver<Event>, inbox: Arc<Mutex<Inbox>>, ringer: Ringer, sending: Sending) {
-    let mut ledger = Ledger::open(ringer.db.clone(), sending);
+async fn deliver(
+    mut events: mpsc::Receiver<Event>,
+    inbox: Arc<Mutex<Inbox>>,
+    ringer: Ringer,
+    log: CallLog,
+    sending: Sending,
+) {
+    let mut ledger = Ledger { log, db: ringer.db.clone(), pending: None, sending };
     while let Some(event) = events.recv().await {
-        ringer.follow(&event);
+        ringer.follow(&event).await;
         // Written before the window hears of it, so what it reads back already has this call.
-        if let Some(record) = ledger.follow(&event)
+        if let Some(record) = ledger.follow(&event).await
             && record.outcome == calls::Outcome::Missed
         {
-            ringer.missed(&record.peer);
+            ringer.missed(&record.peer).await;
         }
         // Cloned out rather than held: the lock must not span the await below.
         let window = {
@@ -410,13 +404,22 @@ impl identity::Vault for Keystore<'_> {
 
 impl Core {
     /// Binds the endpoint and opens the database. Blocks until the endpoint is up, because until
-    /// it is there is nothing to answer a call with.
+    /// it is there is nothing to answer a call with: Java calls this synchronously and holds the
+    /// handle it returns. The identity and the database open in the same wait.
     pub fn start(logging: Logging, data_dir: &Path, context: AppContext) -> Result<Self> {
         let runtime = uplink_core::runtime::build(logging.dispatch())?;
-        let secret = runtime.block_on(identity::load_or_create(data_dir, &Keystore(&context)))?;
+        let (secret, db, settings, log) = runtime.block_on(async {
+            let secret = identity::load_or_create(data_dir, &Keystore(&context)).await?;
+            let db = Db::open(data_dir).await?;
+            // Opened once, here, and shared: settings are read from one copy in memory, so the
+            // endpoint (the relay pilot, the unknown-caller gate) and every window must hold the
+            // same one to see each other's writes. The contacts table is made here too.
+            let settings = Settings::open(db.clone()).await?;
+            let log = CallLog::open(db.clone()).await?;
+            Contacts::open(db.clone()).await?;
+            Ok::<_, uplink_core::Error>((secret, db, settings, log))
+        })?;
         let id = secret.public();
-        let db = Db::open(data_dir)?;
-        let settings = Settings::open(db.clone())?;
         // Java keeps its own copy for a boot, but the store is what the user last chose.
         if let Err(e) = context.set_language(locale(settings.get(settings::LANGUAGE).as_deref())) {
             tracing::warn!("telling Java the language: {e}");
@@ -427,16 +430,18 @@ impl Core {
             String::new()
         });
         // The relays are read from the store by the endpoint's pilot, which the relay page steers.
-        let (node, events) = runtime.block_on(Node::start(secret, Network::Public(settings), &app))?;
+        let (node, events) = runtime.block_on(Node::start(secret, Network::Public(settings.clone()), &app))?;
         let inbox = Arc::<Mutex<Inbox>>::default();
         let ringer = Ringer { context, db: db.clone(), app, calls: node.handle() };
         let sending = Sending::default();
-        runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone(), Arc::clone(&sending)));
+        runtime.spawn(deliver(events, Arc::clone(&inbox), ringer.clone(), log.clone(), Arc::clone(&sending)));
         tracing::info!(%id, "core up");
         Ok(Self {
             calls: node.handle(),
             id,
             db,
+            settings,
+            log,
             inbox,
             sending,
             ringer,
@@ -475,6 +480,15 @@ impl Core {
 
     pub fn db(&self) -> Db {
         self.db.clone()
+    }
+
+    /// The one copy of the settings, shared with the endpoint.
+    pub fn settings(&self) -> Settings {
+        self.settings.clone()
+    }
+
+    pub fn log(&self) -> CallLog {
+        self.log.clone()
     }
 
     /// A window says where to send events while it is up. The previous one, if any, stops

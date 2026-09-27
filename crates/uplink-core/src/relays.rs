@@ -144,10 +144,10 @@ impl Choice {
         Self { auto: !store.flag(RELAYS_MANUAL), ticked }
     }
 
-    pub fn save(&self, store: &Settings) -> Result<(), Error> {
-        store.set_flag(RELAYS_MANUAL, !self.auto)?;
+    pub async fn save(&self, store: &Settings) -> Result<(), Error> {
+        store.set_flag(RELAYS_MANUAL, !self.auto).await?;
         let lines: Vec<String> = self.ticked.iter().map(ToString::to_string).collect();
-        store.set_lines(RELAYS_TICKED, &lines)
+        store.set_lines(RELAYS_TICKED, &lines).await
     }
 
     /// The ticked relays that still exist, in catalogue order: a tick against a removed relay of
@@ -193,12 +193,12 @@ impl Ranking {
         Self { at, relays }
     }
 
-    pub fn save(&self, store: &Settings) -> Result<(), Error> {
+    pub async fn save(&self, store: &Settings) -> Result<(), Error> {
         let at = self.at.and_then(|at| at.duration_since(UNIX_EPOCH).ok()).unwrap_or_default().as_secs();
         let lines: Vec<String> = std::iter::once(at.to_string())
             .chain(self.relays.iter().map(|relay| format!("{} {}", relay.url, relay.rtt.as_millis())))
             .collect();
-        store.set_lines(RELAYS_RANKING, &lines)
+        store.set_lines(RELAYS_RANKING, &lines).await
     }
 
     pub fn rtt(&self, url: &RelayUrl) -> Option<Duration> {
@@ -256,7 +256,7 @@ pub fn custom(store: &Settings) -> Vec<Custom> {
 
 /// Adds a relay of yours, ticked. The URL is parsed here rather than stored and discovered to be
 /// unusable later, so a typo is refused while the person who made it is still looking at it.
-pub fn add_custom(store: &Settings, name: &str, url: &str) -> Result<(), Error> {
+pub async fn add_custom(store: &Settings, name: &str, url: &str) -> Result<(), Error> {
     let url = RelayUrl::from_str(url.trim()).map_err(|_| Error::RelayUrl(url.to_owned()))?;
     let name = name.trim();
     let added = Custom { name: if name.is_empty() { url.to_string() } else { name.to_owned() }, url };
@@ -269,21 +269,21 @@ pub fn add_custom(store: &Settings, name: &str, url: &str) -> Result<(), Error> 
         .map(|stored| stored.line())
         .collect();
     lines.push(added.line());
-    store.set_lines(RELAYS_CUSTOM, &lines)?;
+    store.set_lines(RELAYS_CUSTOM, &lines).await?;
     if !choice.ticked.contains(&added.url) {
         choice.ticked.push(added.url);
     }
-    choice.save(store)
+    choice.save(store).await
 }
 
 /// Removes one of yours, and its tick with it.
-pub fn remove_custom(store: &Settings, url: &RelayUrl) -> Result<(), Error> {
+pub async fn remove_custom(store: &Settings, url: &RelayUrl) -> Result<(), Error> {
     let mut choice = Choice::load(store);
     let lines: Vec<String> =
         custom(store).into_iter().filter(|stored| &stored.url != url).map(|stored| stored.line()).collect();
-    store.set_lines(RELAYS_CUSTOM, &lines)?;
+    store.set_lines(RELAYS_CUSTOM, &lines).await?;
     choice.ticked.retain(|ticked| ticked != url);
-    choice.save(store)
+    choice.save(store).await
 }
 
 #[cfg(test)]
@@ -291,8 +291,8 @@ mod tests {
     use super::*;
     use crate::db::Db;
 
-    fn settings() -> Result<Settings, Error> {
-        Settings::open(Db::memory()?)
+    async fn settings() -> Result<Settings, Error> {
+        Settings::open(Db::memory().await?).await
     }
 
     fn url(s: &str) -> Result<RelayUrl, Error> {
@@ -303,9 +303,9 @@ mod tests {
         Ok(Measured { url: url(s)?, rtt: Duration::from_millis(ms) })
     }
 
-    #[test]
-    fn a_fresh_install_ticks_everything_and_is_automatic() -> Result<(), Error> {
-        let store = settings()?;
+    #[tokio::test]
+    async fn a_fresh_install_ticks_everything_and_is_automatic() -> Result<(), Error> {
+        let store = settings().await?;
         let choice = Choice::load(&store);
         assert!(choice.auto);
         assert_eq!(choice.ticked.len(), catalogue(&store).len());
@@ -324,9 +324,9 @@ mod tests {
     }
 
     /// The standby must not be faster than the one in use, or iroh would pick it instead.
-    #[test]
-    fn the_standby_is_never_faster_than_the_primary() -> Result<(), Error> {
-        let store = settings()?;
+    #[tokio::test]
+    async fn the_standby_is_never_faster_than_the_primary() -> Result<(), Error> {
+        let store = settings().await?;
         let choice = Choice { auto: true, ticked: catalogue(&store).into_iter().map(|relay| relay.url).collect() };
         let [aps, euc] = [prod::default_ap_relay().url, prod::default_eu_relay().url];
         let ranking = Ranking {
@@ -341,21 +341,21 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn manual_uses_every_ticked_relay() -> Result<(), Error> {
-        let store = settings()?;
+    #[tokio::test]
+    async fn manual_uses_every_ticked_relay() -> Result<(), Error> {
+        let store = settings().await?;
         let ticked = vec![url(UPLINK)?, prod::default_ap_relay().url];
         let choice = Choice { auto: false, ticked: ticked.clone() };
         assert_eq!(active(&choice, &Ranking::default(), &catalogue(&store)), ticked);
         Ok(())
     }
 
-    #[test]
-    fn a_ranking_round_trips() -> Result<(), Error> {
-        let store = settings()?;
+    #[tokio::test]
+    async fn a_ranking_round_trips() -> Result<(), Error> {
+        let store = settings().await?;
         let ranking =
             Ranking { at: Some(UNIX_EPOCH + Duration::from_secs(1_000)), relays: vec![measured(UPLINK, 38)?] };
-        ranking.save(&store)?;
+        ranking.save(&store).await?;
         let back = Ranking::load(&store);
         assert_eq!(back.at, ranking.at);
         assert_eq!(back.relays, ranking.relays);
@@ -363,11 +363,11 @@ mod tests {
     }
 
     /// Adding is by URL, so the same relay twice is one relay with the newer name, and it is ticked.
-    #[test]
-    fn an_added_relay_is_ticked_once() -> Result<(), Error> {
-        let store = settings()?;
-        add_custom(&store, "Home", "https://relay.example.com")?;
-        add_custom(&store, "The one at home", "https://relay.example.com")?;
+    #[tokio::test]
+    async fn an_added_relay_is_ticked_once() -> Result<(), Error> {
+        let store = settings().await?;
+        add_custom(&store, "Home", "https://relay.example.com").await?;
+        add_custom(&store, "The one at home", "https://relay.example.com").await?;
         let listed = custom(&store);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "The one at home");
@@ -377,28 +377,28 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn a_removed_relay_loses_its_tick() -> Result<(), Error> {
-        let store = settings()?;
-        add_custom(&store, "Home", "https://relay.example.com")?;
-        remove_custom(&store, &url("https://relay.example.com")?)?;
+    #[tokio::test]
+    async fn a_removed_relay_loses_its_tick() -> Result<(), Error> {
+        let store = settings().await?;
+        add_custom(&store, "Home", "https://relay.example.com").await?;
+        remove_custom(&store, &url("https://relay.example.com")?).await?;
         assert!(custom(&store).is_empty());
         assert!(!Choice::load(&store).ticked.contains(&url("https://relay.example.com")?));
         Ok(())
     }
 
     /// A typo is refused while it is still on screen, rather than stored and found unusable later.
-    #[test]
-    fn a_relay_that_is_not_a_url_is_refused() -> Result<(), Error> {
-        let store = settings()?;
-        assert!(add_custom(&store, "Nope", "not a url").is_err());
+    #[tokio::test]
+    async fn a_relay_that_is_not_a_url_is_refused() -> Result<(), Error> {
+        let store = settings().await?;
+        assert!(add_custom(&store, "Nope", "not a url").await.is_err());
         assert!(custom(&store).is_empty());
         Ok(())
     }
 
-    #[test]
-    fn the_map_is_never_empty() -> Result<(), Error> {
-        let store = settings()?;
+    #[tokio::test]
+    async fn the_map_is_never_empty() -> Result<(), Error> {
+        let store = settings().await?;
         assert!(!map(&[], &store).is_empty());
         Ok(())
     }

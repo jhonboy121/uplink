@@ -195,7 +195,7 @@ impl Pilot {
             tracing::warn!(timed_out = waited.is_err(), "relay survey: nothing answered; keeping the last ranking");
         } else {
             self.ranking = Ranking { at: Some(SystemTime::now()), relays: relays::rank(best) };
-            if let Err(e) = self.ranking.save(&self.store) {
+            if let Err(e) = self.ranking.save(&self.store).await {
                 tracing::warn!("storing the relay ranking: {e}");
             }
         }

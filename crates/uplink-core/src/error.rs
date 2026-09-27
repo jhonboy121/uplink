@@ -8,8 +8,8 @@ pub enum Error {
     CorruptKey(PathBuf),
     #[error(transparent)]
     KeyParse(#[from] iroh::KeyParsingError),
-    #[error("contacts: {0}")]
-    Contacts(#[from] rusqlite::Error),
+    #[error("database: {0}")]
+    Database(#[from] turso::Error),
     #[error("contact `{0}` already exists")]
     DuplicateContact(String),
     #[error("unknown contact `{0}`")]

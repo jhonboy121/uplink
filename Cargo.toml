@@ -49,10 +49,11 @@ roxmltree = "0.20"
 # The writing half: android-res generates the vector drawables as elements and attributes, not
 # strings. Already in the lock through Slint's SVG support, so it costs nothing new.
 xmlwriter = "0.1"
-# Contacts. `bundled` compiles SQLite's own C through our clang wrapper, like libopus; the
-# alternative pure-Rust rewrite is beta by its maintainers' own account, and contacts are the one
-# thing here a person cannot regenerate.
-rusqlite = { version = "0.37", features = ["bundled"] }
+# Contacts, the call log and settings: Turso, a pure-Rust rewrite of SQLite reading and writing
+# its file format, async throughout. Pinned: it is a pre-release, and contacts are the one thing
+# here a person cannot regenerate. No default features: those add a C allocator and full-text
+# search, and on Android it is then entirely Rust (plain file IO, pure-Rust crypto).
+turso = { version = "=0.8.0-pre.13", default-features = false }
 # Deflate and CRC32 for the APK writer, pure Rust: `zipalign` is x86-64 like aapt2, and API 30+
 # refuses an APK whose resources.arsc is compressed or unaligned.
 flate2 = { version = "1.1", default-features = false, features = [

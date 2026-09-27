@@ -855,34 +855,68 @@ fn show_open_contact(state: &Rc<RefCell<State>>, ui: &App, peer: EndpointId) {
 const CALLS_SHOWN: i64 = 100;
 
 /// Fills the Calls screen, newest first, grouped by day. A search looks through all that is kept.
+/// Read from the database, so the list arrives a moment later; loads finish in the order they
+/// were asked for (the database's lock is fair), so the last search's rows are the ones left.
 fn show_calls(state: &Rc<RefCell<State>>, ui: &App) {
     let search = view::Search::new(&ui.get_calls_query());
     let limit = if search.is_empty() { CALLS_SHOWN } else { calls::KEEP };
-    let items = with_state_value(state, |s| match s.log.recent(limit) {
-        Ok(records) => view::call_items(&records, &s.contacts, &s.clock, &s.selected_calls, &search),
-        Err(e) => {
+    let Some(log) = with_state_value(state, |s| s.log.clone()) else { return };
+    let (state, weak) = (Rc::clone(state), ui.as_weak());
+    spawn(async move {
+        let records = log.recent(limit).await.unwrap_or_else(|e| {
             tracing::warn!("reading the call log: {e}");
             Vec::new()
+        });
+        let Some(ui) = weak.upgrade() else { return };
+        let items =
+            with_state_value(&state, |s| view::call_items(&records, &s.contacts, &s.clock, &s.selected_calls, &search));
+        if let Some(items) = items {
+            ui.set_calls(view::refill(ui.get_calls(), items));
         }
+        let count = with_state_value(&state, |s| i32::try_from(s.selected_calls.len()).unwrap_or(i32::MAX));
+        ui.set_selected_calls_count(count.unwrap_or_default());
     });
-    if let Some(items) = items {
-        ui.set_calls(view::refill(ui.get_calls(), items));
-    }
-    let count = with_state_value(state, |s| i32::try_from(s.selected_calls.len()).unwrap_or(i32::MAX));
-    ui.set_selected_calls_count(count.unwrap_or_default());
 }
 
 fn with_contacts<T>(state: &Rc<RefCell<State>>, f: impl FnOnce(&Contacts) -> T) -> Option<T> {
     state.try_borrow().ok().map(|s| f(&s.contacts))
 }
 
-/// Applies a change, which the store writes as it goes; the error is what the UI shows.
-fn save_contact(
+/// Changes the contacts through a fresh handle, so the state is never borrowed across the
+/// database's await, then puts the reloaded list in the state. What changed is the store's to
+/// say; the list shown is whatever it holds afterwards, failed change or not.
+async fn save_contact(
     state: &Rc<RefCell<State>>,
-    change: impl FnOnce(&mut Contacts) -> Result<(), uplink_core::Error>,
+    change: impl AsyncFnOnce(&mut Contacts) -> Result<(), uplink_core::Error>,
 ) -> Result<(), String> {
-    let mut state = state.try_borrow_mut().map_err(|_| "busy, try again".to_owned())?;
-    change(&mut state.contacts).map_err(|e| e.to_string())
+    let db = state.try_borrow().map_err(|_| "busy, try again".to_owned())?.contacts.db();
+    let mut contacts = Contacts::open(db).await.map_err(|e| e.to_string())?;
+    let changed = change(&mut contacts).await.map_err(|e| e.to_string());
+    with_state(state, |s| s.contacts = contacts);
+    changed
+}
+
+/// Re-reads the contacts (at launch, or after the core has written a call and stamped one) and
+/// shows both lists, the calls after the contacts: a call's row is named from them.
+fn reload_lists(state: &Rc<RefCell<State>>, ui: &App) {
+    let (state, weak) = (Rc::clone(state), ui.as_weak());
+    spawn(async move {
+        if let Err(e) = save_contact(&state, async |_| Ok(())).await {
+            tracing::warn!("re-reading contacts: {e}");
+        }
+        if let Some(ui) = weak.upgrade() {
+            show_contacts(&state, &ui);
+            show_calls(&state, &ui);
+        }
+    });
+}
+
+/// Runs `work` on the UI thread. The database's futures step their own IO, so they need no
+/// runtime of their own; whatever they change in the state and the window is theirs to set.
+fn spawn(work: impl Future<Output = ()> + 'static) {
+    if let Err(e) = slint::spawn_local(work) {
+        tracing::error!("spawning on the UI thread: {e}");
+    }
 }
 
 fn with_state_value<T>(state: &Rc<RefCell<State>>, f: impl FnOnce(&mut State) -> T) -> Option<T> {
@@ -1126,9 +1160,12 @@ fn offer_battery_exemption(ui: &App, platform: &Platform, settings: &Settings) {
 /// The explainer was answered, either way.
 fn battery_offered(ui: &App, settings: &Settings) {
     ui.set_battery_ask(false);
-    if let Err(e) = settings.set_flag(settings::BATTERY_OFFERED, true) {
-        tracing::warn!("recording the battery offer: {e}");
-    }
+    let settings = settings.clone();
+    spawn(async move {
+        if let Err(e) = settings.set_flag(settings::BATTERY_OFFERED, true).await {
+            tracing::warn!("recording the battery offer: {e}");
+        }
+    });
 }
 
 /// Asks for each missing permission in turn, then re-reads the gate.
@@ -1350,10 +1387,11 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         tracing::warn!("staying reachable: {e}");
     }
     let identity = *core.id();
-    // Three views of the core's one connection; each creates its own table on top of it.
-    let contacts = Contacts::open(core.db())?;
-    let log = CallLog::open(core.db())?;
-    let settings = Settings::open(core.db())?;
+    // The core's stores, which it opened: the settings are its one shared copy. The contacts
+    // start empty so the window can draw at once, and fill as soon as the database answers.
+    let contacts = Contacts::empty(core.db());
+    let log = core.log();
+    let settings = core.settings();
     let runtime = core.runtime().handle().clone();
 
     let state = Rc::new(RefCell::new(State {
@@ -1437,8 +1475,7 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         }
         Err(e) => tracing::error!("identity qr: {e:#}"),
     }
-    show_contacts(&state, &ui);
-    show_calls(&state, &ui);
+    reload_lists(&state, &ui);
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_search_people(move |_| {
@@ -1482,19 +1519,25 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     ui.on_remove_selected(move || {
         // Taken first so a failure part-way leaves the rest of the list alone.
         let chosen = with_state_value(&s, |state| state.selected.drain().collect::<Vec<_>>()).unwrap_or_default();
-        let failed = chosen
-            .iter()
-            .filter(|peer| save_contact(&s, |contacts| contacts.remove_id(**peer).map(drop)).is_err())
-            .count();
         if let Some(ui) = weak.upgrade() {
             ui.set_selecting(false);
+        }
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let mut failed = 0usize;
+            for peer in &chosen {
+                if save_contact(&s, async |contacts| contacts.remove_id(*peer).await.map(drop)).await.is_err() {
+                    failed += 1;
+                }
+            }
+            let Some(ui) = weak.upgrade() else { return };
             show_contacts(&s, &ui);
             if failed > 0 {
                 let (count, total) = (i32::try_from(failed), i32::try_from(chosen.len()));
                 let (count, total) = (count.unwrap_or(i32::MAX), total.unwrap_or(i32::MAX));
                 view::say_counted(&ui, Toast { say: Say::SomeNotRemoved, subject: Default::default(), count, total });
             }
-        }
+        });
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_open_contact_page(move |id| {
@@ -1505,8 +1548,10 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_set_favourite(move |id, favourite| {
         let Ok(peer) = EndpointId::from_str(id.trim()) else { return };
-        let outcome = save_contact(&s, |contacts| contacts.set_favourite(peer, favourite));
-        if let Some(ui) = weak.upgrade() {
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let outcome = save_contact(&s, async |contacts| contacts.set_favourite(peer, favourite).await).await;
+            let Some(ui) = weak.upgrade() else { return };
             match outcome {
                 Ok(()) => {
                     show_contacts(&s, &ui);
@@ -1514,52 +1559,61 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 }
                 Err(e) => toast(&ui, Say::Failed, e),
             }
-        }
+        });
     });
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_clear_calls(move || {
-        with_state(&s, |state| {
-            if let Err(e) = state.log.clear() {
+        let Some(log) = with_state_value(&s, |state| state.log.clone()) else { return };
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            if let Err(e) = log.clear().await {
                 tracing::warn!("clearing the call log: {e}");
             }
+            if let Some(ui) = weak.upgrade() {
+                show_calls(&s, &ui);
+            }
         });
-        if let Some(ui) = weak.upgrade() {
-            show_calls(&s, &ui);
-        }
     });
     // A call's details, read fresh from the log rather than from the list's model, which only
     // carries what a row shows.
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_show_call(move |entry| {
-        let Some(ui) = weak.upgrade() else { return };
         let Ok(id) = entry.parse::<CallId>() else { return };
-        let found = with_state_value(&s, |state| {
-            state.log.get(id).map(|logged| {
-                logged.map(|logged| {
-                    let saved = state.contacts.name_of(&logged.call.peer).map(str::to_owned);
-                    view::call_detail(&logged, saved, &state.clock)
-                })
-            })
+        let Some(log) = with_state_value(&s, |state| state.log.clone()) else { return };
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let found = log.get(id).await;
+            let Some(ui) = weak.upgrade() else { return };
+            match found {
+                Ok(Some(logged)) => {
+                    let detail = with_state_value(&s, |state| {
+                        let saved = state.contacts.name_of(&logged.call.peer).map(str::to_owned);
+                        view::call_detail(&logged, saved, &state.clock)
+                    });
+                    if let Some(detail) = detail {
+                        ui.set_open_call(one(detail));
+                    }
+                }
+                // Removed or trimmed since the list was drawn: the list is what is stale.
+                Ok(None) => show_calls(&s, &ui),
+                Err(e) => toast(&ui, Say::CallUnreadable, e),
+            }
         });
-        match found {
-            Some(Ok(Some(detail))) => ui.set_open_call(one(detail)),
-            // Removed or trimmed since the list was drawn: the list is what is stale.
-            Some(Ok(None)) => show_calls(&s, &ui),
-            Some(Err(e)) => toast(&ui, Say::CallUnreadable, e),
-            None => {}
-        }
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_remove_call(move |entry| {
         let Ok(id) = entry.parse::<CallId>() else { return };
-        let removed = with_state_value(&s, |state| state.log.remove(&[id]));
-        if let Some(ui) = weak.upgrade() {
+        let Some(log) = with_state_value(&s, |state| state.log.clone()) else { return };
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let removed = log.remove(&[id]).await;
+            let Some(ui) = weak.upgrade() else { return };
             show_calls(&s, &ui);
-            if let Some(Err(e)) = removed {
+            if let Err(e) = removed {
                 toast(&ui, Say::CallNotRemoved, e);
             }
-        }
+        });
     });
     // Selecting calls works as selecting contacts does, on its own set of ticks.
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
@@ -1588,17 +1642,23 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_remove_selected_calls(move || {
-        let removed = with_state_value(&s, |state| {
-            let chosen = state.selected_calls.drain().collect::<Vec<_>>();
-            state.log.remove(&chosen)
-        });
+        let Some((log, chosen)) =
+            with_state_value(&s, |state| (state.log.clone(), state.selected_calls.drain().collect::<Vec<_>>()))
+        else {
+            return;
+        };
         if let Some(ui) = weak.upgrade() {
             ui.set_selecting_calls(false);
+        }
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let removed = log.remove(&chosen).await;
+            let Some(ui) = weak.upgrade() else { return };
             show_calls(&s, &ui);
-            if let Some(Err(e)) = removed {
+            if let Err(e) = removed {
                 toast(&ui, Say::CallsNotRemoved, e);
             }
-        }
+        });
     });
 
     // Android's dialogs only ever follow a tap on the gate, never a launch: a dialog over a screen
@@ -1691,9 +1751,12 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
 
     let s = settings.clone();
     ui.on_appearance_changed(move |appearance| {
-        if let Err(e) = s.set(settings::APPEARANCE, appearance_name(appearance)) {
-            tracing::warn!("storing the appearance: {e}");
-        }
+        let s = s.clone();
+        spawn(async move {
+            if let Err(e) = s.set(settings::APPEARANCE, appearance_name(appearance)).await {
+                tracing::warn!("storing the appearance: {e}");
+            }
+        });
     });
     let (s, weak) = (settings.clone(), ui.as_weak());
     let p = Rc::clone(&platform);
@@ -1702,9 +1765,12 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
             show_language(&ui, language);
         }
         let code = language_code(language);
-        if let Err(e) = s.set(settings::LANGUAGE, code) {
-            tracing::warn!("storing the language: {e}");
-        }
+        let stored = s.clone();
+        spawn(async move {
+            if let Err(e) = stored.set(settings::LANGUAGE, code).await {
+                tracing::warn!("storing the language: {e}");
+            }
+        });
         // Notifications speak it too. Restarting the listening service re-posts the one that is
         // always up; the rest pick it up the next time they are posted.
         if let Err(e) = p.context().set_language(core::locale(Some(code))) {
@@ -1718,23 +1784,19 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     // the live endpoint, so there is no Save and no rebind.
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_set_relays_auto(move |auto| {
-        let Some(ui) = weak.upgrade() else { return };
-        let mut choice = Choice::load(&s.borrow().settings);
+        let settings = s.borrow().settings.clone();
+        let mut choice = Choice::load(&settings);
         choice.auto = auto;
-        if let Err(e) = choice.save(&s.borrow().settings) {
-            tracing::warn!("storing the relay mode: {e}");
-        }
-        show_relays(&s, &ui);
-        steer_relays(&s, Steer::Reload);
+        save_relays(&s, &weak, "the relay mode", async move || choice.save(&settings).await);
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_tick_relay(move |url, on| {
-        let Some(ui) = weak.upgrade() else { return };
         let Ok(url) = url.parse::<RelayUrl>() else {
             tracing::warn!(%url, "ticked a relay that is not a URL");
             return;
         };
-        let mut choice = Choice::load(&s.borrow().settings);
+        let settings = s.borrow().settings.clone();
+        let mut choice = Choice::load(&settings);
         choice.ticked.retain(|ticked| *ticked != url);
         if on {
             choice.ticked.push(url);
@@ -1743,42 +1805,38 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         if choice.ticked.is_empty() {
             return;
         }
-        if let Err(e) = choice.save(&s.borrow().settings) {
-            tracing::warn!("storing the relay ticks: {e}");
-        }
-        show_relays(&s, &ui);
-        steer_relays(&s, Steer::Reload);
+        save_relays(&s, &weak, "the relay ticks", async move || choice.save(&settings).await);
     });
     let s = Rc::clone(&state);
     ui.on_check_relays(move || steer_relays(&s, Steer::Check));
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_relay(move |name, url| {
-        let Some(ui) = weak.upgrade() else { return };
-        let added = relays::add_custom(&s.borrow().settings, &name, &url);
-        match added {
-            Ok(()) => {
-                ui.set_adding_relay(false);
-                ui.set_new_relay_name(Default::default());
-                ui.set_new_relay_url(Default::default());
-                show_relays(&s, &ui);
-                steer_relays(&s, Steer::Reload);
+        let settings = s.borrow().settings.clone();
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let added = relays::add_custom(&settings, &name, &url).await;
+            let Some(ui) = weak.upgrade() else { return };
+            match added {
+                Ok(()) => {
+                    ui.set_adding_relay(false);
+                    ui.set_new_relay_name(Default::default());
+                    ui.set_new_relay_url(Default::default());
+                    show_relays(&s, &ui);
+                    steer_relays(&s, Steer::Reload);
+                }
+                Err(uplink_core::Error::RelayUrl(url)) => toast(&ui, Say::RelayInvalid, url),
+                Err(e) => toast(&ui, Say::Failed, e),
             }
-            Err(uplink_core::Error::RelayUrl(url)) => toast(&ui, Say::RelayInvalid, url),
-            Err(e) => toast(&ui, Say::Failed, e),
-        }
+        });
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_remove_relay(move |url| {
-        let Some(ui) = weak.upgrade() else { return };
         let Ok(parsed) = url.parse::<RelayUrl>() else {
             tracing::warn!(%url, "removing a relay that is not a URL");
             return;
         };
-        if let Err(e) = relays::remove_custom(&s.borrow().settings, &parsed) {
-            tracing::warn!(%url, "removing the relay: {e}");
-        }
-        show_relays(&s, &ui);
-        steer_relays(&s, Steer::Reload);
+        let settings = s.borrow().settings.clone();
+        save_relays(&s, &weak, "the relay removal", async move || relays::remove_custom(&settings, &parsed).await);
     });
     show_relays(&state, &ui);
 
@@ -1964,14 +2022,19 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
     ui.on_choose_quality(move |wifi, preset| {
         let network = if wifi { PresetNetwork::Wifi } else { PresetNetwork::Mobile };
         let preset = view::core_preset(preset);
-        if let Some(Err(e)) = with_state_value(&s, |state| preset.choose(&state.settings, network)) {
-            tracing::warn!(?network, ?preset, "saving the call quality: {e}");
-        }
         tracing::info!(?network, ?preset, "call quality chosen");
-        if let Some(ui) = weak.upgrade() {
-            show_quality(&s, &ui, &p);
-        }
-        requalify(&s, &p);
+        let Some(settings) = with_state_value(&s, |state| state.settings.clone()) else { return };
+        let (s, p, weak) = (Rc::clone(&s), Rc::clone(&p), weak.clone());
+        // Shown and put in force once saved: both read the choice back from the settings.
+        spawn(async move {
+            if let Err(e) = preset.choose(&settings, network).await {
+                tracing::warn!(?network, ?preset, "saving the call quality: {e}");
+            }
+            if let Some(ui) = weak.upgrade() {
+                show_quality(&s, &ui, &p);
+            }
+            requalify(&s, &p);
+        });
     });
     show_quality(&state, &ui, &platform);
 
@@ -1991,56 +2054,69 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
         let Some(ui) = weak.upgrade() else { return };
         let on = !ui.get_reject_unknown();
         tracing::info!(on, "reject unknown callers");
-        match with_state_value(&s, |state| state.settings.set_flag(settings::REJECT_UNKNOWN, on)) {
-            Some(Ok(())) => ui.set_reject_unknown(on),
-            Some(Err(e)) => tracing::warn!("saving reject unknown callers: {e}"),
-            None => {}
-        }
+        let Some(settings) = with_state_value(&s, |state| state.settings.clone()) else { return };
+        let weak = weak.clone();
+        spawn(async move {
+            match settings.set_flag(settings::REJECT_UNKNOWN, on).await {
+                Ok(()) => {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_reject_unknown(on);
+                    }
+                }
+                Err(e) => tracing::warn!("saving reject unknown callers: {e}"),
+            }
+        });
     });
 
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_add_contact(move |name, key| {
         let Some(ui) = weak.upgrade() else { return };
-        let name = name.trim();
+        let name = name.trim().to_owned();
         let problem = |error, subject: &str| AddProblem { error, subject: subject.into() };
-        let outcome = peer_key(&key, &identity)
-            .map_err(|unusable| problem(unusable.add_error(), ""))
-            .and_then(|id| {
-                // The same key and the same name are different mistakes, and the store's one
-                // error for both cannot say which: a new name would fix only the second.
-                let taken = with_contacts(&s, |contacts| {
-                    let saved = contacts.name_of(&id).map(str::to_owned);
-                    (saved, contacts.iter().any(|contact| contact.name == name))
-                });
-                match taken {
-                    Some((Some(saved), _)) => Err(problem(AddError::AlreadySaved, &saved)),
-                    Some((None, true)) => Err(problem(AddError::NameTaken, name)),
-                    _ => Ok(id),
-                }
-            })
-            .and_then(|id| {
-                save_contact(&s, |contacts| contacts.add(name, id))
-                    .map(|()| id)
-                    .map_err(|e| problem(AddError::Failed, &e))
+        let checked = peer_key(&key, &identity).map_err(|unusable| problem(unusable.add_error(), "")).and_then(|id| {
+            // The same key and the same name are different mistakes, and the store's one
+            // error for both cannot say which: a new name would fix only the second.
+            let taken = with_contacts(&s, |contacts| {
+                let saved = contacts.name_of(&id).map(str::to_owned);
+                (saved, contacts.iter().any(|contact| contact.name == name))
             });
-        match outcome {
-            Ok(id) => {
-                forget_pending_key(&ui);
-                // Added from a call's details, perhaps: that page has done its job.
-                ui.set_open_call(none());
-                show_added(&s, &ui, id);
+            match taken {
+                Some((Some(saved), _)) => Err(problem(AddError::AlreadySaved, &saved)),
+                Some((None, true)) => Err(problem(AddError::NameTaken, &name)),
+                _ => Ok(id),
             }
-            // Under the field, in the sheet that is still open: the user can fix it right there.
-            Err(problem) => {
-                tracing::info!(error = ?problem.error, subject = %problem.subject, "adding a contact");
-                ui.set_add_problem(one(problem));
+        });
+        // Under the field, in the sheet that is still open: the user can fix it right there.
+        let show_problem = |ui: &App, problem: AddProblem| {
+            tracing::info!(error = ?problem.error, subject = %problem.subject, "adding a contact");
+            ui.set_add_problem(one(problem));
+        };
+        let id = match checked {
+            Ok(id) => id,
+            Err(problem) => return show_problem(&ui, problem),
+        };
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let saved = save_contact(&s, async |contacts| contacts.add(&name, id).await).await;
+            let Some(ui) = weak.upgrade() else { return };
+            match saved {
+                Ok(()) => {
+                    forget_pending_key(&ui);
+                    // Added from a call's details, perhaps: that page has done its job.
+                    ui.set_open_call(none());
+                    show_added(&s, &ui, id);
+                }
+                Err(e) => show_problem(&ui, problem(AddError::Failed, &e)),
             }
-        }
+        });
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_rename_contact(move |key, name| {
-        if let Ok(id) = EndpointId::from_str(key.trim()) {
-            let outcome = save_contact(&s, |contacts| contacts.rename(id, name.trim()));
+        let Ok(id) = EndpointId::from_str(key.trim()) else { return };
+        let name = name.trim().to_owned();
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let outcome = save_contact(&s, async |contacts| contacts.rename(id, &name).await).await;
             match (outcome, weak.upgrade()) {
                 (Ok(()), Some(ui)) => {
                     show_contacts(&s, &ui);
@@ -2051,18 +2127,20 @@ fn run(app: AndroidApp, data_dir: &Path) -> Result<()> {
                 (Err(e), Some(ui)) => toast(&ui, Say::Failed, e),
                 _ => {}
             }
-        }
+        });
     });
     let (s, weak) = (Rc::clone(&state), ui.as_weak());
     ui.on_remove_contact(move |key| {
-        if let Ok(id) = EndpointId::from_str(key.trim()) {
-            let outcome = save_contact(&s, |contacts| contacts.remove_id(id).map(drop));
+        let Ok(id) = EndpointId::from_str(key.trim()) else { return };
+        let (s, weak) = (Rc::clone(&s), weak.clone());
+        spawn(async move {
+            let outcome = save_contact(&s, async |contacts| contacts.remove_id(id).await.map(drop)).await;
             match (outcome, weak.upgrade()) {
                 (Ok(()), Some(ui)) => show_contacts(&s, &ui),
                 (Err(e), Some(ui)) => toast(&ui, Say::Failed, e),
                 _ => {}
             }
-        }
+        });
     });
     let (s, p) = (Rc::clone(&state), Rc::clone(&platform));
     ui.on_pick_key(move || pick_key(&s, &p));
@@ -2477,6 +2555,26 @@ fn vote_frame_rate(window: &NativeWindow, platform: &Platform) {
     }
 }
 
+/// Writes a relay change, then shows it and has the pilot reload, in that order: the pilot reads
+/// the settings the write lands in, so reloading first would use the old ones.
+fn save_relays(
+    state: &Rc<RefCell<State>>,
+    weak: &slint::Weak<App>,
+    what: &'static str,
+    save: impl AsyncFnOnce() -> Result<(), uplink_core::Error> + 'static,
+) {
+    let (state, weak) = (Rc::clone(state), weak.clone());
+    spawn(async move {
+        if let Err(e) = save().await {
+            tracing::warn!("storing {what}: {e}");
+        }
+        if let Some(ui) = weak.upgrade() {
+            show_relays(&state, &ui);
+        }
+        steer_relays(&state, Steer::Reload);
+    });
+}
+
 /// Tells Java whether our windows may be captured: the user's choice, or the call's ask.
 fn apply_capture(state: &Rc<RefCell<State>>, platform: &Platform) {
     let Some(secure) = with_state_value(state, |s| s.capture.secure()) else { return };
@@ -2494,15 +2592,22 @@ fn show_capture(state: &Rc<RefCell<State>>, ui: &App) {
 
 /// Saves the screenshots choice as its two flags and puts it in force at once, mid-call too.
 fn choose_capture(state: &Rc<RefCell<State>>, platform: &Platform, ui: &App, choice: Screenshots) {
-    let saved = with_state_value(state, |s| {
+    let chosen = with_state_value(state, |s| {
         s.capture.choose(choice);
         tracing::info!(?choice, "screenshots choice");
-        s.settings
-            .set_flag(settings::BLOCK_CAPTURE, s.capture.block)
-            .and_then(|()| s.settings.set_flag(settings::ASK_BLOCK_CAPTURE, s.capture.ask))
+        (s.settings.clone(), s.capture.block, s.capture.ask)
     });
-    if let Some(Err(e)) = saved {
-        tracing::warn!("saving the screenshots choice: {e}");
+    // In force at once from the state; saved behind it.
+    if let Some((settings, block, ask)) = chosen {
+        spawn(async move {
+            let saved = match settings.set_flag(settings::BLOCK_CAPTURE, block).await {
+                Ok(()) => settings.set_flag(settings::ASK_BLOCK_CAPTURE, ask).await,
+                failed => failed,
+            };
+            if let Err(e) = saved {
+                tracing::warn!("saving the screenshots choice: {e}");
+            }
+        });
     }
     apply_capture(state, platform);
     show_capture(state, ui);
@@ -2803,13 +2908,7 @@ async fn handle_node_events(
             }
             // The core has already written the call and stamped the contact; read both back.
             Event::Ended { peer, reason } => {
-                with_state(&state, |s| {
-                    if let Err(e) = s.contacts.reload() {
-                        tracing::warn!("re-reading contacts: {e}");
-                    }
-                });
-                show_calls(&state, &ui);
-                show_contacts(&state, &ui);
+                reload_lists(&state, &ui);
                 // In front, the notice is on screen; the core's notification is for when it is not.
                 if let (Some(peer), EndReason::Incompatible { behind, theirs }) = (peer, reason) {
                     let name = with_contacts(&state, |contacts| view::name_of(contacts, peer));

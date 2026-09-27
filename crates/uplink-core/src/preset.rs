@@ -109,8 +109,8 @@ impl Preset {
         settings.get(network.key()).and_then(|key| Self::from_key(&key)).unwrap_or(network.default_preset())
     }
 
-    pub fn choose(self, settings: &Settings, network: Network) -> Result<(), Error> {
-        settings.set(network.key(), self.key())
+    pub async fn choose(self, settings: &Settings, network: Network) -> Result<(), Error> {
+        settings.set(network.key(), self.key()).await
     }
 
     /// This, or the highest step below it this phone can send; the lowest if it can send none,

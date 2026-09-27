@@ -816,11 +816,11 @@ async fn first_offer(connection: &Connection, signals: &mut Signals) -> Result<H
 
 /// Whether reject unknown callers is on and `peer` is not a contact. A store that cannot be read
 /// rings: a contact who cannot get through is worse than a stranger who can.
-fn screened(settings: &Settings, peer: &EndpointId) -> bool {
+async fn screened(settings: &Settings, peer: &EndpointId) -> bool {
     if !settings.flag(crate::settings::REJECT_UNKNOWN) {
         return false;
     }
-    match crate::contacts::Contacts::known(settings.db(), peer) {
+    match crate::contacts::Contacts::known(settings.db(), peer).await {
         Ok(known) => !known,
         Err(e) => {
             tracing::warn!("reading contacts to screen a call; it rings: {e}");
@@ -855,7 +855,11 @@ async fn ring(
     let mode = if setup.voice { Mode::Voice } else { Mode::Video };
     // Turned away as a decline before anything rings, and logged. The connection is already up by
     // now, so this does not hide that the key answers: only the phone stays quiet.
-    if gate.is_some_and(|settings| screened(settings, &peer)) {
+    let screen = match gate {
+        Some(settings) => screened(settings, &peer).await,
+        None => false,
+    };
+    if screen {
         tracing::info!(%peer, ?mode, "screened: not in contacts");
         finish(&connection, &mut send, Signal::Reject, CLOSE_REJECTED).await?;
         return Ok(Some(EndReason::Screened { mode }));
@@ -1286,18 +1290,18 @@ mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(10);
 
-    #[test]
-    fn only_unknown_keys_are_screened_and_only_when_asked() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn only_unknown_keys_are_screened_and_only_when_asked() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
-        let db = crate::db::Db::open(dir.path())?;
-        let settings = Settings::open(db.clone())?;
-        let mut contacts = crate::contacts::Contacts::open(db)?;
+        let db = crate::db::Db::open(dir.path()).await?;
+        let settings = Settings::open(db.clone()).await?;
+        let mut contacts = crate::contacts::Contacts::open(db).await?;
         let (saved, stranger) = (SecretKey::generate().public(), SecretKey::generate().public());
-        contacts.add("Noor", saved)?;
-        assert!(!screened(&settings, &stranger), "off by default: everyone rings");
-        settings.set_flag(crate::settings::REJECT_UNKNOWN, true)?;
-        assert!(screened(&settings, &stranger));
-        assert!(!screened(&settings, &saved));
+        contacts.add("Noor", saved).await?;
+        assert!(!screened(&settings, &stranger).await, "off by default: everyone rings");
+        settings.set_flag(crate::settings::REJECT_UNKNOWN, true).await?;
+        assert!(screened(&settings, &stranger).await);
+        assert!(!screened(&settings, &saved).await);
         Ok(())
     }
 

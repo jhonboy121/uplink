@@ -95,14 +95,14 @@ async fn run(dir: &Path, cli: Cli) -> Result<()> {
     match cli {
         Cli::Id => println!("{}", identity::load_or_create(dir, &identity::Plain).await?.public()),
         Cli::Contacts => {
-            for contact in Contacts::open(Db::open(dir)?)?.iter() {
+            for contact in Contacts::open(Db::open(dir).await?).await?.iter() {
                 let mark = if contact.favourite { "*" } else { " " };
                 println!("{mark}\t{}\t{}", contact.name, contact.id);
             }
         }
-        Cli::Add { name, key } => Contacts::open(Db::open(dir)?)?.add(&name, key)?,
+        Cli::Add { name, key } => Contacts::open(Db::open(dir).await?).await?.add(&name, key).await?,
         Cli::Remove { name } => {
-            Contacts::open(Db::open(dir)?)?.remove(&name)?;
+            Contacts::open(Db::open(dir).await?).await?.remove(&name).await?;
         }
     }
     Ok(())
