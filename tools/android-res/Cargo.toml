@@ -4,6 +4,7 @@ description = "Writes Android's binary resource formats — manifest, XML and re
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lints]
 workspace = true

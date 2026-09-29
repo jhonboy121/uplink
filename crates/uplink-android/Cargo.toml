@@ -4,6 +4,7 @@ description = "Android platform layer: logging, JNI, camera, zero-copy GL previe
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 android-activity.workspace = true

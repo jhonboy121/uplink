@@ -4,6 +4,7 @@ description = "Platform-agnostic core: identity, contacts, iroh endpoint, call s
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 ab_glyph.workspace = true

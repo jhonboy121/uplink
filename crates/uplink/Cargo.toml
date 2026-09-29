@@ -4,6 +4,7 @@ description = "uplink Android app (NativeActivity cdylib)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 crate-type = ["cdylib"]

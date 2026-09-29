@@ -4,6 +4,7 @@ description = "Renders the app's Slint markup on the host, so layout can be chec
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 anyhow.workspace = true

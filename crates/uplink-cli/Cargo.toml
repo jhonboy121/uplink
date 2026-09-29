@@ -4,6 +4,7 @@ description = "Host CLI for uplink-core: identity, contacts, and a call TUI that
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "uplink"
