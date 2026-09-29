@@ -878,7 +878,8 @@ default); keep disk usage lean. Avoid build scripts.
   `c` to check now.
   Replaces the n0-or-custom sheet and its off-list (2026-09-24), and "n0 relays for now" (2026-09-22).
   - **The catalogue is all three, together:** **uplink's** own (one for now,
-    `https://uplink-relay.example.com`, self-hosted, the primary), **n0's** four (from
+    self-hosted, the primary; its URL is `UPLINK_RELAY` from the uncommitted
+    `.cargo/config.local.toml`, an example domain without it), **n0's** four (from
     `iroh::defaults::prod`, never hardcoded), and **yours** (N, added by URL and name). There is no
     "use custom instead of n0" switch any more: every relay in the catalogue can be chosen.
   - **Stored as a selection, not a deny list.** `relays-selected` holds the URLs that are on. The

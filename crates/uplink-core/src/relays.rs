@@ -17,8 +17,12 @@ use iroh::{RelayMap, RelayUrl, defaults::prod};
 use crate::Error;
 use crate::settings::{RELAYS_CUSTOM, RELAYS_MANUAL, RELAYS_RANKING, RELAYS_TICKED, Settings};
 
-/// uplink's own relay, self-hosted. Preferred: see [`rank`].
-pub const UPLINK: &str = "https://uplink-relay.example.com";
+/// uplink's own relay, self-hosted. Preferred: see [`rank`]. Set at build time by `UPLINK_RELAY`,
+/// from the uncommitted `.cargo/config.local.toml`; an example domain without it.
+pub const UPLINK: &str = match option_env!("UPLINK_RELAY") {
+    Some(url) => url,
+    None => "https://uplink-relay.example.com",
+};
 
 /// How many relays automatic keeps in iroh's map: one in use and one standby.
 const ACTIVE: usize = 2;

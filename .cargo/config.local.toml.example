@@ -1,0 +1,3 @@
+# Copy to config.local.toml (not committed) and set uplink's own relay.
+[env]
+UPLINK_RELAY = "https://uplink-relay.example.com"
